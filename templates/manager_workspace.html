@@ -1,0 +1,349 @@
+{% extends "base.html" %}
+
+{% block title %}Рабочее место менеджера{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h1 class="h4 mb-1">Рабочее место менеджера</h1>
+        <div class="text-muted small">
+            {{ current_user.full_name or current_user.username }}
+        </div>
+    </div>
+    <div>
+        <a href="{{ url_for('main.contract_create') }}" class="btn btn-primary btn-sm me-2">
+            Создать договор
+        </a>
+        <a href="{{ url_for('main.customers_list') }}" class="btn btn-outline-secondary btn-sm">
+            Создать клиента
+        </a>
+    </div>
+</div>
+
+<div class="row">
+    <!-- Блок: Прицепы в наличии -->
+    <div class="col-lg-6 mb-4">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>Прицепы в наличии на вашем складе ({{ free_trailers|length }})</span>
+            </div>
+            <div class="card-body">
+                <div class="mb-2">
+                    <input type="text" id="freeTrailersFilter" class="form-control form-control-sm"
+                        placeholder="Фильтр по артикулу или VIN">
+                </div>
+
+                <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                    <table class="table table-sm table-hover align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Артикул</th>
+                                <th>VIN</th>
+                                <th>Модель</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="freeTrailersTableBody">
+                            {% for article, trailers in grouped_trailers|dictsort %}
+                            <!-- Строка-группа по артикулу -->
+                            <tr class="table-light group-row" data-group-article="{{ article|e }}">
+                                <td colspan="4" style="cursor: pointer;">
+                                    <strong>{{ article }}</strong>
+                                    <span class="text-muted small">
+                                        ({{ trailers|length }} шт.)
+                                    </span>
+                                    <span class="float-end text-primary small">
+                                        нажмите, чтобы развернуть / свернуть
+                                    </span>
+                                </td>
+                            </tr>
+
+                            {% for t in trailers %}
+                            <tr class="trailer-row d-none" data-parent-article="{{ article|e }}"
+                                data-vin="{{ t.vin|e }}" data-article="{{ article|e }}">
+                                <td>{{ article }}</td>
+                                <td>{{ t.vin }}</td>
+                                <td>{{ t.item.name if t.item else '' }}</td>
+                                <td class="text-end">
+                                    <a href="{{ url_for('main.contract_create', trailer_id=t.id) }}"
+                                        class="btn btn-sm btn-outline-primary">
+                                        Создать договор
+                                    </a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Блок: Неоплаченные договоры -->
+    <div class="col-lg-6 mb-4">
+        <div class="card mb-4">
+            <div class="card-header">
+                Неоплаченные договоры ({{ unpaid_contracts|length }})
+            </div>
+            <div class="card-body">
+                <div class="mb-2">
+                    <input type="text" id="unpaidFilter" class="form-control form-control-sm"
+                        placeholder="Фильтр по клиенту, артикулу или VIN">
+                </div>
+                <div class="table-responsive" style="max-height: 250px; overflow-y: auto;">
+                    <table class="table table-sm table-hover align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Дата</th>
+                                <th>№</th>
+                                <th>Клиент</th>
+                                <th>Артикул / VIN</th>
+                                <th>Сумма</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="unpaidTableBody">
+                            {% for c in unpaid_contracts %}
+                            <tr class="unpaid-row" data-customer="{{ (c.customer.name if c.customer else '')|e }}"
+                                data-article="{{ (c.trailer.item.article if c.trailer and c.trailer.item else '')|e }}"
+                                data-vin="{{ (c.trailer.vin if c.trailer else '')|e }}">
+                                <td>{{ c.contract_date or '' }}</td>
+                                <td>{{ c.contract_number or c.id }}</td>
+                                <td>{{ c.customer.name if c.customer else '' }}</td>
+                                <td>
+                                    {% if c.trailer and c.trailer.item %}
+                                    {{ c.trailer.item.article }} / {{ c.trailer.vin }}
+                                    {% elif c.trailer %}
+                                    {{ c.trailer.vin }}
+                                    {% endif %}
+                                </td>
+                                <td>{{ c.price or '' }}</td>
+                                <td class="text-end">
+                                    <a href="{{ url_for('main.contract_edit', contract_id=c.id) }}"
+                                        class="btn btn-sm btn-outline-primary">
+                                        Открыть
+                                    </a>
+                                    <a href="{{ url_for('main.contract_print', contract_id=c.id) }}"
+                                        class="btn btn-sm btn-outline-secondary" target="_blank">
+                                        Печать
+                                    </a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Блок: Оплаченные, не отгруженные -->
+        <div class="card">
+            <div class="card-header">
+                Оплаченные, но не отгруженные ({{ paid_not_shipped|length }})
+            </div>
+            <div class="card-body">
+                <div class="mb-2">
+                    <input type="text" id="paidNotShippedFilter" class="form-control form-control-sm"
+                        placeholder="Фильтр по клиенту, артикулу или VIN">
+                </div>
+                <div class="table-responsive" style="max-height: 250px; overflow-y: auto;">
+                    <table class="table table-sm table-hover align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Дата</th>
+                                <th>№</th>
+                                <th>Клиент</th>
+                                <th>Артикул / VIN</th>
+                                <th>Сумма</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="paidNotShippedTableBody">
+                            {% for c in paid_not_shipped %}
+                            <tr class="pns-row" data-customer="{{ (c.customer.name if c.customer else '')|e }}"
+                                data-article="{{ (c.trailer.item.article if c.trailer and c.trailer.item else '')|e }}"
+                                data-vin="{{ (c.trailer.vin if c.trailer else '')|e }}">
+                                <td>{{ c.contract_date or '' }}</td>
+                                <td>{{ c.contract_number or c.id }}</td>
+                                <td>{{ c.customer.name if c.customer else '' }}</td>
+                                <td>
+                                    {% if c.trailer and c.trailer.item %}
+                                    {{ c.trailer.item.article }} / {{ c.trailer.vin }}
+                                    {% elif c.trailer %}
+                                    {{ c.trailer.vin }}
+                                    {% endif %}
+                                </td>
+                                <td>{{ c.price or '' }}</td>
+                                <td class="text-end">
+                                    <a href="{{ url_for('main.contract_edit', contract_id=c.id) }}"
+                                        class="btn btn-sm btn-outline-primary">
+                                        Открыть
+                                    </a>
+                                    <a href="{{ url_for('main.contract_print', contract_id=c.id) }}"
+                                        class="btn btn-sm btn-outline-secondary" target="_blank">
+                                        Печать
+                                    </a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<!-- НИЖНИЙ БЛОК: другие склады и прицепы -->
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Другие склады и прицепы в наличии</span>
+
+        <form method="get" class="d-flex align-items-center gap-2 mb-0">
+            <label class="small text-muted">Склад:</label>
+            <select name="other_wh" class="form-select form-select-sm" onchange="this.form.submit()">
+                {% for w in warehouses %}
+                <option value="{{ w.id }}" {% if w.id==other_wh_id %}selected{% endif %}>
+                    {{ w.name }}
+                    {% if w.id == current_user.warehouse_id %}(ваш){% endif %}
+                </option>
+                {% endfor %}
+            </select>
+        </form>
+    </div>
+
+    <div class="card-body">
+        <div class="mb-2">
+            <input type="text" id="otherTrailersFilter" class="form-control form-control-sm"
+                placeholder="Фильтр по артикулу или VIN (другие склады)">
+        </div>
+
+        <div class="table-responsive" style="max-height: 300px; overflow-y: auto;">
+            <table class="table table-sm table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Артикул</th>
+                        <th>VIN</th>
+                        <th>Модель</th>
+                        <th>Склад</th>
+                    </tr>
+                </thead>
+                <tbody id="otherTrailersTableBody">
+                    {% for t in other_trailers %}
+                    <tr class="other-trailer-row" data-article="{{ (t.item.article if t.item else '')|e }}"
+                        data-vin="{{ (t.vin or '')|e }}">
+                        <td>{{ t.item.article if t.item else '' }}</td>
+                        <td>{{ t.vin }}</td>
+                        <td>{{ t.item.name if t.item else '' }}</td>
+                        <td>{{ t.warehouse.name if t.warehouse else '' }}</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="4" class="text-muted">Нет прицепов в наличии на выбранном складе</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        // --- Раскрытие/сворачивание групп по артикулу ---
+        document.querySelectorAll('.group-row').forEach(function (row) {
+            row.addEventListener('click', function () {
+                const article = row.getAttribute('data-group-article');
+                document.querySelectorAll(
+                    '.trailer-row[data-parent-article="' + article + '"]'
+                ).forEach(function (tr) {
+                    tr.classList.toggle('d-none');
+                });
+            });
+        });
+
+        // --- Фильтр по прицепам в наличии ---
+        const freeFilter = document.getElementById('freeTrailersFilter');
+        if (freeFilter) {
+            freeFilter.addEventListener('input', function () {
+                const q = freeFilter.value.trim().toLowerCase();
+
+                // для каждой группы смотрим, есть ли в ней подходящие прицепы
+                document.querySelectorAll('.group-row').forEach(function (groupRow) {
+                    const article = groupRow.getAttribute('data-group-article');
+                    let hasVisible = false;
+
+                    document.querySelectorAll(
+                        '.trailer-row[data-parent-article="' + article + '"]'
+                    ).forEach(function (tr) {
+                        const rowArticle = tr.getAttribute('data-article') || '';
+                        const rowVin = tr.getAttribute('data-vin') || '';
+                        const text = (rowArticle + ' ' + rowVin).toLowerCase();
+
+                        if (!q || text.includes(q)) {
+                            tr.classList.remove('d-none');
+                            hasVisible = true;
+                        } else {
+                            tr.classList.add('d-none');
+                        }
+                    });
+
+                    // если в группе нет подходящих строк — прячем заголовок
+                    if (hasVisible || !q) {
+                        groupRow.classList.remove('d-none');
+                    } else {
+                        groupRow.classList.add('d-none');
+                    }
+                });
+            });
+        }
+
+        // --- Функция универсального фильтра для таблиц договоров ---
+        function setupSimpleFilter(inputId, rowSelector) {
+            const input = document.getElementById(inputId);
+            if (!input) return;
+
+            input.addEventListener('input', function () {
+                const q = input.value.trim().toLowerCase();
+
+                document.querySelectorAll(rowSelector).forEach(function (tr) {
+                    const customer = (tr.getAttribute('data-customer') || '').toLowerCase();
+                    const article = (tr.getAttribute('data-article') || '').toLowerCase();
+                    const vin = (tr.getAttribute('data-vin') || '').toLowerCase();
+                    const text = customer + ' ' + article + ' ' + vin;
+
+                    if (!q || text.includes(q)) {
+                        tr.classList.remove('d-none');
+                    } else {
+                        tr.classList.add('d-none');
+                    }
+                });
+            });
+        }
+
+        setupSimpleFilter('unpaidFilter', '.unpaid-row');
+        setupSimpleFilter('paidNotShippedFilter', '.pns-row');
+        // --- Фильтр по прицепам других складов ---
+        const otherFilter = document.getElementById('otherTrailersFilter');
+        if (otherFilter) {
+            otherFilter.addEventListener('input', function () {
+                const q = otherFilter.value.trim().toLowerCase();
+
+                document.querySelectorAll('.other-trailer-row').forEach(function (tr) {
+                    const article = (tr.getAttribute('data-article') || '').toLowerCase();
+                    const vin = (tr.getAttribute('data-vin') || '').toLowerCase();
+                    const text = article + ' ' + vin;
+
+                    if (!q || text.includes(q)) {
+                        tr.classList.remove('d-none');
+                    } else {
+                        tr.classList.add('d-none');
+                    }
+                });
+            });
+        }
+
+    });
+</script>
+{% endblock %}

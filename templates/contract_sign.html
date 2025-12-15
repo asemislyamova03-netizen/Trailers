@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}Подписание договора{% endblock %}
+
+{% block content %}
+<h1 class="h5 mb-3">Подписание договора №{{ contract.contract_number or contract.id }}</h1>
+
+<div class="mb-3">
+    <button id="btnPreregister" class="btn btn-outline-primary btn-sm">1) Подготовить документ (SIGEX)</button>
+    <button id="btnOrgSign" class="btn btn-primary btn-sm" disabled>2) Подписать ЭЦП организации (NCALayer)</button>
+    <button id="btnStartQR" class="btn btn-success btn-sm" disabled>3) Показать QR клиенту</button>
+    <a id="btnDDC" class="btn btn-outline-secondary btn-sm d-none" target="_blank"
+        href="{{ url_for('main.contract_sigex_ddc', contract_id=contract.id) }}">
+        Открыть карточку (DDC)
+    </a>
+</div>
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">QR для клиента</div>
+            <div class="card-body text-center">
+                <img id="qrImg" class="img-fluid d-none" alt="QR">
+                <div id="qrHint" class="text-muted small">Нажми “Показать QR”, чтобы клиент подписал в eGov.</div>
+                <div id="status" class="mt-2 small"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 1) Скопируй ncalayer-client.js из репозитория sigex-kz/ncalayer-js-client в static/js/ -->
+<script src="{{ url_for('static', filename='js/ncalayer-client.js') }}"></script>
+
+<script>
+    const contractId = {{ contract.id }};
+
+    async function postJson(url, body) {
+        const r = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body || {})
+        });
+        if (!r.ok) throw new Error(await r.text());
+        return await r.json();
+    }
+
+    async function getJson(url) {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(await r.text());
+        return await r.json();
+    }
+
+    const btnPreregister = document.getElementById('btnPreregister');
+    const btnOrgSign = document.getElementById('btnOrgSign');
+    const btnStartQR = document.getElementById('btnStartQR');
+    const btnDDC = document.getElementById('btnDDC');
+    const qrImg = document.getElementById('qrImg');
+    const statusBox = document.getElementById('status');
+
+    btnPreregister.addEventListener('click', async () => {
+        btnPreregister.disabled = true;
+        statusBox.textContent = 'Подготовка документа...';
+        try {
+            await postJson(`/contracts/${contractId}/sigex/preregister`);
+            statusBox.textContent = 'Документ подготовлен. Теперь подпись ЭЦП организации.';
+            btnOrgSign.disabled = false;
+        } catch (e) {
+            statusBox.textContent = 'Ошибка: ' + e.message;
+            btnPreregister.disabled = false;
+        }
+    });
+
+    btnOrgSign.addEventListener('click', async () => {
+        btnOrgSign.disabled = true;
+        statusBox.textContent = 'Получаем PDF и подписываем через NCALayer...';
+
+        try {
+            // получить PDF base64
+            const pdf = await getJson(`/contracts/${contractId}/sigex/pdf_base64`);
+            const pdfBase64 = pdf.pdfBase64;
+
+            const ncalayerClient = new NCALayerClient();
+            await ncalayerClient.connect();
+
+            // detached CMS, чтобы подпись не тащила весь документ в себя (рекомендовано SIGEX) :contentReference[oaicite:10]{index=10}
+            const signatureBase64 = await ncalayerClient.basicsSignCMS(
+                NCALayerClient.basicsStorageAll,
+                pdfBase64,
+                NCALayerClient.basicsCMSParamsDetached,
+                NCALayerClient.basicsSignerSignAny,
+            );
+
+            await postJson(`/contracts/${contractId}/sigex/add_org_signature`, {
+                signType: 'cms',
+                signature: signatureBase64
+            });
+
+            statusBox.textContent = 'ЭЦП организации поставлена. Можно показывать QR клиенту.';
+            btnStartQR.disabled = false;
+        } catch (e) {
+            statusBox.textContent = 'Ошибка подписи: ' + e.message;
+            btnOrgSign.disabled = false;
+        }
+    });
+
+    btnStartQR.addEventListener('click', async () => {
+        btnStartQR.disabled = true;
+        statusBox.textContent = 'Генерируем QR...';
+
+        try {
+            const res = await postJson(`/contracts/${contractId}/sigex/start_qr`);
+            qrImg.src = 'data:image/png;base64,' + res.qrCode;
+            qrImg.classList.remove('d-none');
+
+            statusBox.textContent = 'Ожидаем подпись клиента...';
+            // polling статуса
+            const timer = setInterval(async () => {
+                try {
+                    const st = await getJson(`/contracts/${contractId}/sigex/qr_status`);
+                    statusBox.textContent = `Статус: ${st.status}`;
+
+                    if (st.status === 'done') {
+                        clearInterval(timer);
+                        statusBox.textContent = 'Клиент подписал ✅ Можно открыть карточку (DDC).';
+                        btnDDC.classList.remove('d-none');
+                    }
+                    if (st.status === 'fail' || st.status === 'canceled') {
+                        clearInterval(timer);
+                        statusBox.textContent = 'Подписание не завершилось: ' + st.status;
+                        btnStartQR.disabled = false;
+                    }
+                } catch (e) {
+                    // молча, чтобы не спамить
+                }
+            }, 2500);
+
+        } catch (e) {
+            statusBox.textContent = 'Ошибка QR: ' + e.message;
+            btnStartQR.disabled = false;
+        }
+    });
+</script>
+{% endblock %}

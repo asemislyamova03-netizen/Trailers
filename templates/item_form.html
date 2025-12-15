@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block title %}Новая позиция номенклатуры{% endblock %}
+
+{% block content %}
+<h1 class="h3 mb-3">Новая позиция номенклатуры</h1>
+
+<form method="post">
+    {{ form.hidden_tag() }}
+
+    <div class="mb-3">
+        {{ form.item_type.label(class="form-label") }}
+        {{ form.item_type(class="form-select") }}
+        {% for error in form.item_type.errors %}
+            <div class="text-danger small">{{ error }}</div>
+        {% endfor %}
+    </div>
+
+    <div class="mb-3">
+        {{ form.article.label(class="form-label") }}
+        {{ form.article(class="form-control") }}
+        <div class="form-text">Для прицепов артикул обязателен, для комплектующих можно не заполнять.</div>
+        {% for error in form.article.errors %}
+            <div class="text-danger small">{{ error }}</div>
+        {% endfor %}
+    </div>
+
+    <div class="mb-3">
+        {{ form.name.label(class="form-label") }}
+        {{ form.name(class="form-control") }}
+        {% for error in form.name.errors %}
+            <div class="text-danger small">{{ error }}</div>
+        {% endfor %}
+    </div>
+
+    <div class="row">
+    <div class="col-md-3 mb-3">
+        {{ form.axle_count.label(class="form-label") }}
+        {{ form.axle_count(class="form-control") }}
+    </div>
+    <div class="col-md-3 mb-3">
+        {{ form.board_height_mm.label(class="form-label") }}
+        {{ form.board_height_mm(class="form-control") }}
+    </div>
+    <div class="col-md-3 mb-3">
+        {{ form.wheel_radius.label(class="form-label") }}
+        {{ form.wheel_radius(class="form-control") }}
+    </div>
+    <div class="col-md-3 mb-3">
+        {{ form.tent_height_mm.label(class="form-label") }}
+        {{ form.tent_height_mm(class="form-control") }}
+        <div class="form-text">
+            0 — без тента, больше 0 — высота тента в мм (например, 600).
+        </div>
+        {% for error in form.tent_height_mm.errors %}
+            <div class="text-danger small">{{ error }}</div>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-3 mb-3">
+        {{ form.has_jockey_wheel.label(class="form-label") }}
+        {{ form.has_jockey_wheel(class="form-select") }}
+        {% for error in form.has_jockey_wheel.errors %}
+            <div class="text-danger small">{{ error }}</div>
+        {% endfor %}
+    </div>
+</div>
+
+    <div class="mb-3">
+        {{ form.size_external.label(class="form-label") }}
+        {{ form.size_external(class="form-control") }}
+    </div>
+
+    <div class="mb-3">
+        {{ form.size_body.label(class="form-label") }}
+        {{ form.size_body(class="form-control") }}
+    </div>
+
+    <div class="row">
+        <div class="col-md-4 mb-3">
+            {{ form.base_price.label(class="form-label") }}
+            {{ form.base_price(class="form-control") }}
+        </div>
+        <div class="col-md-4 mb-3">
+            {{ form.unit.label(class="form-label") }}
+            {{ form.unit(class="form-control") }}
+        </div>
+        <div class="col-md-4 mb-3 d-flex align-items-center">
+            <div class="form-check mt-4">
+                {{ form.is_active(class="form-check-input") }}
+                {{ form.is_active.label(class="form-check-label") }}
+            </div>
+        </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary">
+        {{ form.submit.label.text }}
+    </button>
+    <a href="{{ url_for('main.items_list') }}" class="btn btn-secondary ms-2">
+        Отмена
+    </a>
+</form>
+{% endblock %}

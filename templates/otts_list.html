@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<h1 class="h4 mb-3">{{ title }}</h1>
+
+<a href="{{ url_for('main.otts_create') }}" class="btn btn-primary mb-3">
+    Добавить ОТТС
+</a>
+
+<table class="table table-striped table-sm align-middle">
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Номер ОТТС</th>
+            <th>Дата</th>
+            <th>Модификация</th>
+            <th>Наименование</th>
+            <th>Оси</th>
+            <th>Полная масса, кг</th>
+            <th>Активен</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for o in otts_list %}
+        <tr>
+            <td>{{ o.id }}</td>
+            <td>{{ o.number }}</td>
+            <td>
+                {% if o.date %}
+                    {{ o.date.strftime('%d.%m.%Y') }}
+                {% endif %}
+            </td>
+            <td>{{ o.modification }}</td>
+            <td>{{ o.name }}</td>
+            <td>{{ o.axle_count }}</td>
+            <td>
+                {% if o.full_mass_kg is not none %}
+                    {{ o.full_mass_kg }}
+                {% endif %}
+            </td>
+            <td>
+                {% if o.is_active %}
+                    Да
+                {% else %}
+                    Нет
+                {% endif %}
+            </td>
+            <td class="text-end">
+                <a href="{{ url_for('main.otts_edit', otts_id=o.id) }}" class="btn btn-sm btn-outline-secondary">
+                    Редактировать
+                </a>
+            </td>
+        </tr>
+        {% else %}
+        <tr>
+            <td colspan="9" class="text-center text-muted">
+                Записей ОТТС пока нет
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

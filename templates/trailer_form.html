@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<h1 class="h4 mb-3">{{ title }}</h1>
+
+<form method="post">
+    {{ form.hidden_tag() }}
+
+    <div class="mb-3">
+        {{ form.vin.label(class="form-label") }}
+        {{ form.vin(class="form-control") }}
+        {% for error in form.vin.errors %}
+        <div class="text-danger small">{{ error }}</div>
+        {% endfor %}
+    </div>
+
+    <div class="mb-3">
+        {{ form.warehouse_id.label(class="form-label") }}
+        {{ form.warehouse_id(class="form-select") }}
+        {% for error in form.warehouse_id.errors %}
+        <div class="text-danger small">{{ error }}</div>
+        {% endfor %}
+    </div>
+
+    <div class="mb-3">
+        {{ form.manufacture_date.label(class="form-label") }}
+        {{ form.manufacture_date(class="form-control", type="date") }}
+        {% for error in form.manufacture_date.errors %}
+        <div class="text-danger small">{{ error }}</div>
+        {% endfor %}
+    </div>
+
+    <div class="mb-3">
+        {{ form.status.label(class="form-label") }}
+        {{ form.status(class="form-select") }}
+        {% for error in form.status.errors %}
+        <div class="text-danger small">{{ error }}</div>
+        {% endfor %}
+    </div>
+
+    <hr>
+    <h5 class="mb-3">Характеристики для подбора модели</h5>
+
+    <div class="row">
+        <div class="col-md-4 mb-3">
+            {{ form.size_body.label(class="form-label") }}
+            {{ form.size_body(class="form-select") }}
+            {% for error in form.size_body.errors %}
+            <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+        </div>
+
+        <div class="col-md-4 mb-3">
+            {{ form.axle_count.label(class="form-label") }}
+            {{ form.axle_count(class="form-select") }}
+            {% for error in form.axle_count.errors %}
+            <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+        </div>
+
+        <div class="col-md-4 mb-3">
+            {{ form.wheel_radius.label(class="form-label") }}
+            {{ form.wheel_radius(class="form-select") }}
+            {% for error in form.wheel_radius.errors %}
+            <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-3 mb-3">
+            {{ form.board_height_mm.label(class="form-label") }}
+            {{ form.board_height_mm(class="form-select") }}
+            {% for error in form.board_height_mm.errors %}
+            <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+        </div>
+
+
+        <div class="col-md-3 mb-3">
+            {{ form.tent_height_mm.label(class="form-label") }}
+            {{ form.tent_height_mm(class="form-select") }}
+            {% for error in form.tent_height_mm.errors %}
+            <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+        </div>
+
+        <div class="col-md-4 mb-3">
+            {{ form.has_jockey_wheel.label(class="form-label") }}
+            {{ form.has_jockey_wheel(class="form-select") }}
+            {% for error in form.has_jockey_wheel.errors %}
+            <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <p class="text-muted">
+        Артикул и модель прицепа подберутся автоматически по указанным характеристикам.
+    </p>
+
+    <button type="submit" class="btn btn-primary">
+        {{ form.submit.label.text }}
+    </button>
+    <a href="{{ url_for('main.trailers_list') }}" class="btn btn-secondary ms-2">Отмена</a>
+</form>
+{% endblock %}

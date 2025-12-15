@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<h1 class="h4 mb-3">{{ title }}</h1>
+
+<form method="post">
+    {{ form.hidden_tag() }}
+
+    <div class="mb-3">
+        {{ form.number.label(class="form-label") }}
+        {{ form.number(class="form-control") }}
+        {% for error in form.number.errors %}
+        <div class="text-danger small">{{ error }}</div>
+        {% endfor %}
+    </div>
+
+    <div class="mb-3">
+        {{ form.date.label(class="form-label") }}
+        {{ form.date(class="form-control") }}
+        {% for error in form.date.errors %}
+        <div class="text-danger small">{{ error }}</div>
+        {% endfor %}
+    </div>
+
+    <div class="mb-3">
+        {{ form.modification.label(class="form-label") }}
+        {{ form.modification(class="form-control") }}
+        {% for error in form.modification.errors %}
+        <div class="text-danger small">{{ error }}</div>
+        {% endfor %}
+    </div>
+
+    <div class="mb-3">
+        {{ form.name.label(class="form-label") }}
+        {{ form.name(class="form-control") }}
+        {% for error in form.name.errors %}
+        <div class="text-danger small">{{ error }}</div>
+        {% endfor %}
+    </div>
+
+    <div class="mb-3">
+        {{ form.axle_count.label(class="form-label") }}
+        {{ form.axle_count(class="form-control") }}
+        {% for error in form.axle_count.errors %}
+        <div class="text-danger small">{{ error }}</div>
+        {% endfor %}
+    </div>
+
+    <div class="mb-3">
+        {{ form.full_mass_kg.label(class="form-label") }}
+        {{ form.full_mass_kg(class="form-control") }}
+        {% for error in form.full_mass_kg.errors %}
+        <div class="text-danger small">{{ error }}</div>
+        {% endfor %}
+    </div>
+
+    <div class="form-check mb-3">
+        {{ form.is_active(class="form-check-input") }}
+        {{ form.is_active.label(class="form-check-label") }}
+    </div>
+
+    <button type="submit" class="btn btn-primary">
+        {{ form.submit.label.text }}
+    </button>
+    <a href="{{ url_for('main.otts_list') }}" class="btn btn-secondary ms-2">Отмена</a>
+</form>
+{% endblock %}

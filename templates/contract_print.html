@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="utf-8">
+    <title>Договор № {{ contract.contract_number or contract.id }}</title>
+    <style>
+        body {
+            font-family: "Times New Roman", serif;
+            font-size: 12pt;
+            margin: 2cm;
+        }
+
+        h1,
+        h2,
+        h3 {
+            text-align: center;
+            margin: 0;
+            padding: 0;
+        }
+
+        p {
+            text-align: justify;
+            margin: 4px 0;
+        }
+
+        .right {
+            text-align: right;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 8px;
+            margin-bottom: 8px;
+        }
+
+        table.border td,
+        table.border th {
+            border: 1px solid #000;
+            padding: 3px 4px;
+        }
+
+        .signature-table td {
+            padding-top: 25px;
+            vertical-align: top;
+        }
+
+        .page-break {
+            page-break-after: always;
+            margin-top: 40px;
+        }
+    </style>
+</head>
+
+<body>
+
+    {# --------- Общие переменные --------- #}
+    {% set contract_number = contract.contract_number or contract.id %}
+    {% set contract_date_str = contract.contract_date.strftime('%d.%m.%Y') if contract.contract_date else '' %}
+    {% set year_str = contract.contract_date.year if contract.contract_date else '' %}
+    {% set city = 'Алматы' %}
+
+    {# Реквизиты продавца (можно потом вынести в настройки) #}
+    {% set seller_name = 'ТОО "КАЗ Прицеп"' %}
+    {% set seller_address = 'РК, г. Кокшетау, ул. Сулейменова 151Б' %}
+    {% set seller_bin = '130440016086' %}
+    {% set seller_account = 'KZ1296520F0007365978' %}
+    {% set seller_bank = 'АО "ForteBank" в г. Кокшетау' %}
+    {% set seller_swift = 'IRTYKZKA' %}
+    {% set seller_bank_bin = '061241002275' %}
+    {% set seller_kbe = '17' %}
+    {% set seller_phone = '+7 701 959 93 14' %}
+    {% set seller_email = 'qazpricep@mail.ru' %}
+    {% set director_fio = 'Юзликаев Рамис Ильдарович' %}
+
+    {% set vin = trailer.vin if trailer else '' %}
+    {% set item_name = item.name if item else 'Прицеп к легковому автомобилю' %}
+
+    {# оси: из Item, если там нет — из OTTS #}
+    {% set axle_count = (item.axle_count if item and item.axle_count is not none else (otts.axle_count if otts else
+    None)) %}
+
+    {% set price = contract.price %}
+    {% set price_str = ('%.2f' % price).replace(',', ' ') if price is not none else '' %}
+
+    {# --------- Подготовка статуса покупателя для ФЛ --------- #}
+    {% set is_person = customer and customer.customer_type == 'PERSON' %}
+    {% set is_company = customer and customer.customer_type == 'COMPANY' %}
+
+    {% if is_person %}
+    {% set doc_type = customer.doc_type or 'ID' %}
+
+    {# статус: гражданин / резидент / иностранец #}
+    {% set person_status = 'Гражданин Республики Казахстан' %}
+    {% if doc_type == 'RESIDENT' %}
+    {% set person_status = 'Резидент Республики Казахстан' %}
+    {% elif doc_type == 'FOREIGN_PASSPORT' %}
+    {% set person_status = 'Иностранный гражданин' %}
+    {% endif %}
+
+    {# подпись документа #}
+    {% set doc_label = 'Удостоверение личности' %}
+    {% if doc_type == 'RESIDENT' %}
+    {% set doc_label = 'Вид на жительство' %}
+    {% elif doc_type == 'FOREIGN_PASSPORT' %}
+    {% set doc_label = 'Паспорт' %}
+    {% endif %}
+    {% endif %}
+
+    {# ===================== 1. ДОГОВОР ===================== #}
+
+    <h2>ДОГОВОР КУПЛИ-ПРОДАЖИ ПРИЦЕПА № {{ contract_number }}</h2>
+    <p class="right">{{ city }}&nbsp;&nbsp;&nbsp;&nbsp;{{ contract_date_str }}</p>
+
+    <p>
+        {{ seller_name }}, в лице Директора {{ director_fio }}, действующего на основании Устава,
+        именуемое в дальнейшем «Продавец», с одной стороны, и
+        {% if customer %}
+        {% if is_person %}
+        {{ person_status }} {{ customer.name }},
+        {{ doc_label }}
+        {% if customer.doc_number %}№ {{ customer.doc_number }}{% endif %}
+        {% if customer.doc_issue_date %}
+        от {{ customer.doc_issue_date.strftime('%d.%m.%Y') }}
+        {% endif %}
+        {% if customer.iin_bin %}, ИИН {{ customer.iin_bin }}{% endif %},
+        {% elif is_company %}
+        {{ customer.name }}
+        {% if customer.contact_person %}
+        в лице {{ customer.contact_person }}, действующего на основании Устава,
+        {% endif %}
+        {% else %}
+        {{ customer.name }},
+        {% endif %}
+        именуем{% if is_company %}ое{% else %}ый{% endif %} в дальнейшем «Покупатель»,
+        {% else %}
+        Покупатель,
+        {% endif %}
+        с другой стороны, далее совместно именуемые «Стороны», заключили настоящий Договор (далее – «Договор») о
+        нижеследующем:
+    </p>
+
+    <h3>1. ПРЕДМЕТ ДОГОВОРА, ЦЕНА И ПОРЯДОК РАСЧЁТОВ</h3>
+
+    <p>1.1. Продавец продаёт Покупателю прицеп к легковому автомобилю (далее – «Прицеп») на условиях, оговорённых
+        настоящим Договором.</p>
+    <p>1.2. Технические характеристики Прицепа указываются в Спецификации (Приложение №1 к Договору), являющейся
+        неотъемлемой частью настоящего Договора.</p>
+    <p>1.3. Покупатель вносит оплату полной стоимости (100%) за Прицеп на расчётный счёт Продавца в банке по реквизитам,
+        указанным в настоящем Договоре, либо в кассу Продавца.</p>
+    <p>1.4. Валютой расчётов по настоящему Договору является денежная единица Республики Казахстан – тенге.</p>
+    <p>1.5. Все изменения, вносимые в платформу Прицепа без письменного подтверждения со стороны Продавца, освобождают
+        Продавца от ответственности за последствия эксплуатации Прицепа.</p>
+
+    <h3>2. УСЛОВИЯ И ПОРЯДОК ПОСТАВКИ</h3>
+
+    <p>2.1. Поставка (отгрузка) Прицепа осуществляется на условиях самовывоза Покупателем с адреса, согласованного с
+        Продавцом устно либо письменно.</p>
+    <p>2.2. Передача Прицепа Покупателю осуществляется после поступления полной оплаты за Прицеп на расчётный счёт
+        Продавца либо внесения наличных в кассу Продавца.</p>
+    <p>2.3. Право собственности на Прицеп переходит к Покупателю после подписания уполномоченными лицами Сторон Акта
+        приёма-передачи Прицепа и постановки Прицепа на учёт в уполномоченном органе дорожной полиции Республики
+        Казахстан по месту регистрации Покупателя.</p>
+    <p>2.4. В подтверждение факта продажи Продавец передаёт Покупателю следующий пакет документов:</p>
+    <ul>
+        <li>Договор купли-продажи Прицепа;</li>
+        <li>Акт приёма-передачи Прицепа;</li>
+        <li>ЭПТС (электронный паспорт транспортного средства);</li>
+        <li>Накладную на отпуск товаров на сторону;</li>
+        <li>Руководство по эксплуатации (паспорт) Прицепа;</li>
+        <li>
+            {% if otts %}
+            Одобрение типа транспортного средства {{ otts.name }}<br>
+            {% else %}
+            Одобрение типа транспортного средства ___________________________
+            {% endif %}
+        </li>
+    </ul>
+
+    <h3>3. ГАРАНТИЙНЫЕ ОБЯЗАТЕЛЬСТВА</h3>
+
+    <p>3.1. Продавец предоставляет гарантию качества на Прицеп.</p>
+    <p>3.2. Срок гарантии составляет 1 (один) календарный год с даты ввода Прицепа в эксплуатацию. Датой ввода Прицепа в
+        эксплуатацию считается дата подписания Сторонами Акта приёма-передачи Прицепа.</p>
+    <p>3.3. Гарантийные обязательства Продавца действуют при условии соблюдения Покупателем правил эксплуатации Прицепа,
+        указанных в Руководстве по эксплуатации (Паспорт).</p>
+    <p>3.4. Гарантийные обязательства Продавца прекращаются до истечения срока гарантии в случаях повреждения частей
+        (узлов) Прицепа, возникших вследствие дорожно-транспортных происшествий либо очевидной неправильной/небрежной
+        эксплуатации Прицепа Покупателем.</p>
+    <p>3.5. Гарантия не распространяется на детали, подверженные естественному износу при нормальной эксплуатации
+        (резинотехнические изделия, прокладки, крепёж, амортизаторы и иные расходные части), а также на повреждения
+        лакокрасочного покрытия, вызванные природными и климатическими воздействиями.</p>
+
+    <h3>4. ОТВЕТСТВЕННОСТЬ СТОРОН И ПОРЯДОК РАЗРЕШЕНИЯ СПОРОВ</h3>
+
+    <p>4.1. За неисполнение либо ненадлежащее исполнение условий настоящего Договора Стороны несут ответственность в
+        соответствии с законодательством Республики Казахстан.</p>
+    <p>4.2. Все споры и разногласия, возникающие между Сторонами, разрешаются путём переговоров. В случае недостижения
+        согласия споры подлежат рассмотрению в порядке, установленном действующим законодательством Республики
+        Казахстан.</p>
+
+    <h3>5. ПРОЧИЕ УСЛОВИЯ</h3>
+
+    <p>5.1. Настоящий Договор составлен в трёх экземплярах на государственном и русском языках, каждый из которых имеет
+        одинаковую юридическую силу: по одному экземпляру для каждой из Сторон и один — для регистрирующего органа.</p>
+    <p>5.2. Во всём, что не урегулировано настоящим Договором, Стороны руководствуются действующим законодательством
+        Республики Казахстан.</p>
+    <p>5.3. Копии (в том числе сканированные) подписанных Сторонами приложений к Договору признаются оригиналами и имеют
+        юридическую силу до получения оригиналов.</p>
+
+    <h3>6. РЕКВИЗИТЫ И ПОДПИСИ СТОРОН</h3>
+
+    <table class="border">
+        <tr>
+            <th style="width:50%;">Продавец</th>
+            <th style="width:50%;">Покупатель</th>
+        </tr>
+        <tr>
+            <td>
+                <strong>{{ seller_name }}</strong><br>
+                {{ seller_address }}<br>
+                БИН: {{ seller_bin }}<br>
+                р/с в KZT: {{ seller_account }}<br>
+                {{ seller_bank }}<br>
+                SWIFT: {{ seller_swift }}<br>
+                БИН Банка: {{ seller_bank_bin }}, Кбе {{ seller_kbe }}<br>
+                Тел.: {{ seller_phone }}<br>
+                E-mail: {{ seller_email }}
+            </td>
+            <td>
+                {% if is_person %}
+                <strong>{{ person_status }}</strong><br>
+                {{ customer.name }}<br>
+                {% if customer.iin_bin %}ИИН: {{ customer.iin_bin }}<br>{% endif %}
+                {{ doc_label }}
+                {% if customer.doc_number %}№ {{ customer.doc_number }}{% endif %}
+                {% if customer.doc_issue_date %}
+                от {{ customer.doc_issue_date.strftime('%d.%m.%Y') }}<br>
+                {% endif %}
+                {% if customer.address %}Адрес: {{ customer.address }}<br>{% endif %}
+                {% if customer.phone %}Тел.: {{ customer.phone }}<br>{% endif %}
+                {% elif is_company %}
+                <strong>{{ customer.name }}</strong><br>
+                {% if customer.iin_bin %}БИН/ИИН: {{ customer.iin_bin }}<br>{% endif %}
+                {% if customer.address %}Адрес: {{ customer.address }}<br>{% endif %}
+                {% if customer.phone %}Тел.: {{ customer.phone }}<br>{% endif %}
+                {% if customer.email %}E-mail: {{ customer.email }}<br>{% endif %}
+                {% else %}
+                {{ customer.name if customer else '' }}
+                {% endif %}
+            </td>
+        </tr>
+        <tr class="signature-table">
+            <td>
+                Директор<br>
+                __________________ / {{ director_fio }} /
+            </td>
+            <td>
+                {% if is_person %}
+                __________________ / {{ customer.name }} /
+                {% else %}
+                Руководитель<br>
+                __________________ / {{ customer.contact_person or '' }} /
+                {% endif %}
+            </td>
+        </tr>
+    </table>
+
+    <div class="page-break"></div>
+
+    {# ===================== 2. АКТ ПРИЁМА-ПЕРЕДАЧИ ===================== #}
+
+    <h3 style="margin-bottom: 4px;">Акт</h3>
+    <p style="text-align:center; margin-top:0;">приёма-передачи прицепа и товаросопроводительных документов</p>
+    <p class="right">{{ city }}&nbsp;&nbsp;&nbsp;&nbsp;{{ contract_date_str }}</p>
+
+    <p>
+        {{ seller_name }} (Сторона 1) и
+        {% if customer %}
+        {% if is_person %}
+        {{ person_status }} {{ customer.name }} (Сторона 2)
+        {% else %}
+        {{ customer.name }} (Сторона 2)
+        {% endif %}
+        {% else %}
+        Покупатель (Сторона 2)
+        {% endif %}
+        составили настоящий Акт о нижеследующем:
+    </p>
+
+    <p>
+        Сторона 1 передала, а Сторона 2 приняла Прицеп в количестве 1 (одной) единицы,
+        а также пакет товаросопроводительных документов к Прицепу в соответствии с Договором купли-продажи №
+        {{ contract_number }}.
+    </p>
+
+    <table class="border">
+        <tr>
+            <th style="width:5%;">№ п/п</th>
+            <th style="width:45%;">Наименование</th>
+            <th style="width:25%;">VIN код</th>
+            <th style="width:25%;">Характеристики</th>
+        </tr>
+        <tr>
+            <td>1.</td>
+            <td>{{ item_name }}</td>
+            <td>{{ vin }}</td>
+            <td>
+                Прицеп к легковому автомобилю.<br>
+                Производство РК.<br>
+                {% if year_str %}Год выпуска {{ year_str }} г.<br>{% endif %}
+                {% if axle_count %}Количество осей – {{ axle_count }}.<br>{% endif %}
+                {% if size_external %}Габаритные размеры: {{ size_external }}.<br>{% endif %}
+                {% if size_body %}Размеры кузова: {{ size_body }}.<br>{% endif %}
+                {% if full_mass_kg %}Полная масса: {{ full_mass_kg }} кг.<br>{% endif %}
+                {% if payload %}Грузоподъёмность: {{ payload }} кг.<br>{% endif %}
+                {% if modification_code %}Модификация – {{ modification_code }}.{% endif %}
+            </td>
+        </tr>
+    </table>
+
+    <p>Товаросопроводительные документы:</p>
+    <ol>
+        <li>Договор купли-продажи Прицепа № {{ contract_number }}.</li>
+        <li>Накладная на отпуск запасов на сторону – 2 экз.</li>
+        <li>Акт приёма-передачи прицепной автотехники – 2 экз.</li>
+        <li>Электронный паспорт транспортного средства – 1 экз.</li>
+        <li>
+            {% if otts %}
+            Одобрение типа транспортного средства {{ otts.name }}<br>
+            {% else %}
+            Одобрение типа транспортного средства ___________________________
+            {% endif %}
+        </li>
+    </ol>
+
+    <table class="signature-table">
+        <tr>
+            <td style="width:50%;">
+                Сторона 1:<br>
+                Лицо, ответственное за приём: {{ seller_name }}<br><br>
+                __________________ / {{ director_fio }} /
+            </td>
+            <td style="width:50%;">
+                Сторона 2:<br>
+                Лицо, ответственное за приём:
+                {% if is_person %}
+                {{ customer.name }}
+                {% else %}
+                {{ customer.contact_person or (customer.name if customer else '') }}
+                {% endif %}<br><br>
+                __________________ /
+                {% if is_person %}
+                {{ customer.name }}
+                {% else %}
+                {{ customer.contact_person or '' }}
+                {% endif %}
+                /
+            </td>
+        </tr>
+    </table>
+
+    <div class="page-break"></div>
+
+    {# ===================== 3. СПЕЦИФИКАЦИЯ ===================== #}
+
+    <h3>СПЕЦИФИКАЦИЯ</h3>
+    <p style="text-align:center;">
+        Приложение №1 к Договору купли-продажи № {{ contract_number }}
+    </p>
+    <p class="right">{{ city }}&nbsp;&nbsp;&nbsp;&nbsp;{{ contract_date_str }}</p>
+
+    <table class="border">
+        <tr>
+            <th style="width:5%;">№ п/п</th>
+            <th style="width:45%;">Наименование</th>
+            <th style="width:25%;">VIN код</th>
+            <th style="width:25%;">Характеристики</th>
+        </tr>
+        <tr>
+            <td>1.</td>
+            <td>{{ item_name }}</td>
+            <td>{{ vin }}</td>
+            <td>
+                Прицеп к легковому автомобилю.<br>
+                Производство РК.<br>
+                {% if year_str %}Год выпуска {{ year_str }} г.<br>{% endif %}
+                {% if axle_count %}Количество осей – {{ axle_count }}.<br>{% endif %}
+                {% if size_external %}Габаритные размеры: {{ size_external }}.<br>{% endif %}
+                {% if size_body %}Размеры кузова: {{ size_body }}.<br>{% endif %}
+                {% if full_mass_kg %}Полная масса: {{ full_mass_kg }} кг.<br>{% endif %}
+                {% if payload %}Грузоподъёмность: {{ payload }} кг.<br>{% endif %}
+                {% if modification_code %}Модификация – {{ modification_code }}.{% endif %}
+            </td>
+        </tr>
+    </table>
+
+    <table class="border">
+        <tr>
+            <th style="width:5%;">№ п/п</th>
+            <th style="width:45%;">Наименование</th>
+            <th style="width:10%;">Кол-во</th>
+            <th style="width:20%;">Цена за 1 ед. (тенге, с НДС)</th>
+            <th style="width:20%;">Сумма (тенге, с НДС)</th>
+        </tr>
+        <tr>
+            <td>1.</td>
+            <td>{{ item_name }}</td>
+            <td>1 шт.</td>
+            <td>{{ price_str }}</td>
+            <td>{{ price_str }}</td>
+        </tr>
+        <tr>
+            <td colspan="4" style="text-align:right;"><strong>Итого:</strong></td>
+            <td><strong>{{ price_str }}</strong></td>
+        </tr>
+    </table>
+
+    <h3>РЕКВИЗИТЫ И ПОДПИСИ СТОРОН</h3>
+
+    <table class="border">
+        <tr>
+            <th style="width:50%;">Продавец</th>
+            <th style="width:50%;">Покупатель</th>
+        </tr>
+        <tr>
+            <td>
+                <strong>{{ seller_name }}</strong><br>
+                {{ seller_address }}<br>
+                БИН: {{ seller_bin }}<br>
+                р/с в KZT: {{ seller_account }}<br>
+                {{ seller_bank }}<br>
+                SWIFT: {{ seller_swift }}<br>
+                БИН Банка: {{ seller_bank_bin }}, Кбе {{ seller_kbe }}<br>
+                Тел.: {{ seller_phone }}<br>
+                E-mail: {{ seller_email }}
+            </td>
+            <td>
+                {% if is_person %}
+                <strong>{{ person_status }}</strong><br>
+                {{ customer.name }}<br>
+                {% if customer.iin_bin %}ИИН: {{ customer.iin_bin }}<br>{% endif %}
+                {{ doc_label }}
+                {% if customer.doc_number %}№ {{ customer.doc_number }}{% endif %}
+                {% if customer.doc_issue_date %}
+                от {{ customer.doc_issue_date.strftime('%d.%m.%Y') }}<br>
+                {% endif %}
+                {% if customer.address %}Адрес: {{ customer.address }}<br>{% endif %}
+                {% if customer.phone %}Тел.: {{ customer.phone }}<br>{% endif %}
+                {% elif is_company %}
+                <strong>{{ customer.name }}</strong><br>
+                {% if customer.iin_bin %}БИН/ИИН: {{ customer.iin_bin }}<br>{% endif %}
+                {% if customer.address %}Адрес: {{ customer.address }}<br>{% endif %}
+                {% if customer.phone %}Тел.: {{ customer.phone }}<br>{% endif %}
+                {% if customer.email %}E-mail: {{ customer.email }}<br>{% endif %}
+                {% else %}
+                {{ customer.name if customer else '' }}
+                {% endif %}
+            </td>
+        </tr>
+        <tr class="signature-table">
+            <td>
+                Директор<br>
+                __________________ / {{ director_fio }} /
+            </td>
+            <td>
+                {% if is_person %}
+                __________________ / {{ customer.name }} /
+                {% else %}
+                Руководитель<br>
+                __________________ / {{ customer.contact_person or '' }} /
+                {% endif %}
+            </td>
+        </tr>
+    </table>
+
+</body>
+
+</html>

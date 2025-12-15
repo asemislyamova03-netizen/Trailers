@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="h3 mb-3">Пользователи</h1>
+
+<a href="{{ url_for('main.user_create') }}" class="btn btn-primary mb-3">Новый пользователь</a>
+
+<table class="table table-striped">
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Логин</th>
+      <th>ФИО</th>
+      <th>Роль</th>
+      <th>Склад</th>
+      <th>Действия</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for u in users %}
+    <tr>
+      <td>{{ u.id }}</td>
+      <td>{{ u.username }}</td>
+      <td>{{ u.full_name }}</td>
+      <td>{{ 'Админ' if u.role == 'admin' else 'Менеджер' }}</td>
+      <td>{{ u.warehouse.name if u.warehouse else '—' }}</td>
+      <td>
+        <a href="{{ url_for('main.user_edit', user_id=u.id) }}" class="btn btn-sm btn-outline-primary">Изменить</a>
+        <a href="{{ url_for('main.user_delete', user_id=u.id) }}"
+           class="btn btn-sm btn-outline-danger"
+           onclick="return confirm('Удалить пользователя?');">
+           Удалить
+        </a>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

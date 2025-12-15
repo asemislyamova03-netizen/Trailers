@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block title %}Прицепы{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h4 mb-0">Прицепы</h1>
+    <a href="{{ url_for('main.trailer_create') }}" class="btn btn-primary">Новый прицеп</a>
+</div>
+
+<form method="get" class="row g-2 mb-3">
+    <div class="col-md-3">
+        <input type="text" name="vin" class="form-control"
+               placeholder="VIN" value="{{ vin_filter or '' }}">
+    </div>
+    <div class="col-md-3">
+        <input type="text" name="article" class="form-control"
+               placeholder="Артикул номенклатуры" value="{{ article_filter or '' }}">
+    </div>
+    <div class="col-md-2">
+        <select name="status" class="form-select">
+            <option value="all" {% if status_filter == 'all' %}selected{% endif %}>Все статусы</option>
+            <option value="IN_STOCK" {% if status_filter == 'IN_STOCK' %}selected{% endif %}>В наличии</option>
+            <option value="SOLD" {% if status_filter == 'SOLD' %}selected{% endif %}>Продан</option>
+        </select>
+    </div>
+    <div class="col-md-2">
+        <select name="warehouse_id" class="form-select">
+            <option value="">Все склады</option>
+            {% for w in warehouses %}
+                <option value="{{ w.id }}" {% if warehouse_filter == w.id %}selected{% endif %}>
+                    {{ w.name }}
+                </option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-md-2">
+        <button type="submit" class="btn btn-outline-secondary w-100">Фильтр</button>
+    </div>
+</form>
+
+<table class="table table-sm table-striped align-middle">
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>VIN</th>
+            <th>Артикул</th>
+            <th>Номенклатура</th>
+            <th>Склад</th>
+            <th>Статус</th>
+            <th>Действия</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for t in trailers %}
+        <tr>
+            <td>{{ t.id }}</td>
+            <td>{{ t.vin }}</td>
+            <td>{{ t.item.article if t.item else '' }}</td>
+            <td>{{ t.item.name if t.item else '' }}</td>
+            <td>{{ t.warehouse.name if t.warehouse else '' }}</td>
+            <td>
+                {% if t.status == 'IN_STOCK' %}
+                    В наличии
+                {% elif t.status == 'SOLD' %}
+                    Продан
+                {% else %}
+                    {{ t.status }}
+                {% endif %}
+            </td>
+            <td>
+                <a href="{{ url_for('main.trailer_edit', trailer_id=t.id) }}"
+                   class="btn btn-sm btn-outline-primary">Изменить</a>
+                <a href="{{ url_for('main.trailer_delete', trailer_id=t.id) }}"
+                   class="btn btn-sm btn-outline-danger"
+                   onclick="return confirm('Удалить прицеп?');">
+                    Удалить
+                </a>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

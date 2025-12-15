@@ -1,0 +1,22 @@
+# venv
+venv_trailers/
+.venv/
+env/
+ENV/
+
+# python
+__pycache__/
+*.pyc
+
+# flask instance & db
+instance/
+*.db
+*.sqlite
+
+# env secrets
+.env
+
+# ide
+.vscode/
+.idea/
+.DS_Store
