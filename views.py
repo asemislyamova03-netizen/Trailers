@@ -56,7 +56,7 @@ def admin_required(f):
 
 # ========= АУТЕНТИФИКАЦИЯ =========
 
-@main_bp.route('/login', methods=['GET', 'POST'])
+@main_bp.route('/trailers/login', methods=['GET', 'POST'])
 def login():
     # если уже вошли
     if current_user.is_authenticated:
@@ -88,7 +88,7 @@ def login():
 
 
 
-@main_bp.route('/logout')
+@main_bp.route('/trailers/logout')
 @login_required
 def logout():
     logout_user()
@@ -203,7 +203,7 @@ def _find_item_for_form(form: TrailerCreateForm):
     return item, None
 
 
-@main_bp.route('/workspace')
+@main_bp.route('/trailers/workspace')
 @login_required
 def manager_workspace():
     if current_user.is_admin:
@@ -291,14 +291,14 @@ def manager_workspace():
 
 # ========= ПОЛЬЗОВАТЕЛИ (только админ) =========
 
-@main_bp.route('/users')
+@main_bp.route('/trailers/users')
 @admin_required
 def users_list():
     users = User.query.order_by(User.username).all()
     return render_template('users_list.html', users=users)
 
 
-@main_bp.route('/users/new', methods=['GET', 'POST'])
+@main_bp.route('/trailers/users/new', methods=['GET', 'POST'])
 @admin_required
 def user_create():
     form = UserForm()
@@ -329,7 +329,7 @@ def user_create():
     return render_template('user_form.html', form=form, title='Новый пользователь')
 
 
-@main_bp.route('/users/<int:user_id>/edit', methods=['GET', 'POST'])
+@main_bp.route('/trailers/users/<int:user_id>/edit', methods=['GET', 'POST'])
 @admin_required
 def user_edit(user_id):
     user = User.query.get_or_404(user_id)
@@ -362,7 +362,7 @@ def user_edit(user_id):
     return render_template('user_form.html', form=form, title='Редактирование пользователя')
 
 
-@main_bp.route('/users/<int:user_id>/delete')
+@main_bp.route('/trailers/users/<int:user_id>/delete')
 @admin_required
 def user_delete(user_id):
     user = User.query.get_or_404(user_id)
@@ -420,7 +420,7 @@ def _fill_trailer_form_choices(form: TrailerCreateForm):
         form.has_jockey_wheel.data = 1   # по умолчанию "да"
 
 
-@main_bp.route('/trailers')
+@main_bp.route('/trailers/trailers')
 @login_required
 def trailers_list():
     """Список всех прицепов с фильтрами."""
@@ -462,7 +462,7 @@ def trailers_list():
 
 
 
-@main_bp.route('/trailers/new', methods=['GET', 'POST'])
+@main_bp.route('/trailers/trailers/new', methods=['GET', 'POST'])
 @login_required
 def trailer_create():
     form = TrailerCreateForm()
@@ -570,7 +570,7 @@ def trailer_delete(trailer_id):
 
 # ========= СКЛАДЫ (только админ) =========
 
-@main_bp.route('/warehouses', methods=['GET', 'POST'])
+@main_bp.route('/trailers/warehouses', methods=['GET', 'POST'])
 @admin_required
 def warehouses_list():
     """Список складов + форма добавления нового."""
@@ -603,7 +603,7 @@ def warehouses_list():
 
 # ========= ОТТС =========
 
-@main_bp.route('/otts')
+@main_bp.route('/trailers/otts')
 @login_required
 def otts_list():
     otts_list = (
@@ -618,7 +618,7 @@ def otts_list():
     )
 
 
-@main_bp.route('/otts/new', methods=['GET', 'POST'])
+@main_bp.route('/trailers/otts/new', methods=['GET', 'POST'])
 @login_required
 def otts_create():
     form = OTTSForm()
@@ -645,7 +645,7 @@ def otts_create():
     )
 
 
-@main_bp.route('/otts/<int:otts_id>/edit', methods=['GET', 'POST'])
+@main_bp.route('/trailers/otts/<int:otts_id>/edit', methods=['GET', 'POST'])
 @login_required
 def otts_edit(otts_id):
     otts = OTTS.query.get_or_404(otts_id)
@@ -671,7 +671,7 @@ def otts_edit(otts_id):
     )
 
 
-@main_bp.route('/otts/<int:otts_id>/delete')
+@main_bp.route('/trailers/otts/<int:otts_id>/delete')
 @admin_required
 def otts_delete(otts_id):
     otts = OTTS.query.get_or_404(otts_id)
@@ -716,7 +716,7 @@ def find_trailer_item_by_features(
 
 # ========= НОМЕНКЛАТУРА =========
 
-@main_bp.route('/items')
+@main_bp.route('/trailers/items')
 @login_required
 def items_list():
     """Список номенклатуры (прицепы + комплектующие)."""
@@ -728,7 +728,7 @@ def items_list():
     return render_template('items_list.html', items=items)
 
 
-@main_bp.route('/items/new', methods=['GET', 'POST'])
+@main_bp.route('/trailers/items/new', methods=['GET', 'POST'])
 @login_required
 def item_create():
     """Создание новой позиции номенклатуры."""
@@ -793,7 +793,7 @@ def item_create():
 
 
 
-@main_bp.route('/items/<int:item_id>/edit', methods=['GET', 'POST'])
+@main_bp.route('/trailers/items/<int:item_id>/edit', methods=['GET', 'POST'])
 @login_required
 def item_edit(item_id):
     item = Item.query.get_or_404(item_id)
@@ -881,7 +881,7 @@ def item_edit(item_id):
 
 
 
-@main_bp.route('/items/<int:item_id>/delete')
+@main_bp.route('/trailers/items/<int:item_id>/delete')
 @login_required
 def item_delete(item_id):
     item = Item.query.get_or_404(item_id)
@@ -899,7 +899,7 @@ def item_delete(item_id):
 
 # ========= КЛИЕНТЫ =========
 
-@main_bp.route('/customers', methods=['GET'])
+@main_bp.route('/trailers/customers', methods=['GET'])
 @login_required
 def customers_list():
     """Список клиентов с простым поиском."""
@@ -929,7 +929,7 @@ def customers_list():
         search=search,
     )
 
-@main_bp.route('/customers/new', methods=['GET', 'POST'])
+@main_bp.route('/trailers/customers/new', methods=['GET', 'POST'])
 @login_required
 def customer_create():
     form = CustomerForm()
@@ -956,7 +956,7 @@ def customer_create():
     return render_template('customer_form.html', form=form, title='Новый клиент')
 
 
-@main_bp.route('/customers/<int:customer_id>/edit', methods=['GET', 'POST'])
+@main_bp.route('/trailers/customers/<int:customer_id>/edit', methods=['GET', 'POST'])
 @login_required
 def customer_edit(customer_id):
     customer = Customer.query.get_or_404(customer_id)
@@ -970,7 +970,7 @@ def customer_edit(customer_id):
 
     return render_template('customer_form.html', form=form, title='Редактирование клиента')
 
-@main_bp.route('/customers/<int:customer_id>/delete')
+@main_bp.route('/trailers/customers/<int:customer_id>/delete')
 @login_required
 def customer_delete(customer_id):
     customer = Customer.query.get_or_404(customer_id)
@@ -1068,7 +1068,7 @@ def _build_contract_context(contract_id: int) -> dict:
     )
 
 
-@main_bp.route('/contracts')
+@main_bp.route('/trailers/contracts')
 @login_required
 def contracts_list():
     """Список договоров / продаж. Менеджеры видят ВСЕ договоры."""
@@ -1088,7 +1088,7 @@ def contracts_list():
     return render_template('contracts_list.html', contracts=contracts)
 
 
-@main_bp.route('/contracts/new', methods=['GET', 'POST'])
+@main_bp.route('/trailers/contracts/new', methods=['GET', 'POST'])
 @login_required
 def contract_create():
     form = SalesContractForm()
@@ -1180,7 +1180,7 @@ def contract_create():
 
 
 
-@main_bp.route('/contracts/<int:contract_id>/edit', methods=['GET', 'POST'])
+@main_bp.route('/trailers/contracts/<int:contract_id>/edit', methods=['GET', 'POST'])
 @login_required
 def contract_edit(contract_id):
     contract = SalesContract.query.get_or_404(contract_id)
@@ -1277,7 +1277,7 @@ def contract_edit(contract_id):
 
 
 
-@main_bp.route('/contracts/<int:contract_id>/delete', methods=['POST'])
+@main_bp.route('/trailers/contracts/<int:contract_id>/delete', methods=['POST'])
 @login_required
 def contract_delete(contract_id):
     contract = SalesContract.query.get_or_404(contract_id)
@@ -1296,14 +1296,14 @@ def contract_delete(contract_id):
     return redirect(url_for('main.contracts_list'))
 
 
-@main_bp.route('/contracts/<int:contract_id>/print')
+@main_bp.route('/trailers/contracts/<int:contract_id>/print')
 @login_required
 def contract_print(contract_id):
     ctx = _build_contract_context(contract_id)
     return render_template('contract_print.html', **ctx)
 
 
-@main_bp.route('/contracts/<int:contract_id>/pdf')
+@main_bp.route('/trailers/contracts/<int:contract_id>/pdf')
 @login_required
 def contract_pdf(contract_id):
     if HTML is not None:
@@ -1339,7 +1339,7 @@ def _sigex_title_for_contract(contract) -> str:
     num = contract.contract_number or contract.id
     return f"Договор_{num}.pdf"
 
-@main_bp.route('/contracts/<int:contract_id>/sign')
+@main_bp.route('/trailers/contracts/<int:contract_id>/sign')
 @login_required
 def contract_sign(contract_id):
     """
@@ -1352,13 +1352,13 @@ def contract_sign(contract_id):
     contract = ctx["contract"]
     return render_template("contract_sign.html", contract=contract)
 
-@main_bp.route('/contracts/<int:contract_id>/sigex/pdf_base64')
+@main_bp.route('/trailers/contracts/<int:contract_id>/sigex/pdf_base64')
 @login_required
 def contract_sigex_pdf_base64(contract_id):
     pdf_bytes = _contract_pdf_bytes(contract_id)
     return jsonify({"pdfBase64": base64.b64encode(pdf_bytes).decode("utf-8")})
 
-@main_bp.route('/contracts/<int:contract_id>/sigex/preregister', methods=['POST'])
+@main_bp.route('/trailers/contracts/<int:contract_id>/sigex/preregister', methods=['POST'])
 @login_required
 def contract_sigex_preregister(contract_id):
     contract = SalesContract.query.get_or_404(contract_id)
@@ -1394,7 +1394,7 @@ def contract_sigex_preregister(contract_id):
 
     return jsonify({"documentId": document_id})
 
-@main_bp.route('/contracts/<int:contract_id>/sigex/add_org_signature', methods=['POST'])
+@main_bp.route('/trailers/contracts/<int:contract_id>/sigex/add_org_signature', methods=['POST'])
 @login_required
 def contract_sigex_add_org_signature(contract_id):
     """
@@ -1424,7 +1424,7 @@ def contract_sigex_add_org_signature(contract_id):
 
     return jsonify({"ok": True, "signId": res.get("signId")})
 
-@main_bp.route('/contracts/<int:contract_id>/sigex/start_qr', methods=['POST'])
+@main_bp.route('/trailers/contracts/<int:contract_id>/sigex/start_qr', methods=['POST'])
 @login_required
 def contract_sigex_start_qr(contract_id):
     contract = SalesContract.query.get_or_404(contract_id)
@@ -1448,7 +1448,7 @@ def contract_sigex_start_qr(contract_id):
 
     return jsonify(res)
 
-@main_bp.route('/contracts/<int:contract_id>/sigex/qr_status')
+@main_bp.route('/trailers/contracts/<int:contract_id>/sigex/qr_status')
 @login_required
 def contract_sigex_qr_status(contract_id):
     contract = SalesContract.query.get_or_404(contract_id)
@@ -1466,7 +1466,7 @@ def contract_sigex_qr_status(contract_id):
 
     return jsonify(res)
 
-@main_bp.route('/contracts/<int:contract_id>/sigex/ddc')
+@main_bp.route('/trailers/contracts/<int:contract_id>/sigex/ddc')
 @login_required
 def contract_sigex_ddc(contract_id):
     """
