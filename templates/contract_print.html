@@ -52,7 +52,36 @@
   {% set is_person = customer and customer.customer_type == 'PERSON' %}
   {% set is_company = customer and customer.customer_type == 'COMPANY' %}
 
-  {# ФЛ: документ/статус (под твои коды ID_RK / RESIDENCE_PERMIT / PASSPORT_FOREIGN) #}
+  {# ОПФ для COMPANY #}
+  {% set opf = (customer.opf|trim) if is_company and customer.opf else '' %}
+  {% set is_ip = is_company and opf == 'ИП' %}
+
+  {# COMPANY: печатное имя с ОПФ (ТОО/ИП/КХ), чтобы было ВЕЗДЕ одинаково #}
+  {% set name_raw = (customer.name|trim) if customer and customer.name else '' %}
+  {% set name_upper = name_raw|upper %}
+  {% set opf_upper = opf|upper %}
+  {% set company_display_name = name_raw %}
+
+  {% if is_company %}
+    {% if is_ip %}
+      {# если в БД "ИП ..." уже вписали — не дублируем #}
+      {% set company_display_name = ('ИП ' ~ name_raw) if not name_upper.startswith('ИП ') else name_raw %}
+    {% else %}
+      {% if opf and not name_upper.startswith(opf_upper ~ ' ') and not name_upper.startswith(opf_upper) %}
+        {% set company_display_name = opf ~ ' ' ~ name_raw %}
+      {% else %}
+        {% set company_display_name = name_raw %}
+      {% endif %}
+    {% endif %}
+  {% endif %}
+
+  {# ИП: ФИО для подписи — без префикса "ИП " #}
+  {% set ip_fio = name_raw %}
+  {% if is_ip and name_upper.startswith('ИП ') %}
+    {% set ip_fio = name_raw[3:] %}
+  {% endif %}
+
+  {# ФЛ: документ/статус (коды как в форме: ID_RK / RESIDENCE_PERMIT / PASSPORT_FOREIGN) #}
   {% if is_person %}
     {% set doc_type = customer.doc_type or '' %}
 
@@ -71,64 +100,28 @@
     {% endif %}
   {% endif %}
 
-  {# COMPANY: ОПФ / отображаемое имя / подписант / должность #}
-  {% set opf = (customer.opf or '') if is_company else '' %}
-  {% set base_name = (customer.name or '') if customer else '' %}
-  {% set base_upper = base_name|upper %}
-  {% set opf_upper = opf|upper %}
-  {% set is_ip = is_company and opf == 'ИП' %}
-
-  {# как печатаем название покупателя #}
-  {% set company_display_name = base_name %}
-  {% if is_company %}
-    {% if is_ip %}
-      {% set company_display_name = ('ИП ' ~ base_name) if not base_upper.startswith('ИП') else base_name %}
-    {% else %}
-      {% if opf and not base_upper.startswith(opf_upper) %}
-        {% set company_display_name = opf ~ ' ' ~ base_name %}
-      {% else %}
-        {% set company_display_name = base_name %}
-      {% endif %}
-    {% endif %}
-  {% endif %}
-
-  {# кто подписывает #}
+  {# COMPANY: руководитель/должность (для ИП не используем) #}
+  {% set company_pos = (customer.director_position|trim) if is_company and customer.director_position else '' %}
+  {% set company_fio = (customer.director_fio|trim) if is_company and customer.director_fio else '' %}
   {% set company_sign_name = '' %}
   {% if is_company %}
     {% if is_ip %}
-      {% set company_sign_name = base_name %}
+      {% set company_sign_name = ip_fio %}
     {% else %}
-      {% set company_sign_name = (customer.director_fio or customer.contact_person or '') %}
+      {% set company_sign_name = company_fio or (customer.contact_person|trim if customer.contact_person else '') %}
     {% endif %}
   {% endif %}
 
-  {# заголовок должности в подписи #}
-  {% set company_pos_label = '' %}
-  {% if is_company %}
-    {% if is_ip %}
-      {% set company_pos_label = 'ИП' %}
-    {% else %}
-      {% set company_pos_label = (customer.director_position or '') %}
-      {% if not company_pos_label %}
-        {% if opf == 'КХ' %}
-          {% set company_pos_label = 'Глава КХ' %}
-        {% else %}
-          {% set company_pos_label = 'Директор' %}
-        {% endif %}
-      {% endif %}
-    {% endif %}
-  {% endif %}
+  {% set company_pos_label = company_pos or 'Руководитель' %}
 
-  {# должность в род.падеже для "в лице ..." #}
+  {# Должность в Р.п. для фразы "в лице ..." (минимальный словарь) #}
   {% set company_pos_gen = company_pos_label %}
-  {% if company_pos_label == 'Директор' %}
+  {% if company_pos_label|lower == 'директор' %}
     {% set company_pos_gen = 'Директора' %}
-  {% elif company_pos_label == 'Генеральный директор' %}
+  {% elif company_pos_label|lower == 'генеральный директор' %}
     {% set company_pos_gen = 'Генерального директора' %}
-  {% elif company_pos_label == 'Руководитель' %}
+  {% elif company_pos_label|lower == 'руководитель' %}
     {% set company_pos_gen = 'Руководителя' %}
-  {% elif company_pos_label == 'Глава КХ' %}
-    {% set company_pos_gen = 'Главы КХ' %}
   {% endif %}
 
   {# ===================== 1. ДОГОВОР ===================== #}
@@ -154,10 +147,13 @@
         {% if customer.iin_bin %}, ИИН {{ customer.iin_bin }}{% endif %},
       {% elif is_company %}
         {{ company_display_name }}
-        {# ИП: НЕ пишем "в лице ... действующего на основании Устава" #}
-        {% if not is_ip and company_sign_name %}
-          в лице {{ company_pos_gen }} {{ company_sign_name }},
-          действующего на основании Устава,
+        {% if is_ip %}
+          {% if customer.iin_bin %}, ИИН {{ customer.iin_bin }}{% endif %},
+        {% else %}
+          {% if company_sign_name %}
+            в лице {{ company_pos_gen }} {{ company_sign_name }},
+            действующего на основании Устава,
+          {% endif %}
         {% endif %}
       {% else %}
         {{ customer.name }},
@@ -249,6 +245,7 @@
           {% if customer.bank_account %}р/с (IBAN): {{ customer.bank_account }}<br>{% endif %}
           {% if customer.bank_name %}Банк: {{ customer.bank_name }}<br>{% endif %}
           {% if customer.bank_bic %}БИК: {{ customer.bank_bic }}<br>{% endif %}
+          {# строку "Руководитель: ..." НЕ выводим — она есть в подписи #}
         {% else %}
           {{ customer.name if customer else '' }}
         {% endif %}
@@ -263,8 +260,13 @@
         {% if is_person %}
           __________________ / {{ customer.name }} /
         {% elif is_company %}
-          {{ company_pos_label }}<br>
-          __________________ / {{ company_sign_name }} /
+          {% if is_ip %}
+            ИП<br>
+            __________________ / {{ ip_fio }} /
+          {% else %}
+            {{ company_pos_label }}<br>
+            __________________ / {{ company_sign_name }} /
+          {% endif %}
         {% else %}
           __________________ / /
         {% endif %}
@@ -368,7 +370,12 @@
         {% if is_person %}
           {{ customer.name }}
         {% elif is_company %}
-          {{ company_sign_name }}
+          {% if is_ip %}
+            {{ ip_fio }}
+          {% else %}
+            {{ company_sign_name }}
+          {% endif %}
+        {% else %}
         {% endif %}
         /
       </td>
@@ -488,8 +495,13 @@
         {% if is_person %}
           __________________ / {{ customer.name }} /
         {% elif is_company %}
-          {{ company_pos_label }}<br>
-          __________________ / {{ company_sign_name }} /
+          {% if is_ip %}
+            ИП<br>
+            __________________ / {{ ip_fio }} /
+          {% else %}
+            {{ company_pos_label }}<br>
+            __________________ / {{ company_sign_name }} /
+          {% endif %}
         {% else %}
           __________________ / /
         {% endif %}
