@@ -30,12 +30,21 @@
             <th>Тип</th>
             <th>ФИО / Название</th>
             <th>Контактное лицо</th>
+
             <th>Документ</th>
             <th>№ документа</th>
             <th>Дата выдачи</th>
+
             <th>ИИН / БИН</th>
             <th>Телефон</th>
             <th>Email</th>
+
+            <th>Счёт (IBAN)</th>
+            <th>Банк</th>
+            <th>БИК</th>
+            <th>Руководитель</th>
+            <th>Должность</th>
+
             <th>Активен</th>
             <th>Действия</th>
         </tr>
@@ -55,12 +64,13 @@
             </td>
             <td>{{ c.name }}</td>
             <td>{{ c.contact_person or '' }}</td>
+
             <td>
-                {% if c.doc_type == 'ID_RK' %}
+                {% if c.doc_type == 'ID' %}
                     Удостоверение личности РК
-                {% elif c.doc_type == 'RESIDENCE_PERMIT' %}
-                    Вид на жительство РК
-                {% elif c.doc_type == 'PASSPORT_FOREIGN' %}
+                {% elif c.doc_type == 'RESIDENT' %}
+                    Вид на жительство (резидент РК)
+                {% elif c.doc_type == 'FOREIGN_PASSPORT' %}
                     Паспорт иностранного гражданина
                 {% else %}
                     -
@@ -68,9 +78,18 @@
             </td>
             <td>{{ c.doc_number or '' }}</td>
             <td>{{ c.doc_issue_date.strftime('%d.%m.%Y') if c.doc_issue_date else '' }}</td>
+
             <td>{{ c.iin_bin or '' }}</td>
             <td>{{ c.phone or '' }}</td>
             <td>{{ c.email or '' }}</td>
+
+            {# Реквизиты показываем только для юрлица #}
+            <td>{% if c.customer_type == 'COMPANY' %}{{ c.bank_account or '' }}{% endif %}</td>
+            <td>{% if c.customer_type == 'COMPANY' %}{{ c.bank_name or '' }}{% endif %}</td>
+            <td>{% if c.customer_type == 'COMPANY' %}{{ c.bank_bic or '' }}{% endif %}</td>
+            <td>{% if c.customer_type == 'COMPANY' %}{{ c.director_fio or '' }}{% endif %}</td>
+            <td>{% if c.customer_type == 'COMPANY' %}{{ c.director_position or '' }}{% endif %}</td>
+
             <td>
                 {% if c.is_active %}
                     <span class="badge bg-success">Да</span>

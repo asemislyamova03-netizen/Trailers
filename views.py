@@ -56,7 +56,7 @@ def admin_required(f):
 
 # ========= АУТЕНТИФИКАЦИЯ =========
 
-@main_bp.route('/trailers/login', methods=['GET', 'POST'])
+@main_bp.route('/login', methods=['GET', 'POST'])
 def login():
     # если уже вошли
     if current_user.is_authenticated:
@@ -88,7 +88,7 @@ def login():
 
 
 
-@main_bp.route('/trailers/logout')
+@main_bp.route('/logout')
 @login_required
 def logout():
     logout_user()
@@ -203,7 +203,7 @@ def _find_item_for_form(form: TrailerCreateForm):
     return item, None
 
 
-@main_bp.route('/trailers/workspace')
+@main_bp.route('/workspace')
 @login_required
 def manager_workspace():
     if current_user.is_admin:
@@ -291,14 +291,14 @@ def manager_workspace():
 
 # ========= ПОЛЬЗОВАТЕЛИ (только админ) =========
 
-@main_bp.route('/trailers/users')
+@main_bp.route('/users')
 @admin_required
 def users_list():
     users = User.query.order_by(User.username).all()
     return render_template('users_list.html', users=users)
 
 
-@main_bp.route('/trailers/users/new', methods=['GET', 'POST'])
+@main_bp.route('/users/new', methods=['GET', 'POST'])
 @admin_required
 def user_create():
     form = UserForm()
@@ -329,7 +329,7 @@ def user_create():
     return render_template('user_form.html', form=form, title='Новый пользователь')
 
 
-@main_bp.route('/trailers/users/<int:user_id>/edit', methods=['GET', 'POST'])
+@main_bp.route('/users/<int:user_id>/edit', methods=['GET', 'POST'])
 @admin_required
 def user_edit(user_id):
     user = User.query.get_or_404(user_id)
@@ -362,7 +362,7 @@ def user_edit(user_id):
     return render_template('user_form.html', form=form, title='Редактирование пользователя')
 
 
-@main_bp.route('/trailers/users/<int:user_id>/delete')
+@main_bp.route('/users/<int:user_id>/delete')
 @admin_required
 def user_delete(user_id):
     user = User.query.get_or_404(user_id)
@@ -420,7 +420,7 @@ def _fill_trailer_form_choices(form: TrailerCreateForm):
         form.has_jockey_wheel.data = 1   # по умолчанию "да"
 
 
-@main_bp.route('/trailers/trailers')
+@main_bp.route('/trailers')
 @login_required
 def trailers_list():
     """Список всех прицепов с фильтрами."""
@@ -462,7 +462,7 @@ def trailers_list():
 
 
 
-@main_bp.route('/trailers/trailers/new', methods=['GET', 'POST'])
+@main_bp.route('/trailers/new', methods=['GET', 'POST'])
 @login_required
 def trailer_create():
     form = TrailerCreateForm()
@@ -570,7 +570,7 @@ def trailer_delete(trailer_id):
 
 # ========= СКЛАДЫ (только админ) =========
 
-@main_bp.route('/trailers/warehouses', methods=['GET', 'POST'])
+@main_bp.route('/warehouses', methods=['GET', 'POST'])
 @admin_required
 def warehouses_list():
     """Список складов + форма добавления нового."""
@@ -603,7 +603,7 @@ def warehouses_list():
 
 # ========= ОТТС =========
 
-@main_bp.route('/trailers/otts')
+@main_bp.route('/otts')
 @login_required
 def otts_list():
     otts_list = (
@@ -618,7 +618,7 @@ def otts_list():
     )
 
 
-@main_bp.route('/trailers/otts/new', methods=['GET', 'POST'])
+@main_bp.route('/otts/new', methods=['GET', 'POST'])
 @login_required
 def otts_create():
     form = OTTSForm()
@@ -645,7 +645,7 @@ def otts_create():
     )
 
 
-@main_bp.route('/trailers/otts/<int:otts_id>/edit', methods=['GET', 'POST'])
+@main_bp.route('/otts/<int:otts_id>/edit', methods=['GET', 'POST'])
 @login_required
 def otts_edit(otts_id):
     otts = OTTS.query.get_or_404(otts_id)
@@ -671,7 +671,7 @@ def otts_edit(otts_id):
     )
 
 
-@main_bp.route('/trailers/otts/<int:otts_id>/delete')
+@main_bp.route('/otts/<int:otts_id>/delete')
 @admin_required
 def otts_delete(otts_id):
     otts = OTTS.query.get_or_404(otts_id)
@@ -716,7 +716,7 @@ def find_trailer_item_by_features(
 
 # ========= НОМЕНКЛАТУРА =========
 
-@main_bp.route('/trailers/items')
+@main_bp.route('/items')
 @login_required
 def items_list():
     """Список номенклатуры (прицепы + комплектующие)."""
@@ -728,7 +728,7 @@ def items_list():
     return render_template('items_list.html', items=items)
 
 
-@main_bp.route('/trailers/items/new', methods=['GET', 'POST'])
+@main_bp.route('/items/new', methods=['GET', 'POST'])
 @login_required
 def item_create():
     """Создание новой позиции номенклатуры."""
@@ -793,7 +793,7 @@ def item_create():
 
 
 
-@main_bp.route('/trailers/items/<int:item_id>/edit', methods=['GET', 'POST'])
+@main_bp.route('/items/<int:item_id>/edit', methods=['GET', 'POST'])
 @login_required
 def item_edit(item_id):
     item = Item.query.get_or_404(item_id)
@@ -881,7 +881,7 @@ def item_edit(item_id):
 
 
 
-@main_bp.route('/trailers/items/<int:item_id>/delete')
+@main_bp.route('/items/<int:item_id>/delete')
 @login_required
 def item_delete(item_id):
     item = Item.query.get_or_404(item_id)
@@ -899,7 +899,7 @@ def item_delete(item_id):
 
 # ========= КЛИЕНТЫ =========
 
-@main_bp.route('/trailers/customers', methods=['GET'])
+@main_bp.route('/customers', methods=['GET'])
 @login_required
 def customers_list():
     """Список клиентов с простым поиском."""
@@ -914,6 +914,12 @@ def customers_list():
                 Customer.contact_person.ilike(like),
                 Customer.iin_bin.ilike(like),
                 Customer.phone.ilike(like),
+                Customer.email.ilike(like),
+                Customer.bank_account.ilike(like),
+                Customer.bank_name.ilike(like),
+                Customer.bank_bic.ilike(like),
+                Customer.director_fio.ilike(like),
+                Customer.director_position.ilike(like),
             )
         )
 
@@ -929,25 +935,37 @@ def customers_list():
         search=search,
     )
 
-@main_bp.route('/trailers/customers/new', methods=['GET', 'POST'])
+@main_bp.route('/customers/new', methods=['GET', 'POST'])
 @login_required
 def customer_create():
     form = CustomerForm()
     if form.validate_on_submit():
+        is_company = (form.customer_type.data == 'COMPANY')
+
         customer = Customer(
-            customer_type=form.customer_type.data,   # если в БД строковый Enum
-            name=form.name.data.strip(),
-            contact_person=form.contact_person.data or None,
-            iin_bin=form.iin_bin.data or None,
-            phone=form.phone.data or None,
-            email=form.email.data or None,
-            address=form.address.data or None,
-            is_active=form.is_active.data,
-            doc_type=form.doc_type.data or None,
-            doc_number=form.doc_number.data or None,
-            doc_issue_date=form.doc_issue_date.data,
-            doc_issuer=form.doc_issuer.data or None,
+            customer_type=form.customer_type.data,
+            name=(form.name.data or '').strip(),
+            contact_person=_norm_str(form.contact_person.data),
+            iin_bin=_norm_str(form.iin_bin.data),
+            phone=_norm_str(form.phone.data),
+            email=_norm_str(form.email.data),
+            address=_norm_str(form.address.data),
+            is_active=bool(form.is_active.data),
+
+            # Документ сохраняем только для ФЛ
+            doc_type=_norm_str(form.doc_type.data) if not is_company else None,
+            doc_number=_norm_str(form.doc_number.data) if not is_company else None,
+            doc_issue_date=form.doc_issue_date.data if not is_company else None,
+            doc_issuer=_norm_str(form.doc_issuer.data) if not is_company else None,
+
+            # Реквизиты юрлица (для ФЛ можно оставить пустыми)
+            bank_account=_norm_str(form.bank_account.data),
+            bank_name=_norm_str(form.bank_name.data),
+            bank_bic=_norm_str(form.bank_bic.data),
+            director_position=_norm_str(form.director_position.data),
+            director_fio=_norm_str(form.director_fio.data),
         )
+
         db.session.add(customer)
         db.session.commit()
         flash('Клиент создан', 'success')
@@ -956,7 +974,7 @@ def customer_create():
     return render_template('customer_form.html', form=form, title='Новый клиент')
 
 
-@main_bp.route('/trailers/customers/<int:customer_id>/edit', methods=['GET', 'POST'])
+@main_bp.route('/customers/<int:customer_id>/edit', methods=['GET', 'POST'])
 @login_required
 def customer_edit(customer_id):
     customer = Customer.query.get_or_404(customer_id)
@@ -964,13 +982,39 @@ def customer_edit(customer_id):
 
     if form.validate_on_submit():
         form.populate_obj(customer)
+
+        # нормализуем строки (пустые -> None)
+        customer.name = (customer.name or '').strip()
+        customer.contact_person = _norm_str(customer.contact_person)
+        customer.iin_bin = _norm_str(customer.iin_bin)
+        customer.phone = _norm_str(customer.phone)
+        customer.email = _norm_str(customer.email)
+        customer.address = _norm_str(customer.address)
+
+        customer.doc_type = _norm_str(customer.doc_type)
+        customer.doc_number = _norm_str(customer.doc_number)
+        customer.doc_issuer = _norm_str(customer.doc_issuer)
+
+        customer.bank_account = _norm_str(customer.bank_account)
+        customer.bank_name = _norm_str(customer.bank_name)
+        customer.bank_bic = _norm_str(customer.bank_bic)
+        customer.director_position = _norm_str(customer.director_position)
+        customer.director_fio = _norm_str(customer.director_fio)
+
+        # если ЮЛ — документные поля не храним
+        if customer.customer_type == 'COMPANY':
+            customer.doc_type = None
+            customer.doc_number = None
+            customer.doc_issue_date = None
+            customer.doc_issuer = None
+
         db.session.commit()
         flash('Клиент обновлён', 'success')
         return redirect(url_for('main.customers_list'))
 
     return render_template('customer_form.html', form=form, title='Редактирование клиента')
 
-@main_bp.route('/trailers/customers/<int:customer_id>/delete')
+@main_bp.route('/customers/<int:customer_id>/delete')
 @login_required
 def customer_delete(customer_id):
     customer = Customer.query.get_or_404(customer_id)
@@ -1053,6 +1097,14 @@ def _build_contract_context(contract_id: int) -> dict:
     if axle_count is None and otts and otts.axle_count is not None:
         axle_count = otts.axle_count
 
+    # --- склад менеджера (для вывода вместо города) ---
+    warehouse_name = None
+    try:
+        if current_user.is_authenticated and getattr(current_user, "warehouse", None):
+            warehouse_name = current_user.warehouse.name
+    except Exception:
+        warehouse_name = None
+
     return dict(
         contract=contract,
         customer=customer,
@@ -1065,30 +1117,79 @@ def _build_contract_context(contract_id: int) -> dict:
         axle_count=axle_count,
         payload=payload,
         full_mass_kg=full_mass_kg,
+        warehouse_name=warehouse_name,  # <-- это используешь в шаблоне
     )
 
-
-@main_bp.route('/trailers/contracts')
+@main_bp.route('/contracts')
 @login_required
 def contracts_list():
     """Список договоров / продаж. Менеджеры видят ВСЕ договоры."""
-    query = SalesContract.query
-
-    # если хочешь фильтр по складу — сделай параметром:
     warehouse_id = request.args.get('warehouse_id', type=int)
+
+    q = (request.args.get('q') or '').strip()          # общий поиск: номер/клиент
+    vin = (request.args.get('vin') or '').strip()      # поиск по VIN/артикулу
+    paid = request.args.get('paid', '')                # '', '1', '0'
+    shipped = request.args.get('shipped', '')          # '', '1', '0'
+
+    warehouses = Warehouse.query.order_by(Warehouse.name).all()
+
+    query = (
+        SalesContract.query
+        .outerjoin(Trailer, SalesContract.trailer_id == Trailer.id)
+        .outerjoin(Item, Item.id == Trailer.item_id)
+        .outerjoin(Customer, Customer.id == SalesContract.customer_id)
+        .outerjoin(Warehouse, Warehouse.id == Trailer.warehouse_id)
+    )
+
     if warehouse_id:
-        query = query.join(Trailer, SalesContract.trailer_id == Trailer.id) \
-                     .filter(Trailer.warehouse_id == warehouse_id)
+        query = query.filter(Trailer.warehouse_id == warehouse_id)
+
+    if q:
+        like = f"%{q}%"
+        query = query.filter(
+            or_(
+                SalesContract.contract_number.ilike(like),
+                Customer.name.ilike(like),
+                Customer.iin_bin.ilike(like),
+                Customer.phone.ilike(like),
+            )
+        )
+
+    if vin:
+        like = f"%{vin}%"
+        query = query.filter(
+            or_(
+                Trailer.vin.ilike(like),
+                Item.article.ilike(like),
+            )
+        )
+
+    # --- статусы (можешь убрать, если не надо) ---
+    if paid in ('0', '1'):
+        query = query.filter(SalesContract.is_paid == (paid == '1'))
+
+    if shipped in ('0', '1'):
+        query = query.filter(SalesContract.is_shipped == (shipped == '1'))
+    # -------------------------------------------
 
     contracts = (
         query
         .order_by(SalesContract.contract_date.desc().nullslast(), SalesContract.id.desc())
         .all()
     )
-    return render_template('contracts_list.html', contracts=contracts)
 
+    return render_template(
+        'contracts_list.html',
+        contracts=contracts,
+        warehouses=warehouses,
+        warehouse_id=warehouse_id,
+        q=q,
+        vin=vin,
+        paid=paid,
+        shipped=shipped,
+    )
 
-@main_bp.route('/trailers/contracts/new', methods=['GET', 'POST'])
+@main_bp.route('/contracts/new', methods=['GET', 'POST'])
 @login_required
 def contract_create():
     form = SalesContractForm()
@@ -1127,7 +1228,7 @@ def contract_create():
             flash('Прицеп не найден', 'danger')
             return render_template('contract_form.html', form=form, form_title='Новый договор')
 
-        # защита: на прицеп не должно быть договора (уникальность trailer_id в БД)
+        # защита: на прицеп не должно быть договора
         exists = SalesContract.query.filter(SalesContract.trailer_id == trailer.id).first()
         if exists:
             flash('На этот прицеп уже существует договор.', 'danger')
@@ -1137,15 +1238,11 @@ def contract_create():
             flash('Этот прицеп уже продан', 'danger')
             return render_template('contract_form.html', form=form, form_title='Новый договор')
 
-        # нормализуем номер
         cn = _norm_str(form.contract_number.data)
-
-        # если пустой — генерим
         if not cn:
             cn = get_next_contract_number()
             form.contract_number.data = cn
 
-        # проверка уникальности номера (в коде!)
         if not is_contract_number_unique(cn):
             form.contract_number.errors.append('Такой номер договора уже существует. Введите другой.')
             return render_template('contract_form.html', form=form, form_title='Новый договор')
@@ -1169,7 +1266,6 @@ def contract_create():
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
-            # обычно это конфликт uq_sales_contract_trailer (кто-то успел создать договор)
             flash('Конфликт сохранения (прицеп уже занят другим договором). Обнови страницу и попробуй снова.', 'danger')
             return render_template('contract_form.html', form=form, form_title='Новый договор')
 
@@ -1179,12 +1275,11 @@ def contract_create():
     return render_template('contract_form.html', form=form, form_title='Новый договор')
 
 
-
-@main_bp.route('/trailers/contracts/<int:contract_id>/edit', methods=['GET', 'POST'])
+@main_bp.route('/contracts/<int:contract_id>/edit', methods=['GET', 'POST'])
 @login_required
 def contract_edit(contract_id):
     contract = SalesContract.query.get_or_404(contract_id)
-    form = SalesContractForm()
+    form = SalesContractForm(contract_id=contract.id)
 
     # ----- Клиенты -----
     customers = (
@@ -1235,11 +1330,24 @@ def contract_edit(contract_id):
             flash('На выбранный прицеп уже существует другой договор.', 'danger')
             return render_template('contract_form.html', form=form, form_title='Редактирование договора')
 
-        # проверка уникальности номера (в коде)
-        cn = _norm_str(form.contract_number.data)
-        if cn and not is_contract_number_unique(cn, exclude_id=contract.id):
-            form.contract_number.errors.append('Такой номер договора уже существует. Введите другой.')
-            return render_template('contract_form.html', form=form, form_title='Редактирование договора')
+        # --- НОМЕР ДОГОВОРА: устойчиво к пробелам/формату ---
+        old_db_value = contract.contract_number  # сохраняем как есть (может быть None)
+        old_norm = (old_db_value or '').strip()
+        new_norm = (form.contract_number.data or '').strip()
+
+        # если поле очистили — НЕ меняем номер
+        if not new_norm:
+            contract.contract_number = old_db_value
+        else:
+            # если по сути не изменили (только пробелы/формат) — НЕ меняем
+            if new_norm == old_norm:
+                contract.contract_number = old_db_value
+            else:
+                # реально изменили — проверяем уникальность
+                if not is_contract_number_unique(new_norm, exclude_id=contract.id):
+                    form.contract_number.errors.append('Такой номер договора уже существует. Введите другой.')
+                    return render_template('contract_form.html', form=form, form_title='Редактирование договора')
+                contract.contract_number = new_norm
 
         # если поменяли прицеп — старый вернуть в IN_STOCK (если других договоров нет)
         if old_trailer and old_trailer.id != new_trailer.id:
@@ -1254,7 +1362,6 @@ def contract_edit(contract_id):
         # новый прицеп помечаем проданным
         new_trailer.status = 'SOLD'
 
-        contract.contract_number = cn
         contract.contract_date = form.contract_date.data
         contract.customer_id = form.customer_id.data
         contract.trailer_id = new_trailer.id
@@ -1275,9 +1382,7 @@ def contract_edit(contract_id):
 
     return render_template('contract_form.html', form=form, form_title='Редактирование договора')
 
-
-
-@main_bp.route('/trailers/contracts/<int:contract_id>/delete', methods=['POST'])
+@main_bp.route('/contracts/<int:contract_id>/delete', methods=['POST'])
 @login_required
 def contract_delete(contract_id):
     contract = SalesContract.query.get_or_404(contract_id)
@@ -1296,14 +1401,14 @@ def contract_delete(contract_id):
     return redirect(url_for('main.contracts_list'))
 
 
-@main_bp.route('/trailers/contracts/<int:contract_id>/print')
+@main_bp.route('/contracts/<int:contract_id>/print')
 @login_required
 def contract_print(contract_id):
     ctx = _build_contract_context(contract_id)
     return render_template('contract_print.html', **ctx)
 
 
-@main_bp.route('/trailers/contracts/<int:contract_id>/pdf')
+@main_bp.route('/contracts/<int:contract_id>/pdf')
 @login_required
 def contract_pdf(contract_id):
     if HTML is not None:
@@ -1339,7 +1444,7 @@ def _sigex_title_for_contract(contract) -> str:
     num = contract.contract_number or contract.id
     return f"Договор_{num}.pdf"
 
-@main_bp.route('/trailers/contracts/<int:contract_id>/sign')
+@main_bp.route('/contracts/<int:contract_id>/sign')
 @login_required
 def contract_sign(contract_id):
     """
@@ -1352,13 +1457,13 @@ def contract_sign(contract_id):
     contract = ctx["contract"]
     return render_template("contract_sign.html", contract=contract)
 
-@main_bp.route('/trailers/contracts/<int:contract_id>/sigex/pdf_base64')
+@main_bp.route('/contracts/<int:contract_id>/sigex/pdf_base64')
 @login_required
 def contract_sigex_pdf_base64(contract_id):
     pdf_bytes = _contract_pdf_bytes(contract_id)
     return jsonify({"pdfBase64": base64.b64encode(pdf_bytes).decode("utf-8")})
 
-@main_bp.route('/trailers/contracts/<int:contract_id>/sigex/preregister', methods=['POST'])
+@main_bp.route('/contracts/<int:contract_id>/sigex/preregister', methods=['POST'])
 @login_required
 def contract_sigex_preregister(contract_id):
     contract = SalesContract.query.get_or_404(contract_id)
@@ -1394,7 +1499,7 @@ def contract_sigex_preregister(contract_id):
 
     return jsonify({"documentId": document_id})
 
-@main_bp.route('/trailers/contracts/<int:contract_id>/sigex/add_org_signature', methods=['POST'])
+@main_bp.route('/contracts/<int:contract_id>/sigex/add_org_signature', methods=['POST'])
 @login_required
 def contract_sigex_add_org_signature(contract_id):
     """
@@ -1424,7 +1529,7 @@ def contract_sigex_add_org_signature(contract_id):
 
     return jsonify({"ok": True, "signId": res.get("signId")})
 
-@main_bp.route('/trailers/contracts/<int:contract_id>/sigex/start_qr', methods=['POST'])
+@main_bp.route('/contracts/<int:contract_id>/sigex/start_qr', methods=['POST'])
 @login_required
 def contract_sigex_start_qr(contract_id):
     contract = SalesContract.query.get_or_404(contract_id)
@@ -1448,7 +1553,7 @@ def contract_sigex_start_qr(contract_id):
 
     return jsonify(res)
 
-@main_bp.route('/trailers/contracts/<int:contract_id>/sigex/qr_status')
+@main_bp.route('/contracts/<int:contract_id>/sigex/qr_status')
 @login_required
 def contract_sigex_qr_status(contract_id):
     contract = SalesContract.query.get_or_404(contract_id)
@@ -1466,7 +1571,7 @@ def contract_sigex_qr_status(contract_id):
 
     return jsonify(res)
 
-@main_bp.route('/trailers/contracts/<int:contract_id>/sigex/ddc')
+@main_bp.route('/contracts/<int:contract_id>/sigex/ddc')
 @login_required
 def contract_sigex_ddc(contract_id):
     """

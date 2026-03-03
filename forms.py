@@ -190,8 +190,6 @@ class TrailerCreateForm(FlaskForm):
     submit = SubmitField('Сохранить')
 
 
-# -------- Клиенты --------
-
 class CustomerForm(FlaskForm):
     customer_type = SelectField(
         'Тип клиента',
@@ -206,15 +204,16 @@ class CustomerForm(FlaskForm):
     contact_person = StringField('Контактное лицо', validators=[Optional(), Length(max=255)])
     iin_bin = StringField('ИИН / БИН', validators=[Optional(), Length(max=20)])
 
-    # --- НОВОЕ: документ ---
+    # Документ (актуально для физлиц)
     doc_type = SelectField(
         'Документ',
         choices=[
-            ('ID', 'Удостоверение личности РК'),
-            ('RESIDENT', 'Вид на жительство (резидент РК)'),
-            ('FOREIGN_PASSPORT', 'Паспорт иностранного гражданина'),
+            ('', '—'),
+            ('ID_RK', 'Удостоверение личности РК'),
+            ('RESIDENCE_PERMIT', 'Вид на жительство РК'),
+            ('PASSPORT_FOREIGN', 'Паспорт иностранного гражданина'),
         ],
-        default='ID',
+        default='',
         validators=[Optional()]
     )
     doc_number = StringField('Номер документа', validators=[Optional(), Length(max=50)])
@@ -225,9 +224,43 @@ class CustomerForm(FlaskForm):
     email = StringField('Email', validators=[Optional(), Length(max=120)])
     address = StringField('Адрес', validators=[Optional(), Length(max=255)])
 
+    # Реквизиты юрлица
+    bank_account = StringField('Расчётный счёт (IBAN)', validators=[Optional(), Length(max=34)])
+    bank_name = StringField('Банк (наименование)', validators=[Optional(), Length(max=255)])
+    bank_bic = StringField('БИК банка', validators=[Optional(), Length(max=20)])
+    director_position = StringField('Должность руководителя', validators=[Optional(), Length(max=100)])
+    director_fio = StringField('ФИО руководителя', validators=[Optional(), Length(max=255)])
+
     is_active = BooleanField('Активен', default=True)
     submit = SubmitField('Сохранить')
 
+    def validate(self, extra_validators=None):
+        ok = super().validate(extra_validators=extra_validators)
+        if not ok:
+            return False
+
+        # Если юрлицо — требуем реквизиты, а документные поля чистим
+        if self.customer_type.data == 'COMPANY':
+            required = {
+                'bank_account': 'Укажите расчётный счёт (IBAN)',
+                'bank_name': 'Укажите банк (наименование)',
+                'bank_bic': 'Укажите БИК банка',
+                'director_position': 'Укажите должность руководителя',
+                'director_fio': 'Укажите ФИО руководителя',
+            }
+            for fname, msg in required.items():
+                field = getattr(self, fname)
+                if not (field.data or '').strip():
+                    field.errors.append(msg)
+                    return False
+
+            # документ юрлицу не нужен
+            self.doc_type.data = ''
+            self.doc_number.data = ''
+            self.doc_issue_date.data = None
+            self.doc_issuer.data = ''
+
+        return True
 
 # -------- Договоры / продажи --------
 

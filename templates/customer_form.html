@@ -40,46 +40,104 @@
         {% endfor %}
     </div>
 
-    {# --- БЛОК ДОКУМЕНТА --- #}
-    {% if form.doc_type is defined %}
-    <div class="mb-3">
-        {{ form.doc_type.label(class="form-label") }}
-        {{ form.doc_type(class="form-select") }}
-        {% for error in form.doc_type.errors %}
-        <div class="text-danger small">{{ error }}</div>
-        {% endfor %}
-    </div>
-    {% endif %}
+    {# --- БЛОК ДОКУМЕНТА (только для физлица) --- #}
+    <div id="personDocBlock">
+        {% if form.doc_type is defined %}
+        <div class="mb-3">
+            {{ form.doc_type.label(class="form-label") }}
+            {{ form.doc_type(class="form-select") }}
+            {% for error in form.doc_type.errors %}
+            <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
 
-    {% if form.doc_number is defined %}
-    <div class="mb-3">
-        {{ form.doc_number.label(class="form-label") }}
-        {{ form.doc_number(class="form-control") }}
-        {% for error in form.doc_number.errors %}
-        <div class="text-danger small">{{ error }}</div>
-        {% endfor %}
-    </div>
-    {% endif %}
+        {% if form.doc_number is defined %}
+        <div class="mb-3">
+            {{ form.doc_number.label(class="form-label") }}
+            {{ form.doc_number(class="form-control") }}
+            {% for error in form.doc_number.errors %}
+            <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
 
-    {% if form.doc_issue_date is defined %}
-    <div class="mb-3">
-        {{ form.doc_issue_date.label(class="form-label") }}
-        {{ form.doc_issue_date(class="form-control", type="date") }}
-        {% for error in form.doc_issue_date.errors %}
-        <div class="text-danger small">{{ error }}</div>
-        {% endfor %}
-    </div>
-    {% endif %}
+        {% if form.doc_issue_date is defined %}
+        <div class="mb-3">
+            {{ form.doc_issue_date.label(class="form-label") }}
+            {{ form.doc_issue_date(class="form-control", type="date") }}
+            {% for error in form.doc_issue_date.errors %}
+            <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
 
-    {% if form.doc_issuer is defined %}
-    <div class="mb-3">
-        {{ form.doc_issuer.label(class="form-label") }}
-        {{ form.doc_issuer(class="form-control") }}
-        {% for error in form.doc_issuer.errors %}
-        <div class="text-danger small">{{ error }}</div>
-        {% endfor %}
+        {% if form.doc_issuer is defined %}
+        <div class="mb-3">
+            {{ form.doc_issuer.label(class="form-label") }}
+            {{ form.doc_issuer(class="form-control") }}
+            {% for error in form.doc_issuer.errors %}
+            <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
     </div>
-    {% endif %}
+
+    {# --- БЛОК РЕКВИЗИТОВ ЮРЛИЦА (только для компании) --- #}
+    <div id="companyBlock" class="mt-3" style="display:none;">
+        <hr>
+        <h6 class="mb-3">Реквизиты юридического лица</h6>
+
+        {% if form.bank_account is defined %}
+        <div class="mb-3">
+            {{ form.bank_account.label(class="form-label") }}
+            {{ form.bank_account(class="form-control") }}
+            {% for error in form.bank_account.errors %}
+            <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if form.bank_name is defined %}
+        <div class="mb-3">
+            {{ form.bank_name.label(class="form-label") }}
+            {{ form.bank_name(class="form-control") }}
+            {% for error in form.bank_name.errors %}
+            <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if form.bank_bic is defined %}
+        <div class="mb-3">
+            {{ form.bank_bic.label(class="form-label") }}
+            {{ form.bank_bic(class="form-control") }}
+            {% for error in form.bank_bic.errors %}
+            <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if form.director_position is defined %}
+        <div class="mb-3">
+            {{ form.director_position.label(class="form-label") }}
+            {{ form.director_position(class="form-control") }}
+            {% for error in form.director_position.errors %}
+            <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if form.director_fio is defined %}
+        <div class="mb-3">
+            {{ form.director_fio.label(class="form-label") }}
+            {{ form.director_fio(class="form-control") }}
+            {% for error in form.director_fio.errors %}
+            <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
 
     <div class="mb-3">
         {{ form.phone.label(class="form-label") }}
@@ -115,4 +173,25 @@
     </button>
     <a href="{{ url_for('main.customers_list') }}" class="btn btn-secondary ms-2">Отмена</a>
 </form>
+
+<script>
+(function () {
+  const typeEl = document.getElementById("customer_type");
+  const personDoc = document.getElementById("personDocBlock");
+  const companyBlock = document.getElementById("companyBlock");
+
+  function sync() {
+    const t = typeEl ? typeEl.value : "PERSON";
+    const isCompany = (t === "COMPANY");
+
+    if (personDoc) personDoc.style.display = isCompany ? "none" : "block";
+    if (companyBlock) companyBlock.style.display = isCompany ? "block" : "none";
+  }
+
+  if (typeEl) {
+    typeEl.addEventListener("change", sync);
+    sync();
+  }
+})();
+</script>
 {% endblock %}

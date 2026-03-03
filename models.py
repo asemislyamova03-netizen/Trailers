@@ -73,7 +73,7 @@ class User(UserMixin, db.Model):
     role = db.Column(db.String(20), nullable=False, default='manager')  # admin / manager
 
     warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=True)
-    warehouse = db.relationship('Warehouse')
+    warehouse = db.relationship('Warehouse', back_populates='users')
 
     def set_password(self, password: str) -> None:
         self.password_hash = generate_password_hash(password)
@@ -239,43 +239,35 @@ class OttsCertificate(db.Model):
         return f'<OttsCertificate id={self.id} axle={self.axle_count} number={self.number!r}>'
 
 
+# models.py
+
 class Customer(db.Model):
-    """
-    Клиенты (покупатели):
-      - физлица и юрлица в одной таблице.
-    """
     __tablename__ = 'customer'
 
     id = db.Column(db.Integer, primary_key=True)
-
-    # Тип клиента
     customer_type = db.Column(CustomerTypeEnum, nullable=False, index=True)
-
-    # Основное наименование:
-    #   - для физлица: ФИО
-    #   - для юрлица: Название организации
     name = db.Column(db.String(255), nullable=False)
-
-    # Для юрлица можно указать контактное лицо
     contact_person = db.Column(db.String(255), nullable=True)
-
-    # ИИН или БИН
     iin_bin = db.Column(db.String(20), nullable=True, index=True)
 
     phone = db.Column(db.String(50), nullable=True)
     email = db.Column(db.String(100), nullable=True)
     address = db.Column(db.String(255), nullable=True)
 
-    # --- НОВОЕ: документ ---
-    # тип документа: удостоверение, вид на жительство, паспорт иностранца
-    doc_type = db.Column(db.String(20))        # 'ID', 'RESIDENT', 'FOREIGN_PASSPORT'
-    doc_number = db.Column(db.String(50))      # номер документа
-    doc_issue_date = db.Column(db.Date)        # дата выдачи
-    doc_issuer = db.Column(db.String(255))     # кем выдан
+    # документ
+    doc_type = db.Column(db.String(20))
+    doc_number = db.Column(db.String(50))
+    doc_issue_date = db.Column(db.Date)
+    doc_issuer = db.Column(db.String(255))
 
-    # Активен / нет
+    # --- НОВОЕ: реквизиты и руководитель (для юрлица) ---
+    bank_account = db.Column(db.String(34), nullable=True)      # IBAN до 34
+    bank_name = db.Column(db.String(255), nullable=True)        # наименование банка
+    bank_bic = db.Column(db.String(20), nullable=True)          # БИК
+    director_position = db.Column(db.String(100), nullable=True)  # должность руководителя
+    director_fio = db.Column(db.String(255), nullable=True)       # ФИО руководителя
+
     is_active = db.Column(db.Boolean, nullable=False, default=True)
-
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     def __repr__(self) -> str:
