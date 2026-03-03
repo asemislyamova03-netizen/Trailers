@@ -28,6 +28,7 @@
         <tr>
             <th>ID</th>
             <th>Тип</th>
+            <th>ОПФ</th>
             <th>ФИО / Название</th>
             <th>Контактное лицо</th>
 
@@ -51,6 +52,26 @@
     </thead>
     <tbody>
         {% for c in customers %}
+        {% set is_company = (c.customer_type == 'COMPANY') %}
+        {% set opf = (c.opf or '') if is_company else '' %}
+        {% set is_ip = is_company and opf == 'ИП' %}
+        {% set name_upper = (c.name or '')|upper %}
+        {% set opf_upper = opf|upper %}
+
+        {# печатное имя: для COMPANY добавляем ОПФ, для ИП добавляем "ИП " если не начинается с ИП #}
+        {% set display_name = c.name %}
+        {% if is_company %}
+            {% if is_ip %}
+                {% set display_name = ('ИП ' ~ c.name) if not name_upper.startswith('ИП') else c.name %}
+            {% else %}
+                {% if opf and not name_upper.startswith(opf_upper) %}
+                    {% set display_name = opf ~ ' ' ~ c.name %}
+                {% else %}
+                    {% set display_name = c.name %}
+                {% endif %}
+            {% endif %}
+        {% endif %}
+
         <tr>
             <td>{{ c.id }}</td>
             <td>
@@ -62,15 +83,31 @@
                     {{ c.customer_type }}
                 {% endif %}
             </td>
-            <td>{{ c.name }}</td>
-            <td>{{ c.contact_person or '' }}</td>
 
             <td>
-                {% if c.doc_type == 'ID' %}
+                {% if is_company %}
+                    {{ c.opf or '' }}
+                {% else %}
+                    -
+                {% endif %}
+            </td>
+
+            <td>{{ display_name }}</td>
+
+            <td>
+                {% if is_company and not is_ip %}
+                    {{ c.contact_person or '' }}
+                {% else %}
+                    {# для ИП и ФЛ не показываем контактное лицо #}
+                {% endif %}
+            </td>
+
+            <td>
+                {% if c.doc_type == 'ID_RK' %}
                     Удостоверение личности РК
-                {% elif c.doc_type == 'RESIDENT' %}
-                    Вид на жительство (резидент РК)
-                {% elif c.doc_type == 'FOREIGN_PASSPORT' %}
+                {% elif c.doc_type == 'RESIDENCE_PERMIT' %}
+                    Вид на жительство РК
+                {% elif c.doc_type == 'PASSPORT_FOREIGN' %}
                     Паспорт иностранного гражданина
                 {% else %}
                     -
@@ -83,12 +120,14 @@
             <td>{{ c.phone or '' }}</td>
             <td>{{ c.email or '' }}</td>
 
-            {# Реквизиты показываем только для юрлица #}
-            <td>{% if c.customer_type == 'COMPANY' %}{{ c.bank_account or '' }}{% endif %}</td>
-            <td>{% if c.customer_type == 'COMPANY' %}{{ c.bank_name or '' }}{% endif %}</td>
-            <td>{% if c.customer_type == 'COMPANY' %}{{ c.bank_bic or '' }}{% endif %}</td>
-            <td>{% if c.customer_type == 'COMPANY' %}{{ c.director_fio or '' }}{% endif %}</td>
-            <td>{% if c.customer_type == 'COMPANY' %}{{ c.director_position or '' }}{% endif %}</td>
+            {# реквизиты: только для COMPANY #}
+            <td>{% if is_company %}{{ c.bank_account or '' }}{% endif %}</td>
+            <td>{% if is_company %}{{ c.bank_name or '' }}{% endif %}</td>
+            <td>{% if is_company %}{{ c.bank_bic or '' }}{% endif %}</td>
+
+            {# руководитель/должность: для ИП не показываем #}
+            <td>{% if is_company and not is_ip %}{{ c.director_fio or '' }}{% endif %}</td>
+            <td>{% if is_company and not is_ip %}{{ c.director_position or '' }}{% endif %}</td>
 
             <td>
                 {% if c.is_active %}
@@ -97,6 +136,7 @@
                     <span class="badge bg-secondary">Нет</span>
                 {% endif %}
             </td>
+
             <td>
                 <a href="{{ url_for('main.customer_edit', customer_id=c.id) }}"
                    class="btn btn-sm btn-outline-primary">Изменить</a>

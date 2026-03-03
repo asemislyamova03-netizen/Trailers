@@ -189,13 +189,14 @@ class TrailerCreateForm(FlaskForm):
 
     submit = SubmitField('Сохранить')
 
+# -------- Клиенты --------
 
 class CustomerForm(FlaskForm):
     customer_type = SelectField(
         'Тип клиента',
         choices=[
             ('PERSON', 'Физическое лицо'),
-            ('COMPANY', 'Юридическое лицо'),
+            ('COMPANY', 'Юридическое лицо / ИП / КХ'),
         ],
         validators=[DataRequired()]
     )
@@ -224,10 +225,25 @@ class CustomerForm(FlaskForm):
     email = StringField('Email', validators=[Optional(), Length(max=120)])
     address = StringField('Адрес', validators=[Optional(), Length(max=255)])
 
-    # Реквизиты юрлица
+    # --- ОПФ (только для COMPANY) ---
+    opf = SelectField(
+        'ОПФ',
+        choices=[
+            ('', '—'),
+            ('ТОО', 'ТОО'),
+            ('ИП', 'ИП'),
+            ('КХ', 'КХ'),
+        ],
+        default='',
+        validators=[Optional()]
+    )
+
+    # Реквизиты (для COMPANY)
     bank_account = StringField('Расчётный счёт (IBAN)', validators=[Optional(), Length(max=34)])
     bank_name = StringField('Банк (наименование)', validators=[Optional(), Length(max=255)])
     bank_bic = StringField('БИК банка', validators=[Optional(), Length(max=20)])
+
+    # Руководитель (для COMPANY, кроме ИП)
     director_position = StringField('Должность руководителя', validators=[Optional(), Length(max=100)])
     director_fio = StringField('ФИО руководителя', validators=[Optional(), Length(max=255)])
 
@@ -239,30 +255,64 @@ class CustomerForm(FlaskForm):
         if not ok:
             return False
 
-        # Если юрлицо — требуем реквизиты, а документные поля чистим
-        if self.customer_type.data == 'COMPANY':
-            required = {
+        ctype = (self.customer_type.data or '').strip()
+
+        # PERSON: чистим COMPANY-поля
+        if ctype == 'PERSON':
+            self.opf.data = ''
+            self.bank_account.data = ''
+            self.bank_name.data = ''
+            self.bank_bic.data = ''
+            self.director_position.data = ''
+            self.director_fio.data = ''
+            return True
+
+        # COMPANY: обязательные реквизиты + ОПФ
+        if ctype == 'COMPANY':
+            opf = (self.opf.data or '').strip()
+            is_ip = (opf == 'ИП')
+
+            # 1) ОПФ обязательно
+            if not opf:
+                self.opf.errors.append('Выберите ОПФ (ТОО / ИП / КХ)')
+                return False
+
+            # 2) Реквизиты банка обязательны для всех COMPANY (в т.ч. ИП/КХ)
+            required_bank = {
                 'bank_account': 'Укажите расчётный счёт (IBAN)',
                 'bank_name': 'Укажите банк (наименование)',
                 'bank_bic': 'Укажите БИК банка',
-                'director_position': 'Укажите должность руководителя',
-                'director_fio': 'Укажите ФИО руководителя',
             }
-            for fname, msg in required.items():
+            for fname, msg in required_bank.items():
                 field = getattr(self, fname)
                 if not (field.data or '').strip():
                     field.errors.append(msg)
                     return False
 
-            # документ юрлицу не нужен
+            # 3) Руководитель обязателен только для ТОО/КХ (для ИП — НЕ нужен)
+            if not is_ip:
+                required_head = {
+                    'director_position': 'Укажите должность руководителя',
+                    'director_fio': 'Укажите ФИО руководителя',
+                }
+                for fname, msg in required_head.items():
+                    field = getattr(self, fname)
+                    if not (field.data or '').strip():
+                        field.errors.append(msg)
+                        return False
+            else:
+                # для ИП чистим руководителя и контактное лицо, чтобы не было дублей
+                self.director_position.data = ''
+                self.director_fio.data = ''
+                self.contact_person.data = ''
+
+            # 4) Документные поля для COMPANY не нужны — чистим
             self.doc_type.data = ''
             self.doc_number.data = ''
             self.doc_issue_date.data = None
             self.doc_issuer.data = ''
 
         return True
-
-# -------- Договоры / продажи --------
 
 class SalesContractForm(FlaskForm):
     def __init__(self, *args, **kwargs):

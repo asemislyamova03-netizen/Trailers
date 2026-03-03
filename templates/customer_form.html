@@ -24,7 +24,7 @@
         {% endfor %}
     </div>
 
-    <div class="mb-3">
+    <div class="mb-3" id="contactPersonBlock">
         {{ form.contact_person.label(class="form-label") }}
         {{ form.contact_person(class="form-control") }}
         {% for error in form.contact_person.errors %}
@@ -42,7 +42,6 @@
 
     {# --- БЛОК ДОКУМЕНТА (только для физлица) --- #}
     <div id="personDocBlock">
-        {% if form.doc_type is defined %}
         <div class="mb-3">
             {{ form.doc_type.label(class="form-label") }}
             {{ form.doc_type(class="form-select") }}
@@ -50,9 +49,7 @@
             <div class="text-danger small">{{ error }}</div>
             {% endfor %}
         </div>
-        {% endif %}
 
-        {% if form.doc_number is defined %}
         <div class="mb-3">
             {{ form.doc_number.label(class="form-label") }}
             {{ form.doc_number(class="form-control") }}
@@ -60,9 +57,7 @@
             <div class="text-danger small">{{ error }}</div>
             {% endfor %}
         </div>
-        {% endif %}
 
-        {% if form.doc_issue_date is defined %}
         <div class="mb-3">
             {{ form.doc_issue_date.label(class="form-label") }}
             {{ form.doc_issue_date(class="form-control", type="date") }}
@@ -70,9 +65,7 @@
             <div class="text-danger small">{{ error }}</div>
             {% endfor %}
         </div>
-        {% endif %}
 
-        {% if form.doc_issuer is defined %}
         <div class="mb-3">
             {{ form.doc_issuer.label(class="form-label") }}
             {{ form.doc_issuer(class="form-control") }}
@@ -80,15 +73,21 @@
             <div class="text-danger small">{{ error }}</div>
             {% endfor %}
         </div>
-        {% endif %}
     </div>
 
-    {# --- БЛОК РЕКВИЗИТОВ ЮРЛИЦА (только для компании) --- #}
+    {# --- БЛОК РЕКВИЗИТОВ COMPANY --- #}
     <div id="companyBlock" class="mt-3" style="display:none;">
         <hr>
-        <h6 class="mb-3">Реквизиты юридического лица</h6>
+        <h6 class="mb-3">Реквизиты (ТОО / ИП / КХ)</h6>
 
-        {% if form.bank_account is defined %}
+        <div class="mb-3">
+            {{ form.opf.label(class="form-label") }}
+            {{ form.opf(class="form-select") }}
+            {% for error in form.opf.errors %}
+            <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+        </div>
+
         <div class="mb-3">
             {{ form.bank_account.label(class="form-label") }}
             {{ form.bank_account(class="form-control") }}
@@ -96,9 +95,7 @@
             <div class="text-danger small">{{ error }}</div>
             {% endfor %}
         </div>
-        {% endif %}
 
-        {% if form.bank_name is defined %}
         <div class="mb-3">
             {{ form.bank_name.label(class="form-label") }}
             {{ form.bank_name(class="form-control") }}
@@ -106,9 +103,7 @@
             <div class="text-danger small">{{ error }}</div>
             {% endfor %}
         </div>
-        {% endif %}
 
-        {% if form.bank_bic is defined %}
         <div class="mb-3">
             {{ form.bank_bic.label(class="form-label") }}
             {{ form.bank_bic(class="form-control") }}
@@ -116,27 +111,24 @@
             <div class="text-danger small">{{ error }}</div>
             {% endfor %}
         </div>
-        {% endif %}
 
-        {% if form.director_position is defined %}
-        <div class="mb-3">
-            {{ form.director_position.label(class="form-label") }}
-            {{ form.director_position(class="form-control") }}
-            {% for error in form.director_position.errors %}
-            <div class="text-danger small">{{ error }}</div>
-            {% endfor %}
-        </div>
-        {% endif %}
+        <div id="directorBlock">
+            <div class="mb-3">
+                {{ form.director_position.label(class="form-label") }}
+                {{ form.director_position(class="form-control") }}
+                {% for error in form.director_position.errors %}
+                <div class="text-danger small">{{ error }}</div>
+                {% endfor %}
+            </div>
 
-        {% if form.director_fio is defined %}
-        <div class="mb-3">
-            {{ form.director_fio.label(class="form-label") }}
-            {{ form.director_fio(class="form-control") }}
-            {% for error in form.director_fio.errors %}
-            <div class="text-danger small">{{ error }}</div>
-            {% endfor %}
+            <div class="mb-3">
+                {{ form.director_fio.label(class="form-label") }}
+                {{ form.director_fio(class="form-control") }}
+                {% for error in form.director_fio.errors %}
+                <div class="text-danger small">{{ error }}</div>
+                {% endfor %}
+            </div>
         </div>
-        {% endif %}
     </div>
 
     <div class="mb-3">
@@ -177,8 +169,12 @@
 <script>
 (function () {
   const typeEl = document.getElementById("customer_type");
+  const opfEl = document.getElementById("opf");
+
   const personDoc = document.getElementById("personDocBlock");
   const companyBlock = document.getElementById("companyBlock");
+  const directorBlock = document.getElementById("directorBlock");
+  const contactPersonBlock = document.getElementById("contactPersonBlock");
 
   function sync() {
     const t = typeEl ? typeEl.value : "PERSON";
@@ -186,12 +182,22 @@
 
     if (personDoc) personDoc.style.display = isCompany ? "none" : "block";
     if (companyBlock) companyBlock.style.display = isCompany ? "block" : "none";
+
+    if (isCompany) {
+      const opf = opfEl ? opfEl.value : "";
+      const isIP = (opf === "ИП");
+
+      if (directorBlock) directorBlock.style.display = isIP ? "none" : "block";
+      if (contactPersonBlock) contactPersonBlock.style.display = isIP ? "none" : "block";
+    } else {
+      if (directorBlock) directorBlock.style.display = "block";
+      if (contactPersonBlock) contactPersonBlock.style.display = "block";
+    }
   }
 
-  if (typeEl) {
-    typeEl.addEventListener("change", sync);
-    sync();
-  }
+  if (typeEl) typeEl.addEventListener("change", sync);
+  if (opfEl) opfEl.addEventListener("change", sync);
+  sync();
 })();
 </script>
 {% endblock %}

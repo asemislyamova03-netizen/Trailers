@@ -246,6 +246,7 @@ class Customer(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     customer_type = db.Column(CustomerTypeEnum, nullable=False, index=True)
+    opf = db.Column(db.String(10), nullable=True)  # 'ТОО', 'ИП', 'КХ', ...
     name = db.Column(db.String(255), nullable=False)
     contact_person = db.Column(db.String(255), nullable=True)
     iin_bin = db.Column(db.String(20), nullable=True, index=True)
