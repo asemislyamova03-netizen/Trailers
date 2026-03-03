@@ -902,55 +902,31 @@ def item_delete(item_id):
 @main_bp.route('/customers', methods=['GET'])
 @login_required
 def customers_list():
-    """Список клиентов с поиском."""
-    search = (request.args.get('q', '') or '').strip()
+    """Список клиентов: поиск + переключатель Все/ФЛ/ЮЛ."""
+    search = request.args.get('q', '').strip()
+    type_filter = request.args.get('type', 'all')  # all | person | company
 
     query = Customer.query
 
+    if type_filter == 'person':
+        query = query.filter(Customer.customer_type == 'PERSON')
+    elif type_filter == 'company':
+        query = query.filter(Customer.customer_type == 'COMPANY')
+
     if search:
         like = f"%{search}%"
-        s_upper = search.upper()
-
-        # если пользователь ищет "ИП Иванов", мы должны искать и по name "Иванов"
-        # (т.е. отрезаем "ИП " в начале, если есть)
-        search_no_ip = search
-        if s_upper.startswith('ИП '):
-            search_no_ip = search[3:].strip()
-
-        like_no_ip = f"%{search_no_ip}%" if search_no_ip else like
-
         query = query.filter(
             or_(
-                # базовые поля
                 Customer.name.ilike(like),
-                Customer.name.ilike(like_no_ip),  # поддержка "ИП ..." при хранении без префикса
                 Customer.contact_person.ilike(like),
                 Customer.iin_bin.ilike(like),
                 Customer.phone.ilike(like),
-                Customer.email.ilike(like),
-                Customer.address.ilike(like),
-
-                # ОПФ
-                Customer.opf.ilike(like),
-
-                # реквизиты
-                Customer.bank_account.ilike(like),
-                Customer.bank_name.ilike(like),
-                Customer.bank_bic.ilike(like),
-
-                # руководитель
-                Customer.director_fio.ilike(like),
-                Customer.director_position.ilike(like),
-
-                # документ
-                Customer.doc_number.ilike(like),
-                Customer.doc_issuer.ilike(like),
             )
         )
 
     customers = (
         query
-        .order_by(Customer.customer_type, Customer.opf, Customer.name)
+        .order_by(Customer.customer_type, Customer.name)
         .all()
     )
 
@@ -958,16 +934,18 @@ def customers_list():
         'customers.html',
         customers=customers,
         search=search,
+        type_filter=type_filter,
     )
 
 @main_bp.route('/customers/new', methods=['GET', 'POST'])
 @login_required
 def customer_create():
     form = CustomerForm()
+
     if form.validate_on_submit():
         is_company = (form.customer_type.data == 'COMPANY')
-        opf = _norm_str(getattr(form, 'opf', None).data) if is_company and hasattr(form, 'opf') else None
-        is_ip = (opf == 'ИП')
+        opf = _norm_str(getattr(form, "opf", None).data if hasattr(form, "opf") else None)
+        is_ip = (is_company and (opf or '').upper() == 'ИП')
 
         customer = Customer(
             customer_type=form.customer_type.data,
@@ -979,7 +957,7 @@ def customer_create():
             address=_norm_str(form.address.data),
             is_active=bool(form.is_active.data),
 
-            # ОПФ (только для COMPANY)
+            # ОПФ
             opf=opf if is_company else None,
 
             # Документ сохраняем только для ФЛ
@@ -988,18 +966,18 @@ def customer_create():
             doc_issue_date=form.doc_issue_date.data if not is_company else None,
             doc_issuer=_norm_str(form.doc_issuer.data) if not is_company else None,
 
-            # Реквизиты (для COMPANY)
+            # Реквизиты (только для COMPANY)
             bank_account=_norm_str(form.bank_account.data) if is_company else None,
             bank_name=_norm_str(form.bank_name.data) if is_company else None,
             bank_bic=_norm_str(form.bank_bic.data) if is_company else None,
 
-            # Руководитель: для ИП не заполняем (чтобы не было дублей в договоре)
+            # Руководитель (для ИП не храним, чтобы не было дублей)
             director_position=_norm_str(form.director_position.data) if (is_company and not is_ip) else None,
             director_fio=_norm_str(form.director_fio.data) if (is_company and not is_ip) else None,
         )
 
-        # Если COMPANY и ИП — контактное лицо тоже не нужно (убираем)
-        if is_company and is_ip:
+        # ИП: контактное лицо тоже не нужно
+        if is_ip:
             customer.contact_person = None
 
         db.session.add(customer)
@@ -1019,13 +997,15 @@ def customer_edit(customer_id):
     if form.validate_on_submit():
         form.populate_obj(customer)
 
-        # нормализация строк (пустые -> None)
+        # нормализация строк
         customer.name = (customer.name or '').strip()
         customer.contact_person = _norm_str(customer.contact_person)
         customer.iin_bin = _norm_str(customer.iin_bin)
         customer.phone = _norm_str(customer.phone)
         customer.email = _norm_str(customer.email)
         customer.address = _norm_str(customer.address)
+
+        customer.opf = _norm_str(getattr(customer, "opf", None))
 
         customer.doc_type = _norm_str(customer.doc_type)
         customer.doc_number = _norm_str(customer.doc_number)
@@ -1034,32 +1014,30 @@ def customer_edit(customer_id):
         customer.bank_account = _norm_str(customer.bank_account)
         customer.bank_name = _norm_str(customer.bank_name)
         customer.bank_bic = _norm_str(customer.bank_bic)
-
         customer.director_position = _norm_str(customer.director_position)
         customer.director_fio = _norm_str(customer.director_fio)
 
-        customer.opf = _norm_str(customer.opf)
-
-        # если ЮЛ — документные поля не храним
-        if customer.customer_type == 'COMPANY':
-            customer.doc_type = None
-            customer.doc_number = None
-            customer.doc_issue_date = None
-            customer.doc_issuer = None
-
-            # если ИП — убираем руководителя/контактное лицо (чтобы не было дублей)
-            if customer.opf == 'ИП':
-                customer.director_position = None
-                customer.director_fio = None
-                customer.contact_person = None
-        else:
-            # если ФЛ — чистим юр-реквизиты
+        # логика по типу
+        if customer.customer_type == 'PERSON':
             customer.opf = None
             customer.bank_account = None
             customer.bank_name = None
             customer.bank_bic = None
             customer.director_position = None
             customer.director_fio = None
+        else:
+            # COMPANY
+            opf_upper = (customer.opf or '').upper()
+            if opf_upper == 'ИП':
+                customer.director_position = None
+                customer.director_fio = None
+                customer.contact_person = None
+
+            # документы для COMPANY не храним
+            customer.doc_type = None
+            customer.doc_number = None
+            customer.doc_issue_date = None
+            customer.doc_issuer = None
 
         db.session.commit()
         flash('Клиент обновлён', 'success')

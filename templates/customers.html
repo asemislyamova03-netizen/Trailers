@@ -10,16 +10,47 @@
     </a>
 </div>
 
-<form class="row g-2 mb-3" method="get">
+{% set show_person_cols = (type_filter in ['all', 'person']) %}
+{% set show_company_cols = (type_filter in ['all', 'company']) %}
+
+<form class="row g-2 align-items-end mb-3" method="get">
     <div class="col-md-4">
+        <label class="form-label">Поиск</label>
         <input type="text"
                name="q"
                class="form-control"
-               placeholder="Поиск: ФИО / название / ИИН / телефон"
+               placeholder="ФИО / название / ИИН / телефон"
                value="{{ search or '' }}">
     </div>
-    <div class="col-md-2">
+
+    <div class="col-md-5">
+        <label class="form-label d-block">Тип</label>
+
+        <div class="form-check form-check-inline">
+            <input class="form-check-input" type="radio" name="type" id="type_all" value="all"
+                   {% if (type_filter or 'all') == 'all' %}checked{% endif %}>
+            <label class="form-check-label" for="type_all">Все</label>
+        </div>
+
+        <div class="form-check form-check-inline">
+            <input class="form-check-input" type="radio" name="type" id="type_person" value="person"
+                   {% if type_filter == 'person' %}checked{% endif %}>
+            <label class="form-check-label" for="type_person">ФЛ</label>
+        </div>
+
+        <div class="form-check form-check-inline">
+            <input class="form-check-input" type="radio" name="type" id="type_company" value="company"
+                   {% if type_filter == 'company' %}checked{% endif %}>
+            <label class="form-check-label" for="type_company">ЮЛ</label>
+        </div>
+    </div>
+
+    <div class="col-md-1">
         <button type="submit" class="btn btn-outline-secondary w-100">Найти</button>
+    </div>
+
+    <div class="col-md-2">
+        <a class="btn btn-outline-secondary w-100" href="{{ url_for('main.customers_list') }}">Сброс</a>
     </div>
 </form>
 
@@ -28,50 +59,39 @@
         <tr>
             <th>ID</th>
             <th>Тип</th>
-            <th>ОПФ</th>
+
+            {% if show_company_cols %}
+                <th>ОПФ</th>
+            {% endif %}
+
             <th>ФИО / Название</th>
             <th>Контактное лицо</th>
 
-            <th>Документ</th>
-            <th>№ документа</th>
-            <th>Дата выдачи</th>
+            {% if show_person_cols %}
+                <th>Документ</th>
+                <th>№ документа</th>
+                <th>Дата выдачи</th>
+            {% endif %}
 
             <th>ИИН / БИН</th>
             <th>Телефон</th>
             <th>Email</th>
 
-            <th>Счёт (IBAN)</th>
-            <th>Банк</th>
-            <th>БИК</th>
-            <th>Руководитель</th>
-            <th>Должность</th>
+            {% if show_company_cols %}
+                <th>Счёт (IBAN)</th>
+                <th>Банк</th>
+                <th>БИК</th>
+                <th>Руководитель</th>
+                <th>Должность</th>
+            {% endif %}
 
             <th>Активен</th>
             <th>Действия</th>
         </tr>
     </thead>
+
     <tbody>
         {% for c in customers %}
-        {% set is_company = (c.customer_type == 'COMPANY') %}
-        {% set opf = (c.opf or '') if is_company else '' %}
-        {% set is_ip = is_company and opf == 'ИП' %}
-        {% set name_upper = (c.name or '')|upper %}
-        {% set opf_upper = opf|upper %}
-
-        {# печатное имя: для COMPANY добавляем ОПФ, для ИП добавляем "ИП " если не начинается с ИП #}
-        {% set display_name = c.name %}
-        {% if is_company %}
-            {% if is_ip %}
-                {% set display_name = ('ИП ' ~ c.name) if not name_upper.startswith('ИП') else c.name %}
-            {% else %}
-                {% if opf and not name_upper.startswith(opf_upper) %}
-                    {% set display_name = opf ~ ' ' ~ c.name %}
-                {% else %}
-                    {% set display_name = c.name %}
-                {% endif %}
-            {% endif %}
-        {% endif %}
-
         <tr>
             <td>{{ c.id }}</td>
             <td>
@@ -84,50 +104,44 @@
                 {% endif %}
             </td>
 
-            <td>
-                {% if is_company %}
-                    {{ c.opf or '' }}
-                {% else %}
-                    -
-                {% endif %}
-            </td>
+            {% if show_company_cols %}
+                <td>{% if c.customer_type == 'COMPANY' %}{{ c.opf or '' }}{% else %}-{% endif %}</td>
+            {% endif %}
 
-            <td>{{ display_name }}</td>
+            <td>{{ c.name }}</td>
+            <td>{{ c.contact_person or '' }}</td>
 
-            <td>
-                {% if is_company and not is_ip %}
-                    {{ c.contact_person or '' }}
-                {% else %}
-                    {# для ИП и ФЛ не показываем контактное лицо #}
-                {% endif %}
-            </td>
-
-            <td>
-                {% if c.doc_type == 'ID_RK' %}
-                    Удостоверение личности РК
-                {% elif c.doc_type == 'RESIDENCE_PERMIT' %}
-                    Вид на жительство РК
-                {% elif c.doc_type == 'PASSPORT_FOREIGN' %}
-                    Паспорт иностранного гражданина
-                {% else %}
-                    -
-                {% endif %}
-            </td>
-            <td>{{ c.doc_number or '' }}</td>
-            <td>{{ c.doc_issue_date.strftime('%d.%m.%Y') if c.doc_issue_date else '' }}</td>
+            {% if show_person_cols %}
+                <td>
+                    {% if c.customer_type == 'PERSON' %}
+                        {% if c.doc_type == 'ID_RK' %}
+                            Удостоверение личности РК
+                        {% elif c.doc_type == 'RESIDENCE_PERMIT' %}
+                            Вид на жительство РК
+                        {% elif c.doc_type == 'PASSPORT_FOREIGN' %}
+                            Паспорт иностранного гражданина
+                        {% else %}
+                            -
+                        {% endif %}
+                    {% else %}
+                        -
+                    {% endif %}
+                </td>
+                <td>{% if c.customer_type == 'PERSON' %}{{ c.doc_number or '' }}{% else %}{% endif %}</td>
+                <td>{% if c.customer_type == 'PERSON' %}{{ c.doc_issue_date.strftime('%d.%m.%Y') if c.doc_issue_date else '' }}{% endif %}</td>
+            {% endif %}
 
             <td>{{ c.iin_bin or '' }}</td>
             <td>{{ c.phone or '' }}</td>
             <td>{{ c.email or '' }}</td>
 
-            {# реквизиты: только для COMPANY #}
-            <td>{% if is_company %}{{ c.bank_account or '' }}{% endif %}</td>
-            <td>{% if is_company %}{{ c.bank_name or '' }}{% endif %}</td>
-            <td>{% if is_company %}{{ c.bank_bic or '' }}{% endif %}</td>
-
-            {# руководитель/должность: для ИП не показываем #}
-            <td>{% if is_company and not is_ip %}{{ c.director_fio or '' }}{% endif %}</td>
-            <td>{% if is_company and not is_ip %}{{ c.director_position or '' }}{% endif %}</td>
+            {% if show_company_cols %}
+                <td>{% if c.customer_type == 'COMPANY' %}{{ c.bank_account or '' }}{% endif %}</td>
+                <td>{% if c.customer_type == 'COMPANY' %}{{ c.bank_name or '' }}{% endif %}</td>
+                <td>{% if c.customer_type == 'COMPANY' %}{{ c.bank_bic or '' }}{% endif %}</td>
+                <td>{% if c.customer_type == 'COMPANY' and (c.opf or '') != 'ИП' %}{{ c.director_fio or '' }}{% endif %}</td>
+                <td>{% if c.customer_type == 'COMPANY' and (c.opf or '') != 'ИП' %}{{ c.director_position or '' }}{% endif %}</td>
+            {% endif %}
 
             <td>
                 {% if c.is_active %}
@@ -136,7 +150,6 @@
                     <span class="badge bg-secondary">Нет</span>
                 {% endif %}
             </td>
-
             <td>
                 <a href="{{ url_for('main.customer_edit', customer_id=c.id) }}"
                    class="btn btn-sm btn-outline-primary">Изменить</a>
