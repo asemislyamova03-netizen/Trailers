@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+{% block title %}Заказ {{ order.order_number }}{% endblock %}
+
+{% block content %}
+<section class="hero-dashboard">
+  <div>
+    <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
+      <h1>Заказ {{ order.order_number }}</h1>
+      <span class="badge text-bg-{{ order.status|status_badge_class }}">{{ order.status|status_label }}</span>
+    </div>
+    <p>{{ order.customer.name if order.customer else 'Клиент не выбран' }} · {{ order.item.article if order.item else '' }} {{ order.item.name if order.item else '' }}</p>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    {% if can_manage and order.status != 'cancelled' and not order.is_shipped %}
+      <a class="btn btn-soft" href="{{ url_for('main.order_edit', order_id=order.id) }}"><i class="bi bi-pencil me-1"></i>Редактировать</a>
+      <button class="btn btn-orange" data-bs-toggle="modal" data-bs-target="#paymentModal"><i class="bi bi-cash-coin me-1"></i>Добавить оплату</button>
+    {% endif %}
+  </div>
+</section>
+
+<div class="kpi-grid mb-4">
+  <div class="app-card kpi-card"><div><div class="kpi-title">Сумма заказа</div><div class="kpi-value">{{ order.price|money }}</div><div class="kpi-caption">план сделки</div></div><div class="kpi-icon"><i class="bi bi-receipt"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Оплачено</div><div class="kpi-value">{{ order.confirmed_paid_amount|money }}</div><div class="kpi-caption">{{ order.payment_percent }}%</div></div><div class="kpi-icon"><i class="bi bi-cash-coin"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Остаток</div><div class="kpi-value">{{ order.remaining_amount|money }}</div><div class="kpi-caption">{{ order.payment_status|status_label }}</div></div><div class="kpi-icon"><i class="bi bi-hourglass-split"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Прицеп</div><div class="kpi-value">{{ order.trailer.vin if order.trailer else 'VIN нет' }}</div><div class="kpi-caption">{{ order.trailer.status|status_label if order.trailer else order.fulfillment_source|status_label }}</div></div><div class="kpi-icon"><i class="bi bi-truck"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Документы</div><div class="kpi-value">{{ order.document_status|status_label }}</div><div class="kpi-caption">{{ order.documents_issued_at|date_format if order.documents_issued_at else 'не выданы' }}</div></div><div class="kpi-icon"><i class="bi bi-file-earmark-check"></i></div></div>
+</div>
+
+<ul class="nav nav-tabs mb-3" role="tablist">
+  <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#overview-tab" type="button">Обзор</button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#payments-tab" type="button">Оплаты</button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#documents-tab" type="button">Документы</button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#movement-tab" type="button">Движение</button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#history-tab" type="button">История</button></li>
+</ul>
+
+<div class="tab-content">
+  <div class="tab-pane fade show active" id="overview-tab">
+    <div class="row g-4">
+      <div class="col-xl-4">
+        <div class="app-card p-4 h-100">
+          <h2 class="h5 mb-3">Клиент</h2>
+          <dl class="row small mb-0">
+            <dt class="col-5">Имя</dt><dd class="col-7">{{ order.customer.name if order.customer else '' }}</dd>
+            <dt class="col-5">Телефон</dt><dd class="col-7">{{ order.customer.phone if order.customer else '' }}</dd>
+            <dt class="col-5">Заявка</dt><dd class="col-7">{% if order.lead %}<a href="{{ url_for('main.lead_detail', lead_id=order.lead.id) }}">#{{ order.lead.id }}</a>{% else %}<span class="text-muted">нет</span>{% endif %}</dd>
+            <dt class="col-5">Ответственный</dt><dd class="col-7">{{ order.assigned_user.full_name if order.assigned_user else '' }}</dd>
+            <dt class="col-5">Создан</dt><dd class="col-7">{{ order.created_at|date_format }}</dd>
+          </dl>
+        </div>
+      </div>
+      <div class="col-xl-4">
+        <div class="app-card p-4 h-100">
+          <h2 class="h5 mb-3">Товар и исполнение</h2>
+          <dl class="row small mb-0">
+            <dt class="col-5">Модель</dt><dd class="col-7">{{ order.item.article if order.item else '' }} {{ order.item.name if order.item else '' }}</dd>
+            <dt class="col-5">Кузов</dt><dd class="col-7">{{ order.item.size_body if order.item else '' }}</dd>
+            <dt class="col-5">Исполнение</dt><dd class="col-7">{{ order.fulfillment_source|status_label }}</dd>
+            <dt class="col-5">Склад</dt><dd class="col-7">{{ order.warehouse.name if order.warehouse else '' }}</dd>
+            <dt class="col-5">VIN</dt><dd class="col-7">{{ order.trailer.vin if order.trailer else 'не выбран' }}</dd>
+          </dl>
+        </div>
+      </div>
+      <div class="col-xl-4">
+        <div class="app-card p-4 h-100">
+          <h2 class="h5 mb-3">Комментарий</h2>
+          <p class="text-muted">{{ order.manager_comment or order.note or 'Комментариев нет' }}</p>
+          {% if can_manage or current_user.is_director %}
+          <form method="post" action="{{ url_for('main.order_add_comment', order_id=order.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <textarea name="manager_comment" class="form-control" rows="3" placeholder="Комментарий менеджера">{{ order.manager_comment or '' }}</textarea>
+            <button class="btn btn-sm btn-soft mt-2">Сохранить</button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    {% if can_manage and order.status != 'cancelled' and not order.is_shipped %}
+    <div class="row g-4 mt-1">
+      <div class="col-lg-4">
+        <div class="app-card p-3 h-100">
+          <h3 class="h6">Резерв со своего склада</h3>
+          <div class="table-responsive"><table class="table table-sm align-middle">
+            <tbody>{% for trailer in available_stock_trailers %}
+              <tr><td class="fw-semibold">{{ trailer.vin }}</td><td>{{ trailer.warehouse.name if trailer.warehouse else '' }}</td><td class="text-end"><form method="post" action="{{ url_for('main.order_reserve_trailer', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="trailer_id" value="{{ trailer.id }}"><button class="btn btn-sm btn-orange">Резерв</button></form></td></tr>
+            {% else %}<tr><td class="text-muted">Свободных VIN нет</td></tr>{% endfor %}</tbody>
+          </table></div>
+        </div>
+      </div>
+      <div class="col-lg-4">
+        <div class="app-card p-3 h-100">
+          <h3 class="h6">С другого склада</h3>
+          <div class="table-responsive"><table class="table table-sm align-middle">
+            <tbody>{% for trailer in other_warehouse_trailers %}
+              <tr><td class="fw-semibold">{{ trailer.vin }}</td><td>{{ trailer.warehouse.name if trailer.warehouse else '' }}</td><td class="text-end"><form method="post" action="{{ url_for('main.order_request_transfer', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="trailer_id" value="{{ trailer.id }}"><button class="btn btn-sm btn-soft">Запросить</button></form></td></tr>
+            {% else %}<tr><td class="text-muted">На других складах нет свободных VIN</td></tr>{% endfor %}</tbody>
+          </table></div>
+        </div>
+      </div>
+      <div class="col-lg-4">
+        <div class="app-card p-3 h-100">
+          <h3 class="h6">Производство под заказ</h3>
+          <p class="small text-muted">Если VIN не выбран, создайте потребность для производственного контура.</p>
+          <form method="post" action="{{ url_for('main.order_create_production_need', order_id=order.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn-orange" {% if order.trailer_id %}disabled{% endif %}>Создать потребность</button>
+          </form>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="tab-pane fade" id="payments-tab">
+    <div class="app-card">
+      <div class="card-header d-flex justify-content-between align-items-center"><span>Оплаты</span>{% if can_manage %}<button class="btn btn-sm btn-orange" data-bs-toggle="modal" data-bs-target="#paymentModal">Добавить оплату</button>{% endif %}</div>
+      <div class="table-responsive"><table class="table table-hover align-middle">
+        <thead><tr><th>Дата</th><th>Этап</th><th>Метод</th><th>Сумма</th><th>Статус</th><th>Ссылка / транзакция</th><th></th></tr></thead>
+        <tbody>{% for p in payments %}
+          <tr><td>{{ p.paid_at|date_format }}</td><td>{{ p.stage }}</td><td>{{ p.method }}</td><td>{{ p.amount|money }}</td><td><span class="badge text-bg-{{ p.status|status_badge_class }}">{{ p.status|status_label }}</span></td><td>{{ p.transaction_ref or p.payment_link or '' }}</td><td class="text-end">{% if current_user.is_admin and p.status != 'CANCELED' %}<form method="post" action="{{ url_for('main.order_payment_cancel', order_id=order.id, payment_id=p.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-outline-danger">Отменить</button></form>{% endif %}</td></tr>
+        {% else %}<tr><td colspan="7" class="text-muted p-3">Оплат нет</td></tr>{% endfor %}</tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <div class="tab-pane fade" id="documents-tab">
+    <div class="row g-4">
+      <div class="col-lg-6">
+        <div class="app-card p-4">
+          <h2 class="h5">Документы</h2>
+          <p><span class="badge text-bg-{{ order.document_status|status_badge_class }}">{{ order.document_status|status_label }}</span></p>
+          <p class="text-muted small mb-0">Выданы: {{ order.documents_issued_at|date_format if order.documents_issued_at else 'нет' }}</p>
+        </div>
+      </div>
+      <div class="col-lg-6">
+        <div class="app-card p-4">
+          <h2 class="h5">Действия</h2>
+          {% if can_manage and order.status != 'cancelled' %}
+          <div class="d-flex flex-wrap gap-2">
+            <form method="post" action="{{ url_for('main.order_mark_invoice_sent', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-soft">Счёт отправлен</button></form>
+            <form method="post" action="{{ url_for('main.order_mark_contract_ready', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-soft">Договор готов</button></form>
+            <form method="post" action="{{ url_for('main.order_mark_documents_ready', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-soft">Документы готовы</button></form>
+            <form method="post" action="{{ url_for('main.order_issue_documents', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-orange">Документы выданы</button></form>
+            {% if order.trailer_id %}<form method="post" action="{{ url_for('main.order_contract_create', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-outline-primary">Создать договор</button></form>{% endif %}
+          </div>
+          {% else %}
+          <div class="text-muted">Действия недоступны для вашей роли или состояния заказа.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tab-pane fade" id="movement-tab">
+    <div class="row g-4">
+      <div class="col-lg-4"><div class="app-card p-3 h-100"><h3 class="h6">Резервы</h3><table class="table table-sm"><tbody>{% for r in reservations %}<tr><td>{{ r.source_type }}</td><td>{{ r.trailer.vin if r.trailer else '' }}</td><td>{{ r.status }}</td></tr>{% else %}<tr><td class="text-muted">Резервов нет</td></tr>{% endfor %}</tbody></table></div></div>
+      <div class="col-lg-4"><div class="app-card p-3 h-100"><h3 class="h6">Потребности</h3><table class="table table-sm"><tbody>{% for n in supply_needs %}<tr><td>{{ n.item.article if n.item else '' }}</td><td>{{ n.required_by|date_format }}</td><td>{{ n.status|status_label }}</td></tr>{% else %}<tr><td class="text-muted">Потребностей нет</td></tr>{% endfor %}</tbody></table></div></div>
+      <div class="col-lg-4"><div class="app-card p-3 h-100"><h3 class="h6">Перемещения</h3><table class="table table-sm"><tbody>{% for m in movements %}<tr><td>{{ m.movement_type }}</td><td>{{ m.from_warehouse.name if m.from_warehouse else '' }} → {{ m.to_warehouse.name if m.to_warehouse else 'клиент' }}</td><td>{{ m.status|status_label }}</td></tr>{% else %}<tr><td class="text-muted">Перемещений нет</td></tr>{% endfor %}</tbody></table></div></div>
+    </div>
+    {% if can_manage and order.trailer_id and not order.is_shipped and order.status != 'cancelled' %}
+    <div class="app-card p-3 mt-4">
+      <form method="post" action="{{ url_for('main.order_ship', order_id=order.id) }}" class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div><strong>Отгрузка клиенту</strong><div class="text-muted small">Переведёт прицеп в SOLD и закроет активные резервы.</div></div>
+        <button class="btn btn-success">Отгрузить клиенту</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="tab-pane fade" id="history-tab">
+    <div class="app-card">
+      <div class="card-header">История действий</div>
+      <div class="table-responsive"><table class="table table-hover align-middle">
+        <thead><tr><th>Дата</th><th>Событие</th><th>Пользователь</th><th>Было</th><th>Стало</th><th>Комментарий</th></tr></thead>
+        <tbody>{% for event in events %}
+          <tr><td>{{ event.created_at|date_format }}</td><td><span class="badge text-bg-secondary">{{ event.event_type|status_label }}</span></td><td>{{ event.user.full_name if event.user else '' }}</td><td>{{ event.old_value or '' }}</td><td>{{ event.new_value or '' }}</td><td>{{ event.comment or '' }}</td></tr>
+        {% else %}<tr><td colspan="6" class="text-muted p-3">Истории пока нет</td></tr>{% endfor %}</tbody>
+      </table></div>
+      {% if can_manage and order.status != 'cancelled' and not order.is_shipped %}
+      <div class="card-body border-top">
+        <form method="post" action="{{ url_for('main.order_cancel', order_id=order.id) }}" class="row g-2 align-items-end">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="col-md-9"><label class="form-label">Причина отмены</label><input name="cancel_reason" class="form-control" placeholder="Укажите причину"></div>
+          <div class="col-md-3"><button class="btn btn-outline-danger w-100">Отменить заказ</button></div>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="paymentModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <form method="post" action="{{ url_for('main.order_payment_add', order_id=order.id) }}">
+        <div class="modal-header"><h2 class="modal-title h5">Добавить оплату</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button></div>
+        <div class="modal-body row g-3">
+          {{ payment_form.hidden_tag() }}
+          <div class="col-md-4">{{ payment_form.paid_at.label(class="form-label") }}{{ payment_form.paid_at(class="form-control") }}</div>
+          <div class="col-md-4">{{ payment_form.stage.label(class="form-label") }}{{ payment_form.stage(class="form-select") }}</div>
+          <div class="col-md-4">{{ payment_form.method.label(class="form-label") }}{{ payment_form.method(class="form-select") }}</div>
+          <div class="col-md-4">{{ payment_form.amount.label(class="form-label") }}{{ payment_form.amount(class="form-control") }}</div>
+          <div class="col-md-4">{{ payment_form.status.label(class="form-label") }}{{ payment_form.status(class="form-select") }}</div>
+          <div class="col-md-4">{{ payment_form.transaction_ref.label(class="form-label") }}{{ payment_form.transaction_ref(class="form-control") }}</div>
+          <div class="col-12">{{ payment_form.payment_link.label(class="form-label") }}{{ payment_form.payment_link(class="form-control") }}</div>
+          <div class="col-12">{{ payment_form.note.label(class="form-label") }}{{ payment_form.note(class="form-control", rows=2) }}</div>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-soft" data-bs-dismiss="modal">Закрыть</button>{{ payment_form.submit(class="btn btn-orange") }}</div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

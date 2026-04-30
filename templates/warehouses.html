@@ -3,59 +3,77 @@
 {% block title %}Склады{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-md-6 mb-4">
-        <h1 class="h4 mb-3">Склады</h1>
+<section class="hero-dashboard">
+    <div>
+        <h1>Склады</h1>
+        <p>Справочник складов продаж, логистики и производственного склада выпуска.</p>
+    </div>
+</section>
 
-        <table class="table table-sm table-striped align-middle">
-            <thead>
-            <tr>
-                <th>ID</th>
-                <th>Название</th>
-                <th>Активен</th>
-            </tr>
-            </thead>
-            <tbody>
-            {% for w in warehouses %}
-                <tr>
-                    <td>{{ w.id }}</td>
-                    <td>{{ w.name }}</td>
-                    <td>
-                        {% if w.is_active %}
-                            <span class="badge bg-success">Да</span>
-                        {% else %}
-                            <span class="badge bg-secondary">Нет</span>
-                        {% endif %}
-                    </td>
-                </tr>
-            {% endfor %}
-            </tbody>
-        </table>
+<div class="row g-4">
+    <div class="{{ 'col-lg-7' if current_user.is_admin else 'col-12' }}">
+        <div class="app-card">
+            <div class="card-header">Склады</div>
+            <div class="table-responsive">
+                <table class="table table-hover align-middle">
+                    <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Название</th>
+                        <th>Активен</th>
+                        <th>Производственный</th>
+                        {% if current_user.is_admin %}<th></th>{% endif %}
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for w in warehouses %}
+                        <tr>
+                            <td>{{ w.id }}</td>
+                            <td class="fw-semibold">{{ w.name }}</td>
+                            <td>{% if w.is_active %}<span class="badge text-bg-success">Да</span>{% else %}<span class="badge text-bg-secondary">Нет</span>{% endif %}</td>
+                            <td>{% if w.is_production %}<span class="badge text-bg-warning">Склад выпуска</span>{% else %}<span class="text-muted">Нет</span>{% endif %}</td>
+                            {% if current_user.is_admin %}
+                            <td class="text-end">
+                                <form method="post" action="{{ url_for('main.warehouse_set_production_flag', warehouse_id=w.id) }}">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <input type="hidden" name="is_production" value="{{ '0' if w.is_production else '1' }}">
+                                    <button class="btn btn-sm btn-soft">{{ 'Снять признак' if w.is_production else 'Сделать складом выпуска' }}</button>
+                                </form>
+                            </td>
+                            {% endif %}
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="{{ 5 if current_user.is_admin else 4 }}" class="text-muted p-3">Складов нет</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
 
-    <div class="col-md-6">
-        <h2 class="h5 mb-3">Новый склад</h2>
-
-        <form method="post">
-            {{ form.hidden_tag() }}
-
-            <div class="mb-3">
-                {{ form.name.label(class="form-label") }}
-                {{ form.name(class="form-control") }}
-                {% for error in form.name.errors %}
-                    <div class="text-danger small">{{ error }}</div>
-                {% endfor %}
-            </div>
-
-            <div class="form-check mb-3">
-                {{ form.is_active(class="form-check-input") }}
-                {{ form.is_active.label(class="form-check-label") }}
-            </div>
-
-            <button type="submit" class="btn btn-primary">
-                {{ form.submit.label.text }}
-            </button>
-        </form>
+    {% if current_user.is_admin %}
+    <div class="col-lg-5">
+        <div class="app-card p-4">
+            <h2 class="h5 mb-3">Новый склад</h2>
+            <form method="post">
+                {{ form.hidden_tag() }}
+                <div class="mb-3">
+                    {{ form.name.label(class="form-label") }}
+                    {{ form.name(class="form-control") }}
+                    {% for error in form.name.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+                </div>
+                <div class="form-check mb-2">
+                    {{ form.is_active(class="form-check-input") }}
+                    {{ form.is_active.label(class="form-check-label") }}
+                </div>
+                <div class="form-check mb-3">
+                    {{ form.is_production(class="form-check-input") }}
+                    {{ form.is_production.label(class="form-check-label") }}
+                </div>
+                <button type="submit" class="btn btn-orange">{{ form.submit.label.text }}</button>
+            </form>
+        </div>
     </div>
+    {% endif %}
 </div>
 {% endblock %}

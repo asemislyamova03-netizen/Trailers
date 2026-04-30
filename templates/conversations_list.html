@@ -1,0 +1,112 @@
+{% extends 'base.html' %}
+
+{% block title %}Диалоги{% endblock %}
+
+{% block content %}
+<section class="hero-dashboard">
+  <div>
+    <h1>Диалоги</h1>
+    <p>Входящие обращения из сайта, WhatsApp, Instagram, Telegram и ручных каналов.</p>
+  </div>
+  <a href="{{ url_for('main.lead_create', return_to='manager_workspace') }}" class="btn btn-orange">
+    <i class="bi bi-plus-lg me-1"></i>Заявка вручную
+  </a>
+</section>
+
+<form method="get" class="app-card p-3 mb-4">
+  <div class="row g-3 align-items-end">
+    <div class="col-md-2">
+      <label class="form-label">Канал</label>
+      <select name="channel" class="form-select">
+        <option value="">Все</option>
+        {% for item in ['whatsapp', 'instagram', 'telegram', 'website', 'manual', 'phone', 'other'] %}
+          <option value="{{ item }}" {% if channel == item %}selected{% endif %}>{{ item|status_label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Статус</label>
+      <select name="status" class="form-select">
+        <option value="">Все</option>
+        {% for item in ['new', 'manager_needed', 'manager_handling', 'waiting_client', 'order_created', 'closed', 'spam'] %}
+          <option value="{{ item }}" {% if status == item %}selected{% endif %}>{{ item|status_label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Менеджер</label>
+      <select name="assigned" class="form-select">
+        <option value="">Все</option>
+        <option value="mine" {% if assigned == 'mine' %}selected{% endif %}>Мои</option>
+        <option value="unassigned" {% if assigned == 'unassigned' %}selected{% endif %}>Не назначены</option>
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Склад</label>
+      <select name="warehouse_id" class="form-select">
+        <option value="">Все</option>
+        {% for w in warehouses %}
+          <option value="{{ w.id }}" {% if warehouse_id == w.id %}selected{% endif %}>{{ w.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Поиск</label>
+      <input type="search" name="q" class="form-control" value="{{ q }}" placeholder="Имя, телефон, текст">
+    </div>
+    <div class="col-md-1 d-grid">
+      <button class="btn btn-orange">Найти</button>
+    </div>
+  </div>
+</form>
+
+<div class="app-card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>Входящие обращения</span>
+    <span class="text-muted small">{{ conversations|length }} записей</span>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead>
+        <tr>
+          <th>Канал</th>
+          <th>Клиент</th>
+          <th>Телефон / username</th>
+          <th>Город</th>
+          <th>Интерес</th>
+          <th>Последнее сообщение</th>
+          <th>Дата</th>
+          <th>Статус</th>
+          <th>Ответственный</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for lead in conversations %}
+        <tr>
+          <td><span class="badge text-bg-{{ lead.channel|status_badge_class }}">{{ lead.channel|status_label }}</span></td>
+          <td class="fw-semibold">{{ lead.customer_name }}</td>
+          <td>{{ lead.phone or lead.messenger_username or lead.external_chat_id or '' }}</td>
+          <td>{{ lead.customer_city or '' }}</td>
+          <td>{{ lead.interest_text or lead.desired_model or '' }}</td>
+          <td>
+            <div class="text-truncate" style="max-width: 320px;">{{ lead.last_message_text or lead.text or '' }}</div>
+            {% if lead.unread_count %}
+              <span class="badge text-bg-danger mt-1">{{ lead.unread_count }} новых</span>
+            {% endif %}
+          </td>
+          <td>{{ lead.last_message_at|date_format if lead.last_message_at else lead.created_at|date_format }}</td>
+          <td><span class="badge text-bg-{{ lead.conversation_status|status_badge_class }}">{{ lead.conversation_status|status_label }}</span></td>
+          <td>{{ lead.assigned_user.full_name if lead.assigned_user else 'Не назначен' }}</td>
+          <td class="text-end">
+            <a class="btn btn-sm btn-orange" href="{{ url_for('main.conversation_detail', lead_id=lead.id) }}">Открыть</a>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="10" class="text-muted p-4">Диалогов пока нет</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

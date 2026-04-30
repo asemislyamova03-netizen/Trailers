@@ -1,76 +1,152 @@
 <!doctype html>
 <html lang="ru">
-
 <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Trailers{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/app.css') }}" rel="stylesheet">
 </head>
-
-<body class="bg-light">
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
-        <div class="container">
-            <a class="navbar-brand" href="{{ url_for('main.trailers_list') }}">Учет прицепов</a>
-
-            <ul class="navbar-nav flex-row">
-                {% if current_user.is_authenticated and current_user.is_manager %}
-                <li class="nav-item">
-                    <a class="nav-link" href="{{ url_for('main.manager_workspace') }}">Дашборд</a>
-                </li>
-                {% endif %}
-                {% if current_user.is_authenticated %}
-                <li class="nav-item me-3"><a class="nav-link" href="{{ url_for('main.trailers_list') }}">Прицепы</a>
-                </li>
-                {% if current_user.is_authenticated and current_user.is_admin %}
-                <li class="nav-item me-3"><a class="nav-link" href="{{ url_for('main.warehouses_list') }}">Склады</a>
-                </li>
-                {% endif %}
-                <li class="nav-item me-3"><a class="nav-link" href="{{ url_for('main.items_list') }}">Номенклатура</a>
-                </li>
-                <li class="nav-item me-3"><a class="nav-link" href="{{ url_for('main.customers_list') }}">Клиенты</a>
-                </li>
-                <li class="nav-item me-3"><a class="nav-link" href="{{ url_for('main.contracts_list') }}">Договоры</a>
-                    {% if current_user.is_admin %}
-                <li class="nav-item">
-                    <a class="nav-link" href="{{ url_for('main.otts_list') }}">ОТТС</a>
-                </li>
-                {% endif %}
-                </li>
+<body>
+{% set endpoint = request.endpoint or '' %}
+{% set path = request.path or '' %}
+{% macro nav_item(label, icon, endpoint_name=None, href=None, match=None) -%}
+    {% set target = href or url_for(endpoint_name) %}
+    {% set is_active = (endpoint == endpoint_name) or (match and path.startswith(match)) %}
+    <a class="sidebar-link {{ 'active' if is_active else '' }}" href="{{ target }}">
+        <i class="bi {{ icon }}"></i><span>{{ label }}</span>
+    </a>
+{%- endmacro %}
+<div class="sidebar-backdrop" data-sidebar-close></div>
+<div class="app-shell">
+    <aside class="sidebar">
+        <a class="sidebar-brand" href="{{ url_for('main.role_home') }}">
+            <span class="brand-mark"><i class="bi bi-truck"></i></span>
+            <span>
+                <p class="brand-title">KEMTON CRM</p>
+                <span class="brand-subtitle">Trailers sales dashboard</span>
+            </span>
+        </a>
+        <nav class="sidebar-nav">
+            {% if current_user.is_authenticated %}
                 {% if current_user.is_admin %}
-                <li class="nav-item me-3"><a class="nav-link" href="{{ url_for('main.users_list') }}">Пользователи</a>
-                </li>
-                {% endif %}
-                <li class="nav-item"><a class="nav-link" href="{{ url_for('main.logout') }}">Выход ({{
-                        current_user.username }})</a></li>
+                    {{ nav_item('Панель управления', 'bi-speedometer2', 'main.director_dashboard', match='/director') }}
+                    {{ nav_item('Продажи', 'bi-cart-check', 'main.orders_list', match='/orders') }}
+                    {{ nav_item('Диалоги', 'bi-chat-dots', 'main.conversations_list', match='/conversations') }}
+                    {{ nav_item('Заявки', 'bi-chat-left-text', 'main.leads_list', match='/leads') }}
+                    {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', match='/production') }}
+                    {{ nav_item('Логистика', 'bi-truck', 'main.logistics_workspace', match='/logistics') }}
+                    {{ nav_item('Финансы', 'bi-cash-coin', 'main.orders_list') }}
+                    {{ nav_item('Отчеты', 'bi-bar-chart', 'main.conversation_report', match='/reports') }}
+                    <div class="sidebar-section-title">Справочники</div>
+                    {{ nav_item('Номенклатура', 'bi-tags', 'main.items_list', match='/items') }}
+                    {{ nav_item('ОТТС', 'bi-file-earmark-check', 'main.otts_list', match='/otts') }}
+                    {{ nav_item('Склады', 'bi-buildings', 'main.warehouses_list', match='/warehouses') }}
+                    {{ nav_item('Прицепы', 'bi-box-seam', 'main.trailers_list', match='/trailers') }}
+                    {{ nav_item('Клиенты', 'bi-person-lines-fill', 'main.customers_list', match='/customers') }}
+                    {{ nav_item('Пользователи', 'bi-people', 'main.users_list', match='/users') }}
+                {% elif current_user.is_manager %}
+                    {{ nav_item('Рабочий стол', 'bi-speedometer2', 'main.manager_workspace', match='/manager') }}
+                    {{ nav_item('Диалоги', 'bi-chat-dots', 'main.conversations_list', match='/conversations') }}
+                    {{ nav_item('Заявки', 'bi-chat-left-text', 'main.leads_list', match='/leads') }}
+                    {{ nav_item('Заказы', 'bi-receipt', 'main.orders_list', match='/orders') }}
+                    {{ nav_item('Мой склад', 'bi-box-seam', 'main.trailers_list', match='/trailers') }}
+                    {{ nav_item('Оплаты', 'bi-cash-coin', 'main.orders_list') }}
+                    {{ nav_item('Клиенты', 'bi-person-lines-fill', 'main.customers_list', match='/customers') }}
+                    {{ nav_item('Договоры', 'bi-file-earmark-text', 'main.contracts_list', match='/contracts') }}
+                {% elif current_user.is_production %}
+                    {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', match='/production') }}
+                    {{ nav_item('Мои задания', 'bi-list-check', 'main.production_workspace') }}
+                    {{ nav_item('Выпущено', 'bi-check2-circle', 'main.production_workspace') }}
+                {% elif current_user.is_logistics %}
+                    {{ nav_item('Логистика', 'bi-truck', 'main.logistics_workspace', match='/logistics') }}
+                    {{ nav_item('Выпущено без VIN', 'bi-upc-scan', 'main.logistics_workspace') }}
+                    {{ nav_item('Прицепы склада выпуска', 'bi-box-seam', 'main.trailers_list', match='/trailers') }}
+                    {{ nav_item('Перемещения', 'bi-arrow-left-right', 'main.stock_movements_list', match='/stock-movements') }}
+                    {{ nav_item('В пути', 'bi-signpost-2', 'main.stock_movements_list') }}
+                {% elif current_user.is_director %}
+                    {{ nav_item('Панель', 'bi-speedometer2', 'main.director_dashboard', match='/director') }}
+                    {{ nav_item('Диалоги', 'bi-chat-dots', 'main.conversations_list', match='/conversations') }}
+                    {{ nav_item('Заказы', 'bi-receipt', 'main.orders_list', match='/orders') }}
+                    {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', match='/production') }}
+                    {{ nav_item('Логистика', 'bi-truck', 'main.logistics_workspace', match='/logistics') }}
+                    {{ nav_item('Отчеты', 'bi-bar-chart', 'main.conversation_report', match='/reports') }}
+                    <div class="sidebar-section-title">Справочники</div>
+                    {{ nav_item('Номенклатура', 'bi-tags', 'main.items_list', match='/items') }}
+                    {{ nav_item('Склады', 'bi-buildings', 'main.warehouses_list', match='/warehouses') }}
+                    {{ nav_item('Прицепы', 'bi-box-seam', 'main.trailers_list', match='/trailers') }}
+                    {{ nav_item('Клиенты', 'bi-person-lines-fill', 'main.customers_list', match='/customers') }}
                 {% else %}
-                <li class="nav-item"><a class="nav-link" href="{{ url_for('main.login') }}">Войти</a></li>
+                    {{ nav_item('Панель', 'bi-speedometer2', 'main.trailers_list') }}
+                    {{ nav_item('Остатки', 'bi-box-seam', 'main.trailers_list', match='/trailers') }}
+                    {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_dashboard') }}
                 {% endif %}
-            </ul>
-
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarMain">
-                <span class="navbar-toggler-icon"></span>
+            {% endif %}
+        </nav>
+        <div class="sidebar-footer">
+            <div class="fw-bold text-white">KEMTON TRAILER</div>
+            <div>Астана · Алматы · Кокшетау</div>
+        </div>
+    </aside>
+    <div class="main-wrapper">
+        <header class="topbar">
+            <button class="btn btn-soft mobile-sidebar-toggle" type="button" data-sidebar-toggle aria-label="Меню">
+                <i class="bi bi-list"></i>
             </button>
-
-
-        </div>
-    </nav>
-
-    <div class="container mb-4">
-        {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-        {% for category, message in messages %}
-        <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
-            {{ message }}
-            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Закрыть"></button>
-        </div>
-        {% endfor %}
-        {% endif %}
-        {% endwith %}
-
-        {% block content %}{% endblock %}
+            <div class="me-auto">
+                <h1 class="topbar-title">{% block page_title %}{{ self.title()|striptags }}{% endblock %}</h1>
+                <div class="topbar-subtitle">CRM для продаж, склада и производства прицепов</div>
+            </div>
+            <div class="topbar-actions d-flex gap-2">
+                {% if current_user.is_authenticated and (current_user.is_admin or current_user.is_manager) %}
+                    <a href="{{ url_for('main.lead_create') }}" class="btn btn-soft"><i class="bi bi-plus-lg me-1"></i>Заявка</a>
+                    <a href="{{ url_for('main.order_create') }}" class="btn btn-orange"><i class="bi bi-plus-lg me-1"></i>Заказ</a>
+                {% endif %}
+            </div>
+            {% if current_user.is_authenticated %}
+            <div class="dropdown">
+                <button class="user-chip dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                    <span class="user-avatar"><i class="bi bi-person-fill"></i></span>
+                    <span class="user-meta text-start">
+                        <span class="d-block fw-bold">{{ current_user.full_name or current_user.username }}</span>
+                        <span class="d-block text-muted small">{{ current_user.role }}</span>
+                    </span>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end">
+                    <li><span class="dropdown-item-text small text-muted">Профиль</span></li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li><a class="dropdown-item" href="{{ url_for('main.logout') }}"><i class="bi bi-box-arrow-right me-2"></i>Выйти</a></li>
+                </ul>
+            </div>
+            {% endif %}
+        </header>
+        <main class="content">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, message in messages %}
+                <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                    {{ message }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Закрыть"></button>
+                </div>
+            {% endfor %}
+            {% endwith %}
+            {% block content %}{% endblock %}
+        </main>
     </div>
-
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+document.querySelectorAll('[data-sidebar-toggle]').forEach((button) => {
+  button.addEventListener('click', () => document.body.classList.toggle('sidebar-open'));
+});
+document.querySelectorAll('[data-sidebar-close]').forEach((button) => {
+  button.addEventListener('click', () => document.body.classList.remove('sidebar-open'));
+});
+</script>
+{% block scripts %}{% endblock %}
 </body>
-
 </html>

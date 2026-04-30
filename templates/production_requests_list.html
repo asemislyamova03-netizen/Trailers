@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Производство{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between mb-3"><h1 class="h3">Заявки на производство</h1><a class="btn btn-primary" href="{{ url_for('main.production_request_create') }}">Новая заявка</a></div>
+<table class="table table-sm table-striped"><thead><tr><th>Номер</th><th>Дата</th><th>Склад</th><th>Статус</th><th>Позиции</th><th></th></tr></thead><tbody>
+{% for r in requests %}<tr><td>{{ r.request_number }}</td><td>{{ r.created_at.strftime('%Y-%m-%d') if r.created_at else '' }}</td><td>{{ r.target_warehouse.name if r.target_warehouse else '' }}</td><td>{{ r.status }}</td><td>{{ r.lines.count() }}</td><td><a class="btn btn-sm btn-outline-primary" href="{{ url_for('main.production_request_detail', request_id=r.id) }}">Открыть</a></td></tr>{% else %}<tr><td colspan="6" class="text-muted">Заявок нет</td></tr>{% endfor %}
+</tbody></table>
+{% endblock %}

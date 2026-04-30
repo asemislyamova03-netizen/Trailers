@@ -1,0 +1,43 @@
+{% extends 'base.html' %}
+
+{% block title %}Аналитика обращений{% endblock %}
+
+{% block content %}
+<section class="hero-dashboard">
+  <div>
+    <h1>Аналитика обращений</h1>
+    <p>Каналы входящих диалогов и базовая конверсия в заказы.</p>
+  </div>
+  <a href="{{ url_for('main.conversations_list') }}" class="btn btn-orange">Открыть диалоги</a>
+</section>
+
+<section class="kpi-grid mb-4">
+  <div class="app-card kpi-card"><div><div class="kpi-title">Сегодня</div><div class="kpi-value">{{ today_count }}</div><div class="kpi-caption">новые обращения</div></div><div class="kpi-icon"><i class="bi bi-calendar-day"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">За месяц</div><div class="kpi-value">{{ month_count }}</div><div class="kpi-caption">обращения</div></div><div class="kpi-icon"><i class="bi bi-calendar3"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Новые</div><div class="kpi-value">{{ new_count }}</div><div class="kpi-caption">без обработки</div></div><div class="kpi-icon"><i class="bi bi-chat-dots"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Непрочитанные</div><div class="kpi-value">{{ unread_count }}</div><div class="kpi-caption">сообщения</div></div><div class="kpi-icon"><i class="bi bi-envelope-exclamation"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Заказы из обращений</div><div class="kpi-value">{{ converted_count }}</div><div class="kpi-caption">lead → order</div></div><div class="kpi-icon"><i class="bi bi-receipt"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Конверсия</div><div class="kpi-value">{{ conversion }}%</div><div class="kpi-caption">по всем каналам</div></div><div class="kpi-icon"><i class="bi bi-graph-up-arrow"></i></div></div>
+</section>
+
+<div class="app-card">
+  <div class="card-header">Каналы</div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead><tr><th>Канал</th><th>Обращений</th><th>Создано заказов</th><th>Конверсия</th></tr></thead>
+      <tbody>
+      {% for row in rows %}
+        <tr>
+          <td><span class="badge text-bg-{{ row.channel|status_badge_class }}">{{ row.channel|status_label }}</span></td>
+          <td>{{ row.total }}</td>
+          <td>{{ row.converted }}</td>
+          <td>{{ row.conversion }}%</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="text-muted p-4">Нет данных</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

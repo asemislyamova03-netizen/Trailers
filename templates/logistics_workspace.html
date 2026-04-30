@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Логистика{% endblock %}
+{% block content %}
+<section class="hero-dashboard">
+  <div><h1>Логистика</h1><p>VIN, склад выпуска, отправки по филиалам и контроль движения.</p></div>
+</section>
+<div class="app-card p-3 mb-3">
+  <div class="d-flex flex-wrap justify-content-between gap-2 align-items-center">
+    <div><span class="text-muted">Склад выпуска:</span> <strong>{{ production_warehouse.name if production_warehouse else 'не задан' }}</strong></div>
+    {% if production_warehouses|length > 1 %}<span class="badge text-bg-warning">Несколько производственных складов</span>{% endif %}
+  </div>
+  {% if production_warehouse_warning %}<div class="alert alert-warning mt-3 mb-0">{{ production_warehouse_warning }}</div>{% endif %}
+</div>
+<div class="kpi-grid mb-4">
+  <div class="app-card kpi-card"><div><div class="kpi-title">Нужно в производство</div><div class="kpi-value">{{ production_needs|length }}</div><div class="kpi-caption">по заказам и складам</div></div><div class="kpi-icon"><i class="bi bi-list-check"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Без VIN</div><div class="kpi-value">{{ produced_units|length }}</div><div class="kpi-caption">ждёт присвоения</div></div><div class="kpi-icon"><i class="bi bi-upc-scan"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Готово на складе выпуска</div><div class="kpi-value">{{ ready_trailers|length }}</div><div class="kpi-caption">можно отправлять</div></div><div class="kpi-icon"><i class="bi bi-box-seam"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">В пути</div><div class="kpi-value">{{ inbound|length }}</div><div class="kpi-caption">активные перемещения</div></div><div class="kpi-icon"><i class="bi bi-truck"></i></div></div>
+</div>
+<div class="app-card mb-3">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>Нужно запустить в производство</span>
+    <span class="text-muted small">заказ → потребность → производство</span>
+  </div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle">
+        <thead><tr><th>Потребность</th><th>Модель</th><th>Склад назначения</th><th>Заказ</th><th>Срок</th><th>Кол-во</th><th></th></tr></thead>
+        <tbody>
+        {% for need in production_needs %}
+          <tr>
+            <td>#{{ need.id }}</td>
+            <td class="fw-bold">{{ need.item.article if need.item else '' }} {{ need.item.name if need.item else '' }}</td>
+            <td>{{ need.warehouse.name if need.warehouse else 'не выбран' }}</td>
+            <td>{{ need.order.order_number if need.order else 'на склад' }}</td>
+            <td>{{ need.required_by|date_format }}</td>
+            <td>{{ need.quantity }}</td>
+            <td class="text-end">
+              <form method="post" action="{{ url_for('main.supply_need_create_production_request', need_id=need.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-sm btn-orange">В производство</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="7" class="text-muted p-3">Новых потребностей нет</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<div class="app-card mb-3">
+  <div class="card-header">Уже в производстве</div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle">
+        <thead><tr><th>Заявка</th><th>Модель</th><th>Склад</th><th>Выпущено</th><th>Осталось</th><th>Статус</th></tr></thead>
+        <tbody>
+        {% for line in production_lines %}
+          <tr>
+            <td>{{ line.production_request.request_number }}</td>
+            <td class="fw-bold">{{ line.item.article if line.item else '' }}</td>
+            <td>{{ line.production_request.target_warehouse.name if line.production_request.target_warehouse else '' }}</td>
+            <td>{{ line.produced_qty or 0 }}</td>
+            <td>{{ line.quantity - (line.produced_qty or 0) }}</td>
+            <td><span class="badge text-bg-{{ line.status|status_badge_class }}">{{ line.status|status_label }}</span></td>
+          </tr>
+        {% else %}
+          <tr><td colspan="6" class="text-muted p-3">Активных производственных строк нет</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<div class="row g-3"><div class="col-lg-6"><div class="app-card"><div class="card-header">Выпущено без VIN</div><div class="card-body p-0"><div class="table-responsive"><table class="table table-hover align-middle"><tbody>{% for unit in produced_units %}<tr><td>#{{ unit.id }}</td><td>{{ unit.item.article if unit.item else '' }}</td><td>{{ unit.target_warehouse.name if unit.target_warehouse else '' }}</td><td><a class="btn btn-sm btn-orange" href="{{ url_for('main.logistics_assign_vin', unit_id=unit.id) }}">Присвоить VIN</a></td></tr>{% else %}<tr><td class="text-muted p-3">Нет единиц без VIN</td></tr>{% endfor %}</tbody></table></div></div></div></div>
+<div class="col-lg-6"><div class="app-card"><div class="card-header">Отправить на склад</div><div class="card-body">{% if production_warehouse %}<form method="post" action="{{ url_for('main.logistics_send_trailer') }}" class="row g-2">{{ send_form.hidden_tag() }}<div class="col-md-6">{{ send_form.trailer_id.label(class="form-label") }}{{ send_form.trailer_id(class="form-select") }}</div><div class="col-md-6">{{ send_form.to_warehouse_id.label(class="form-label") }}{{ send_form.to_warehouse_id(class="form-select") }}</div><div class="col-md-6">{{ send_form.order_id.label(class="form-label") }}{{ send_form.order_id(class="form-select") }}</div><div class="col-md-3">{{ send_form.departure_date.label(class="form-label") }}{{ send_form.departure_date(class="form-control") }}</div><div class="col-md-3">{{ send_form.arrival_date.label(class="form-label") }}{{ send_form.arrival_date(class="form-control") }}</div><div class="col-12">{{ send_form.note.label(class="form-label") }}{{ send_form.note(class="form-control") }}</div><div class="col-12">{{ send_form.submit(class="btn btn-orange") }}</div></form>{% else %}<div class="alert alert-danger mb-0">Производственный склад не найден. Отметьте склад выпуска в справочнике складов.</div>{% endif %}</div></div></div></div>
+<div class="app-card mt-3"><div class="card-header">Готово на складе выпуска</div><div class="card-body p-0"><div class="table-responsive"><table class="table table-hover align-middle"><tbody>{% for trailer in ready_trailers %}<tr><td class="fw-bold">{{ trailer.vin }}</td><td>{{ trailer.item.article if trailer.item else '' }}</td><td><span class="badge text-bg-{{ (trailer.lifecycle_status or trailer.status)|status_badge_class }}">{{ (trailer.lifecycle_status or trailer.status)|status_label }}</span></td></tr>{% else %}<tr><td class="text-muted p-3">Нет готовых прицепов</td></tr>{% endfor %}</tbody></table></div></div></div>
+{% endblock %}

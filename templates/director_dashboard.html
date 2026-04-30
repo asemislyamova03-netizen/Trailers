@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Панель управления{% endblock %}
+{% block content %}
+{% set total_stock = namespace(value=0) %}
+{% for row in rows %}{% for w in warehouses %}{% set total_stock.value = total_stock.value + row.warehouses[w.id] %}{% endfor %}{% endfor %}
+{% set sold_count = rows|sum(attribute='sold') %}
+{% set production_count = rows|sum(attribute='in_production') %}
+{% set transit_count = rows|sum(attribute='in_transit') %}
+{% set produced_no_vin = rows|sum(attribute='produced_no_vin') %}
+<section class="hero-dashboard">
+  <div>
+    <h1>Панель управления</h1>
+    <p>Контроль продаж, остатков, производства и логистики KEMTON TRAILER по всем складам.</p>
+  </div>
+  <a href="{{ url_for('main.order_create') }}" class="btn btn-orange"><i class="bi bi-plus-lg me-2"></i>Продажа</a>
+</section>
+
+<section class="kpi-grid mb-4">
+  <div class="app-card kpi-card"><div><div class="kpi-title">Выручка за месяц</div><div class="kpi-value">{{ month_revenue|money }}</div><div class="kpi-caption">CONFIRMED оплаты</div></div><div class="kpi-icon"><i class="bi bi-cash-coin"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Количество продаж</div><div class="kpi-value">{{ sold_count }}</div><div class="kpi-caption">прицепов SOLD</div></div><div class="kpi-icon"><i class="bi bi-cart-check"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Остаток склада</div><div class="kpi-value">{{ total_stock.value }}</div><div class="kpi-caption">IN_STOCK по складам</div></div><div class="kpi-icon"><i class="bi bi-box-seam"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">В производстве</div><div class="kpi-value">{{ production_count }}</div><div class="kpi-caption">активные строки</div></div><div class="kpi-icon"><i class="bi bi-tools"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">В пути</div><div class="kpi-value">{{ transit_count }}</div><div class="kpi-caption">по VIN</div></div><div class="kpi-icon"><i class="bi bi-truck"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Выпущено без VIN</div><div class="kpi-value">{{ produced_no_vin }}</div><div class="kpi-caption">ждёт логиста</div></div><div class="kpi-icon"><i class="bi bi-upc-scan"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Оплаты на проверке</div><div class="kpi-value">{{ payment_pending|length }}</div><div class="kpi-caption">PENDING</div></div><div class="kpi-icon"><i class="bi bi-hourglass-split"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Оплачено, не отгружено</div><div class="kpi-value">{{ paid_not_shipped|length }}</div><div class="kpi-caption">к контролю</div></div><div class="kpi-icon"><i class="bi bi-clipboard-check"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Заказы без оплаты</div><div class="kpi-value">{{ unpaid_orders|length }}</div><div class="kpi-caption">активные</div></div><div class="kpi-icon"><i class="bi bi-exclamation-circle"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Просрочено</div><div class="kpi-value">{{ overdue_production|length + overdue_movements|length }}</div><div class="kpi-caption">производство + отправки</div></div><div class="kpi-icon"><i class="bi bi-alarm"></i></div></div>
+</section>
+
+<div class="row g-4 mb-4">
+  <div class="col-xl-7">
+    <div class="app-card p-3">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2 class="h5 mb-0">Остатки по складам</h2>
+        <span class="text-muted small">текущий срез</span>
+      </div>
+      <div class="chart-box"><canvas id="stockChart"></canvas></div>
+    </div>
+  </div>
+  <div class="col-xl-5">
+    <div class="app-card p-3">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2 class="h5 mb-0">Структура статусов</h2>
+        <span class="text-muted small">склад / производство</span>
+      </div>
+      <div class="chart-box"><canvas id="statusChart"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<div class="app-card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>Остатки и движение</span>
+    <a class="btn btn-sm btn-soft" href="{{ url_for('main.stock_movements_list') }}">Перемещения</a>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead><tr><th>Модель / артикул</th>{% for w in warehouses %}<th>{{ w.name }}</th>{% endfor %}<th>В производстве</th><th>Без VIN</th><th>В пути</th><th>Резерв</th><th>Продано</th></tr></thead>
+      <tbody>
+      {% for row in rows %}
+        <tr><td class="fw-bold">{{ row.item.article or row.item.name }}</td>{% for w in warehouses %}<td>{{ row.warehouses[w.id] }}</td>{% endfor %}<td>{{ row.in_production }}</td><td>{{ row.produced_no_vin }}</td><td>{{ row.in_transit }}</td><td>{{ row.reserved }}</td><td>{{ row.sold }}</td></tr>
+      {% else %}
+        <tr><td colspan="{{ warehouses|length + 6 }}" class="text-muted p-4">Нет данных</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const warehouseLabels = {{ warehouses|map(attribute='name')|list|tojson|safe }};
+const stockValues = [
+  {% for w in warehouses %}
+    {% set ns = namespace(total=0) %}
+    {% for row in rows %}{% set ns.total = ns.total + row.warehouses[w.id] %}{% endfor %}
+    {{ ns.total }}{{ "," if not loop.last }}
+  {% endfor %}
+];
+new Chart(document.getElementById('stockChart'), {
+  type: 'bar',
+  data: { labels: warehouseLabels, datasets: [{ label: 'В наличии', data: stockValues, backgroundColor: '#2563EB', borderRadius: 8 }] },
+  options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, grid: { color: '#E5EAF1' } }, x: { grid: { display: false } } } }
+});
+new Chart(document.getElementById('statusChart'), {
+  type: 'doughnut',
+  data: { labels: ['В производстве', 'Без VIN', 'В пути', 'Резерв', 'Продано'], datasets: [{ data: [{{ production_count }}, {{ produced_no_vin }}, {{ transit_count }}, {{ rows|sum(attribute='reserved') }}, {{ sold_count }}], backgroundColor: ['#2563EB', '#F59E0B', '#38BDF8', '#F97316', '#16A34A'], borderWidth: 0 }] },
+  options: { responsive: true, maintainAspectRatio: false, cutout: '62%', plugins: { legend: { position: 'right' } } }
+});
+</script>
+{% endblock %}

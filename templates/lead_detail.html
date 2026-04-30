@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Заявка #{{ lead.id }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between mb-3">
+  <h1 class="h3">Заявка #{{ lead.id }}</h1>
+  <div>
+    <a class="btn btn-outline-secondary" href="{{ url_for('main.lead_edit', lead_id=lead.id) }}">Редактировать</a>
+    <a class="btn btn-primary" href="{{ url_for('main.order_create', lead_id=lead.id) }}">Создать заказ</a>
+  </div>
+</div>
+<div class="row g-3">
+  <div class="col-md-6"><div class="p-3 bg-white border rounded">
+    <div><b>Клиент:</b> {{ lead.customer_name }}</div>
+    <div><b>Телефон:</b> {{ lead.phone or '' }}</div>
+    <div><b>Канал:</b> {{ lead.channel or lead.source_channel }}</div>
+    <div><b>Источник:</b> {{ lead.source_name or lead.source_platform or '' }}</div>
+    <div><b>Статус:</b> {{ lead.status }}</div>
+    <div><b>Ответственный:</b> {{ lead.assigned_user.full_name if lead.assigned_user else '' }}</div>
+  </div></div>
+  <div class="col-md-6"><div class="p-3 bg-white border rounded">
+    <div><b>Модель:</b> {{ lead.desired_item.article if lead.desired_item else lead.desired_model or '' }}</div>
+    <div><b>Пожелания:</b> {{ lead.desired_specs or '' }}</div>
+    <div><b>Текст:</b> {{ lead.text or '' }}</div>
+    <div><b>Комментарий:</b> {{ lead.comment or '' }}</div>
+  </div></div>
+</div>
+<h2 class="h5 mt-4">Сообщения</h2>
+<table class="table table-sm table-striped bg-white">
+  <thead><tr><th>Дата</th><th>Направление</th><th>Текст</th></tr></thead>
+  <tbody>
+  {% for msg in lead.messages.order_by().all() %}
+    <tr><td>{{ msg.created_at }}</td><td>{{ msg.direction }}</td><td>{{ msg.text or '' }}</td></tr>
+  {% else %}
+    <tr><td colspan="3" class="text-muted">Сообщений нет</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

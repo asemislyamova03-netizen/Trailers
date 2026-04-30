@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ pr.request_number }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between mb-3"><h1 class="h3">{{ pr.request_number }}</h1><a class="btn btn-outline-secondary" href="{{ url_for('main.production_request_edit', request_id=pr.id) }}">Редактировать статус</a></div>
+<div class="p-3 bg-white border rounded mb-3"><b>Статус:</b> {{ pr.status }} <b class="ms-3">Склад:</b> {{ pr.target_warehouse.name if pr.target_warehouse else '' }} <b class="ms-3">Комментарий:</b> {{ pr.note or '' }}</div>
+<h2 class="h5">Позиции</h2>
+<table class="table table-sm table-striped bg-white"><thead><tr><th>Модель</th><th>Потребность</th><th>Кол-во</th><th>Статус</th><th>Комментарий</th></tr></thead><tbody>{% for l in pr.lines.order_by().all() %}<tr><td>{{ l.item.article if l.item else '' }}</td><td>#{{ l.supply_need_id or '' }}</td><td>{{ l.quantity }}</td><td>{{ l.status }}</td><td>{{ l.note or '' }}</td></tr>{% else %}<tr><td colspan="5" class="text-muted">Позиции не добавлены</td></tr>{% endfor %}</tbody></table>
+<h2 class="h5 mt-4">Добавить позицию</h2>
+<form method="post" class="row g-3">{{ form.hidden_tag() }}{% for field in form if field.name not in ['csrf_token','submit'] %}<div class="col-md-6">{{ field.label(class="form-label") }}{{ field(class="form-control") }}</div>{% endfor %}<div class="col-12">{{ form.submit(class="btn btn-primary") }}</div></form>
+{% endblock %}

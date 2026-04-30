@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Производство{% endblock %}
+{% block content %}
+<section class="hero-dashboard">
+  <div><h1>Производство</h1><p>Мобильная панель производственника: задания, выпуск единиц и комментарии по проблемам.</p></div>
+  <span class="badge text-bg-success fs-6">Сегодня выпущено: {{ today_units|length }}</span>
+</section>
+
+<div class="nav nav-tabs mb-3">
+  <a class="nav-link {% if active_tab == 'todo' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='todo') }}">К выполнению</a>
+  <a class="nav-link {% if active_tab == 'in_work' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='in_work') }}">В работе</a>
+  <a class="nav-link {% if active_tab == 'overdue' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='overdue') }}">Просрочено</a>
+  <a class="nav-link {% if active_tab == 'done_today' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='done_today') }}">Выпущено сегодня</a>
+</div>
+
+{% if active_tab == 'done_today' %}
+<div class="row g-3">
+{% for unit in today_units %}
+  <div class="col-12 col-md-6 col-xl-4">
+    <div class="app-card h-100">
+      <div class="card-body">
+        <div class="d-flex justify-content-between gap-2">
+          <h2 class="h6 mb-1">Единица #{{ unit.id }}</h2>
+          <span class="badge text-bg-{{ unit.status|status_badge_class }}">{{ unit.status|status_label }}</span>
+        </div>
+        <dl class="row small mb-0">
+          <dt class="col-5">Модель</dt><dd class="col-7">{{ unit.item.article if unit.item else '' }} {{ unit.item.name if unit.item else '' }}</dd>
+          <dt class="col-5">Склад</dt><dd class="col-7">{{ unit.target_warehouse.name if unit.target_warehouse else '' }}</dd>
+          <dt class="col-5">Дата выпуска</dt><dd class="col-7">{{ unit.produced_at|date_format }}</dd>
+          <dt class="col-5">VIN</dt><dd class="col-7">{{ unit.trailer.vin if unit.trailer else 'ждёт логиста' }}</dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+{% else %}
+  <div class="col-12"><div class="alert alert-secondary">Сегодня выпусков нет</div></div>
+{% endfor %}
+</div>
+{% else %}
+<div class="row g-3">
+{% for line in lines %}
+  <div class="col-12 col-md-6 col-xl-4">
+    <div class="app-card h-100">
+      <div class="card-body">
+        <div class="d-flex justify-content-between gap-2">
+          <h2 class="h6 mb-1">{{ line.item.article or line.item.name }}</h2>
+          <span class="badge text-bg-{{ line.status|status_badge_class }}">{{ line.status|status_label }}</span>
+        </div>
+        <div class="small text-muted mb-2">{{ line.production_request.request_number }}</div>
+        <dl class="row small mb-2">
+          <dt class="col-5">Модель</dt><dd class="col-7">{{ line.item.name }}</dd>
+          <dt class="col-5">Кузов</dt><dd class="col-7">{{ line.item.size_body or '' }}</dd>
+          <dt class="col-5">Склад</dt><dd class="col-7">{{ line.production_request.target_warehouse.name if line.production_request.target_warehouse else '' }}</dd>
+          <dt class="col-5">Срок</dt><dd class="col-7">{{ line.supply_need.required_by|date_format if line.supply_need else '' }}</dd>
+          <dt class="col-5">Выпущено</dt><dd class="col-7">{{ line.produced_qty or 0 }} из {{ line.quantity }}</dd>
+        </dl>
+        {% if line.production_comment %}<div class="alert alert-warning py-2 small">{{ line.production_comment }}</div>{% endif %}
+        <div class="d-flex gap-2 flex-wrap">
+          {% if line.status not in ['ready', 'closed', 'cancelled'] %}
+          <form method="post" action="{{ url_for('main.production_line_start', line_id=line.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn-sm btn-primary-app">Взять в работу</button>
+          </form>
+          <form method="post" action="{{ url_for('main.production_line_produce_one', line_id=line.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn-sm btn-success">Выпущено 1 шт.</button>
+          </form>
+          {% endif %}
+        </div>
+        <form method="post" action="{{ url_for('main.production_line_comment', line_id=line.id, tab=active_tab) }}" class="mt-2">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <textarea name="production_comment" class="form-control form-control-sm" rows="2" placeholder="Проблема / комментарий">{{ line.production_comment or '' }}</textarea>
+          <button class="btn btn-sm btn-outline-secondary mt-2">Сохранить</button>
+        </form>
+      </div>
+    </div>
+  </div>
+{% else %}
+  <div class="col-12"><div class="alert alert-secondary">Производственных заданий нет</div></div>
+{% endfor %}
+</div>
+{% endif %}
+{% endblock %}

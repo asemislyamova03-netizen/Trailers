@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Присвоить VIN{% endblock %}
+{% block content %}
+<section class="hero-dashboard">
+  <div><h1>Присвоить VIN</h1><p>Создание конкретного прицепа на производственном складе после выпуска.</p></div>
+</section>
+<div class="app-card p-4">
+  <div class="alert alert-secondary">Единица #{{ unit.id }}: {{ unit.item.article if unit.item else '' }} {{ unit.item.name if unit.item else '' }}</div>
+  <form method="post" class="row g-3">
+    {{ form.hidden_tag() }}
+    <div class="col-md-6">{{ form.vin.label(class="form-label") }}{{ form.vin(class="form-control") }}{% for e in form.vin.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}</div>
+    <div class="col-md-6">{{ form.manufacture_date.label(class="form-label") }}{{ form.manufacture_date(class="form-control") }}</div>
+    <div class="col-12">{{ form.submit(class="btn btn-orange") }} <a class="btn btn-soft" href="{{ url_for('main.logistics_workspace') }}">Назад</a></div>
+  </form>
+</div>
+{% endblock %}

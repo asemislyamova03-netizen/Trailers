@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Потребности{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between mb-3"><h1 class="h3">Потребности</h1><a class="btn btn-primary" href="{{ url_for('main.supply_need_create') }}">Новая потребность</a></div>
+<table class="table table-sm table-striped"><thead><tr><th>ID</th><th>Тип</th><th>Модель</th><th>Склад</th><th>Заказ</th><th>Кол-во</th><th>Приоритет</th><th>Статус</th><th></th></tr></thead><tbody>
+{% for n in needs %}<tr><td>#{{ n.id }}</td><td>{{ n.need_type }}</td><td>{{ n.item.article if n.item else '' }}</td><td>{{ n.warehouse.name if n.warehouse else '' }}</td><td>{{ n.order.order_number if n.order else '' }}</td><td>{{ n.quantity }}</td><td>{{ n.priority }}</td><td>{{ n.status }}</td><td><a class="btn btn-sm btn-outline-primary" href="{{ url_for('main.supply_need_edit', need_id=n.id) }}">Изменить</a> {% if n.status == 'NEW' %}<form method="post" action="{{ url_for('main.supply_need_create_production_request', need_id=n.id) }}" class="d-inline"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-orange">В производство</button></form>{% endif %}</td></tr>{% else %}<tr><td colspan="9" class="text-muted">Потребностей нет</td></tr>{% endfor %}
+</tbody></table>
+{% endblock %}
