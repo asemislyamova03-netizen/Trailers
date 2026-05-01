@@ -1,8 +1,47 @@
 {% extends "base.html" %}
 {% block title %}Потребности{% endblock %}
 {% block content %}
-<div class="d-flex justify-content-between mb-3"><h1 class="h3">Потребности</h1><a class="btn btn-primary" href="{{ url_for('main.supply_need_create') }}">Новая потребность</a></div>
-<table class="table table-sm table-striped"><thead><tr><th>ID</th><th>Тип</th><th>Модель</th><th>Склад</th><th>Заказ</th><th>Кол-во</th><th>Приоритет</th><th>Статус</th><th></th></tr></thead><tbody>
-{% for n in needs %}<tr><td>#{{ n.id }}</td><td>{{ n.need_type }}</td><td>{{ n.item.article if n.item else '' }}</td><td>{{ n.warehouse.name if n.warehouse else '' }}</td><td>{{ n.order.order_number if n.order else '' }}</td><td>{{ n.quantity }}</td><td>{{ n.priority }}</td><td>{{ n.status }}</td><td><a class="btn btn-sm btn-outline-primary" href="{{ url_for('main.supply_need_edit', need_id=n.id) }}">Изменить</a> {% if n.status == 'NEW' %}<form method="post" action="{{ url_for('main.supply_need_create_production_request', need_id=n.id) }}" class="d-inline"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-orange">В производство</button></form>{% endif %}</td></tr>{% else %}<tr><td colspan="9" class="text-muted">Потребностей нет</td></tr>{% endfor %}
-</tbody></table>
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="h3 mb-0">Потребности</h1>
+  <div class="d-flex gap-2">
+    <a class="btn btn-soft" href="{{ url_for('main.stock_replenishment_list') }}">Пополнение складов</a>
+    <a class="btn btn-orange" href="{{ url_for('main.supply_need_create') }}">Новая потребность</a>
+  </div>
+</div>
+<div class="app-card">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead><tr><th>ID</th><th>Тип</th><th>Модель</th><th>Склад</th><th>Заказ</th><th>Кол-во</th><th>Приоритет</th><th>Статус</th><th></th></tr></thead>
+      <tbody>
+      {% for n in needs %}
+        <tr>
+          <td>#{{ n.id }}</td>
+          <td><span class="badge text-bg-{{ n.need_type|status_badge_class }}">{{ n.need_type|status_label }}</span></td>
+          <td>{{ n.item.article if n.item else '' }} {{ n.item.name if n.item else '' }}</td>
+          <td>{{ n.warehouse.name if n.warehouse else '' }}</td>
+          <td>{{ n.order.order_number if n.order else 'на склад' }}</td>
+          <td>{{ n.quantity }}</td>
+          <td>{{ n.priority }}</td>
+          <td><span class="badge text-bg-{{ n.status|status_badge_class }}">{{ n.status|status_label }}</span></td>
+          <td class="text-end">
+            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('main.supply_need_edit', need_id=n.id) }}">Изменить</a>
+            {% if n.status == 'NEW' %}
+              <form method="post" action="{{ url_for('main.supply_need_create_production_request', need_id=n.id) }}" class="d-inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-sm btn-orange">В производство</button>
+              </form>
+              <form method="post" action="{{ url_for('main.supply_need_cancel', need_id=n.id) }}" class="d-inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-sm btn-outline-dark">Отменить</button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="9" class="text-muted p-3">Потребностей нет</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
 {% endblock %}

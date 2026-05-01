@@ -4,10 +4,24 @@
 <h1 class="h3 mb-3">{{ title }}</h1>
 <form method="post" class="row g-3">
   {{ form.hidden_tag() }}
-  {% for field in form if field.name not in ['csrf_token','submit'] %}
-    <div class="col-md-6">
+  {% for field in form if field.name not in ['csrf_token', 'form_token', 'submit', 'desired_item_id'] %}
+    <div class="{% if field.name in ['text', 'comment', 'desired_specs'] %}col-12{% else %}col-md-6{% endif %}">
       {{ field.label(class="form-label") }}
-      {{ field(class="form-control") }}
+      {% if field.name == 'desired_item_search' %}
+        {{ field(class="form-control", list="leadItemOptions", autocomplete="off", placeholder="Начните вводить артикул, размер или название") }}
+        <datalist id="leadItemOptions">
+          {% for item in item_options %}
+            <option value="{{ item.label }}" data-id="{{ item.id }}"></option>
+          {% endfor %}
+        </datalist>
+        {{ form.desired_item_id(class="form-select d-none", id="lead_desired_item_id") }}
+        <div class="form-text">Если модели нет в справочнике, заполните поле “Модель текстом”.</div>
+        {% for error in form.desired_item_id.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+      {% elif field.type == 'SelectField' %}
+        {{ field(class="form-select") }}
+      {% else %}
+        {{ field(class="form-control") }}
+      {% endif %}
       {% for error in field.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
     </div>
   {% endfor %}
@@ -16,4 +30,19 @@
     <a class="btn btn-outline-secondary" href="{{ url_for('main.leads_list') }}">Назад</a>
   </div>
 </form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const itemInput = document.querySelector('#desired_item_search');
+  const itemSelect = document.querySelector('#lead_desired_item_id');
+  const options = Array.from(document.querySelectorAll('#leadItemOptions option'));
+  if (!itemInput || !itemSelect) return;
+  itemInput.addEventListener('input', () => {
+    const match = options.find((option) => option.value === itemInput.value);
+    itemSelect.value = match ? match.dataset.id : '0';
+  });
+})();
+</script>
 {% endblock %}

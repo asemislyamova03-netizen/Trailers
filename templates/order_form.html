@@ -2,22 +2,243 @@
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
 <h1 class="h3 mb-3">{{ title }}</h1>
-<form method="post" class="row g-3">
+
+<form method="post" class="row g-3" id="orderForm">
   {{ form.hidden_tag() }}
-  {% for field in form if field.name not in ['csrf_token','submit'] %}
-    <div class="col-md-6">
+
+  <input type="hidden" name="status" value="{{ form.status.data or 'waiting_payment' }}">
+
+  {% for field in form if field.name not in ['csrf_token', 'form_token', 'submit', 'customer_id', 'item_id', 'trailer_id', 'status', 'documents_issued', 'is_shipped'] %}
+    <div class="{% if field.name in ['note', 'manager_comment', 'planned_ship_comment'] %}col-12{% else %}col-md-6{% endif %}">
       {{ field.label(class="form-label") }}
-      {% if field.type == 'BooleanField' %}
+      {% if field.name == 'customer_search' %}
+        <div class="input-group">
+          {{ field(class="form-control", list="customerOptions", autocomplete="off", placeholder="ФИО, название, телефон или ИИН/БИН") }}
+          <a class="btn btn-soft" href="{% if form.order_id %}{{ url_for('main.customer_create', return_to='order_edit', order_id=form.order_id) }}{% else %}{{ url_for('main.customer_create', return_to='order_create') }}{% endif %}">Создать</a>
+          <a class="btn btn-outline-secondary disabled" id="editCustomerLink" href="#">Редактировать</a>
+        </div>
+        <datalist id="customerOptions">
+          {% for customer in customer_options %}
+            <option value="{{ customer.label }}" data-id="{{ customer.id }}"></option>
+          {% endfor %}
+        </datalist>
+        {{ form.customer_id(class="form-select d-none", id="order_customer_id") }}
+        <div class="form-text">Выберите клиента из подсказки или создайте нового.</div>
+        {% for error in form.customer_id.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+      {% elif field.name == 'item_search' %}
+        {{ field(class="form-control", list="orderItemOptions", autocomplete="off", placeholder="Начните вводить артикул, размер или название") }}
+        <datalist id="orderItemOptions">
+          {% for item in item_options %}
+            <option value="{{ item.label }}" data-id="{{ item.id }}"></option>
+          {% endfor %}
+        </datalist>
+        {{ form.item_id(class="form-select d-none", id="order_item_id") }}
+        <div class="form-text">Введите часть артикула или названия, затем выберите модель из подсказки.</div>
+        {% for error in form.item_id.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+      {% elif field.type == 'BooleanField' %}
         <div class="form-check">{{ field(class="form-check-input") }}</div>
+      {% elif field.type == 'SelectField' %}
+        {{ field(class="form-select") }}
       {% else %}
         {{ field(class="form-control") }}
       {% endif %}
       {% for error in field.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
     </div>
   {% endfor %}
+
+  <div class="col-12">
+    <div class="app-card p-3">
+      <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-2">
+        <div>
+          <label class="form-label mb-1" for="order_trailer_id">Конкретный прицеп / VIN</label>
+          <div class="form-text">Список ниже фильтруется по выбранной модели, складу продажи и источнику обеспечения.</div>
+        </div>
+        <span class="badge text-bg-secondary" id="trailerCountBadge">0 VIN</span>
+      </div>
+      <select name="trailer_id" id="order_trailer_id" class="form-select">
+        <option value="0">— подобрать позже / под заказ —</option>
+        {% for trailer in trailer_options %}
+          <option value="{{ trailer.id }}" data-item-id="{{ trailer.item_id }}" data-warehouse-id="{{ trailer.warehouse_id }}" {% if form.trailer_id.data == trailer.id %}selected{% endif %}>
+            {{ trailer.label }}
+          </option>
+        {% endfor %}
+      </select>
+      {% for error in form.trailer_id.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+    </div>
+  </div>
+
+  <div class="col-12">
+    <div class="app-card p-3" id="availabilityCard">
+      <h2 class="h6 mb-3">Доступность по выбранной модели и складу</h2>
+      <div class="row g-3">
+        <div class="col-lg-3"><div class="small text-muted">Свободно сейчас</div><div class="h4 mb-0" data-availability-summary="stock">{{ availability.stock|length if availability else 0 }}</div></div>
+        <div class="col-lg-3"><div class="small text-muted">Заказано на склад</div><div class="h4 mb-0" data-availability-summary="ordered">{{ availability.stock_needs|length if availability else 0 }}</div></div>
+        <div class="col-lg-3"><div class="small text-muted">В производстве</div><div class="h4 mb-0" data-availability-summary="production">{{ availability.production_lines|length if availability else 0 }}</div></div>
+        <div class="col-lg-3"><div class="small text-muted">В пути</div><div class="h4 mb-0" data-availability-summary="inbound">{{ availability.inbound_movements|length if availability else 0 }}</div></div>
+      </div>
+      <div class="table-responsive mt-3">
+        <table class="table table-sm align-middle">
+          <thead><tr><th>Источник</th><th>Количество / VIN</th><th>Срок</th><th>Статус</th></tr></thead>
+          <tbody id="availabilityRows">
+            {% if availability %}
+            {% for need in availability.stock_needs %}
+              <tr><td>Заказано на склад</td><td>{{ need.quantity }} шт.</td><td>{{ need.required_by|date_format }}</td><td><span class="badge text-bg-{{ need.status|status_badge_class }}">{{ need.status|status_label }}</span></td></tr>
+            {% endfor %}
+            {% for line in availability.production_lines %}
+              <tr><td>В производстве</td><td>{{ line.quantity - (line.produced_qty or 0) }} шт.</td><td>{{ line.supply_need.required_by|date_format if line.supply_need else '' }}</td><td><span class="badge text-bg-{{ line.status|status_badge_class }}">{{ line.status|status_label }}</span></td></tr>
+            {% endfor %}
+            {% for unit in availability.produced_units %}
+              <tr><td>Выпущено без VIN</td><td>#{{ unit.id }}</td><td>{{ unit.produced_at|date_format }}</td><td><span class="badge text-bg-warning">{{ unit.status|status_label }}</span></td></tr>
+            {% endfor %}
+            {% for movement in availability.inbound_movements %}
+              <tr><td>В пути</td><td>{{ movement.trailer.vin if movement.trailer else '' }}</td><td>{{ movement.arrival_date|date_format }}</td><td><span class="badge text-bg-primary">{{ movement.status|status_label }}</span></td></tr>
+            {% endfor %}
+            {% if not availability.stock_needs and not availability.production_lines and not availability.produced_units and not availability.inbound_movements %}
+              <tr><td colspan="4" class="text-muted">Будущих поступлений по выбранной модели нет.</td></tr>
+            {% endif %}
+            {% else %}
+              <tr><td colspan="4" class="text-muted">Выберите модель и склад, чтобы увидеть доступность.</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <div class="col-12">
     {{ form.submit(class="btn btn-primary") }}
     <a class="btn btn-outline-secondary" href="{{ url_for('main.orders_list') }}">Назад</a>
   </div>
 </form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const itemInput = document.querySelector('#item_search');
+  const itemSelect = document.querySelector('#order_item_id');
+  const customerInput = document.querySelector('#customer_search');
+  const customerSelect = document.querySelector('#order_customer_id');
+  const editCustomerLink = document.querySelector('#editCustomerLink');
+  const warehouseSelect = document.querySelector('#warehouse_id');
+  const sourceSelect = document.querySelector('#fulfillment_source');
+  const trailerSelect = document.querySelector('#order_trailer_id');
+  const trailerCountBadge = document.querySelector('#trailerCountBadge');
+  const itemOptions = Array.from(document.querySelectorAll('#orderItemOptions option'));
+  const customerOptionsList = document.querySelector('#customerOptions');
+  let customerOptions = Array.from(document.querySelectorAll('#customerOptions option'));
+
+  function syncCustomerId() {
+    if (!customerInput || !customerSelect) return;
+    const match = customerOptions.find((option) => option.value === customerInput.value);
+    customerSelect.value = match ? match.dataset.id : '0';
+    if (editCustomerLink) {
+      if (match) {
+        const params = new URLSearchParams();
+        {% if form.order_id %}
+        params.set('return_to', 'order_edit');
+        params.set('order_id', '{{ form.order_id }}');
+        {% else %}
+        params.set('return_to', 'order_create');
+        {% endif %}
+        editCustomerLink.href = `/customers/${match.dataset.id}/edit?${params.toString()}`;
+        editCustomerLink.classList.remove('disabled');
+      } else {
+        editCustomerLink.href = '#';
+        editCustomerLink.classList.add('disabled');
+      }
+    }
+  }
+
+  let customerSearchTimer = null;
+  function refreshCustomerOptions() {
+    if (!customerInput || !customerOptionsList) return;
+    const query = customerInput.value.trim();
+    if (query.length < 2) {
+      syncCustomerId();
+      return;
+    }
+    window.clearTimeout(customerSearchTimer);
+    customerSearchTimer = window.setTimeout(async () => {
+      const response = await fetch(`{{ url_for('main.api_customers_search') }}?q=${encodeURIComponent(query)}`);
+      if (!response.ok) return;
+      const data = await response.json();
+      customerOptionsList.innerHTML = (data.customers || []).map((customer) =>
+        `<option value="${customer.label}" data-id="${customer.id}"></option>`
+      ).join('');
+      customerOptions = Array.from(document.querySelectorAll('#customerOptions option'));
+      syncCustomerId();
+    }, 180);
+  }
+
+  function syncItemId() {
+    if (!itemInput || !itemSelect) return;
+    const match = itemOptions.find((option) => option.value === itemInput.value);
+    itemSelect.value = match ? match.dataset.id : '0';
+  }
+
+  function filterTrailers() {
+    if (!trailerSelect) return;
+    const itemId = itemSelect ? itemSelect.value : '0';
+    const warehouseId = warehouseSelect ? warehouseSelect.value : '0';
+    const source = sourceSelect ? sourceSelect.value : '';
+    let visibleCount = 0;
+
+    Array.from(trailerSelect.options).forEach((option) => {
+      if (!option.value || option.value === '0') {
+        option.hidden = false;
+        return;
+      }
+      const sameItem = !itemId || itemId === '0' || option.dataset.itemId === itemId;
+      let sameWarehouse = true;
+      if (warehouseId && warehouseId !== '0') {
+        sameWarehouse = source === 'other_warehouse'
+          ? option.dataset.warehouseId !== warehouseId
+          : option.dataset.warehouseId === warehouseId;
+      }
+      const visible = sameItem && sameWarehouse && source !== 'production';
+      option.hidden = !visible;
+      if (visible) visibleCount += 1;
+      if (option.selected && !visible) trailerSelect.value = '0';
+    });
+    if (trailerCountBadge) trailerCountBadge.textContent = visibleCount + ' VIN';
+  }
+
+  async function refreshAvailability() {
+    const itemId = itemSelect ? itemSelect.value : '0';
+    const warehouseId = warehouseSelect ? warehouseSelect.value : '0';
+    const rowsBody = document.querySelector('#availabilityRows');
+    if (!rowsBody) return;
+    if (!itemId || itemId === '0' || !warehouseId || warehouseId === '0') {
+      rowsBody.innerHTML = '<tr><td colspan="4" class="text-muted">Выберите модель и склад, чтобы увидеть доступность.</td></tr>';
+      document.querySelectorAll('[data-availability-summary]').forEach((node) => { node.textContent = '0'; });
+      return;
+    }
+    const response = await fetch(`{{ url_for('main.api_order_availability') }}?item_id=${encodeURIComponent(itemId)}&warehouse_id=${encodeURIComponent(warehouseId)}`);
+    if (!response.ok) return;
+    const data = await response.json();
+    const summary = data.summary || {};
+    Object.entries(summary).forEach(([key, value]) => {
+      const node = document.querySelector(`[data-availability-summary="${key}"]`);
+      if (node) node.textContent = value;
+    });
+    if (!data.rows || !data.rows.length) {
+      rowsBody.innerHTML = '<tr><td colspan="4" class="text-muted">Будущих поступлений по выбранной модели нет.</td></tr>';
+      return;
+    }
+    rowsBody.innerHTML = data.rows.map((row) => (
+      `<tr><td>${row.source || ''}</td><td>${row.value || ''}</td><td>${row.date || ''}</td><td>${row.status || ''}</td></tr>`
+    )).join('');
+  }
+
+  if (customerInput) customerInput.addEventListener('input', () => { refreshCustomerOptions(); syncCustomerId(); });
+  if (itemInput) itemInput.addEventListener('input', () => { syncItemId(); filterTrailers(); refreshAvailability(); });
+  if (warehouseSelect) warehouseSelect.addEventListener('change', () => { filterTrailers(); refreshAvailability(); });
+  if (sourceSelect) sourceSelect.addEventListener('change', filterTrailers);
+  syncCustomerId();
+  syncItemId();
+  filterTrailers();
+  refreshAvailability();
+})();
+</script>
 {% endblock %}

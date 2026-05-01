@@ -11,6 +11,7 @@
     <div class="d-flex gap-2 flex-wrap">
         <a href="{{ url_for('main.order_create', return_to='manager_workspace') }}" class="btn btn-orange"><i class="bi bi-plus-lg me-1"></i>Заказ</a>
         <a href="{{ url_for('main.lead_create', return_to='manager_workspace') }}" class="btn btn-soft"><i class="bi bi-plus-lg me-1"></i>Заявка</a>
+        <a href="{{ url_for('main.stock_replenishment_create') }}" class="btn btn-soft"><i class="bi bi-box-arrow-in-down me-1"></i>Заказать на склад</a>
     </div>
 </section>
 
@@ -36,10 +37,16 @@
     <div class="app-card kpi-card"><div><div class="kpi-title">Новые заявки</div><div class="kpi-value">{{ new_leads|length }}</div><div class="kpi-caption">нужна обработка</div></div><div class="kpi-icon"><i class="bi bi-chat-left-text"></i></div></div>
     <div class="app-card kpi-card"><div><div class="kpi-title">Заказы в работе</div><div class="kpi-value">{{ active_orders|length }}</div><div class="kpi-caption">по складу</div></div><div class="kpi-icon"><i class="bi bi-receipt"></i></div></div>
     <div class="app-card kpi-card"><div><div class="kpi-title">В наличии</div><div class="kpi-value">{{ stock_trailers|length }}</div><div class="kpi-caption">свободные VIN</div></div><div class="kpi-icon"><i class="bi bi-box-seam"></i></div></div>
-    <div class="app-card kpi-card"><div><div class="kpi-title">В производстве</div><div class="kpi-value">{{ production_for_warehouse|length }}</div><div class="kpi-caption">для склада</div></div><div class="kpi-icon"><i class="bi bi-tools"></i></div></div>
+    <div class="app-card kpi-card"><div><div class="kpi-title">В производстве</div><div class="kpi-value">{{ production_qty_left }}</div><div class="kpi-caption">осталось выпустить</div></div><div class="kpi-icon"><i class="bi bi-tools"></i></div></div>
+    <div class="app-card kpi-card"><div><div class="kpi-title">Выпущено без VIN</div><div class="kpi-value">{{ produced_units_for_warehouse|length }}</div><div class="kpi-caption">для моего склада</div></div><div class="kpi-icon"><i class="bi bi-upc-scan"></i></div></div>
+    <div class="app-card kpi-card"><div><div class="kpi-title">Ждёт отправки</div><div class="kpi-value">{{ ready_at_production_rows|length }}</div><div class="kpi-caption">на складе выпуска</div></div><div class="kpi-icon"><i class="bi bi-send"></i></div></div>
     <div class="app-card kpi-card"><div><div class="kpi-title">В пути / к приёмке</div><div class="kpi-value">{{ inbound_movements|length }}</div><div class="kpi-caption">ожидают склад</div></div><div class="kpi-icon"><i class="bi bi-truck"></i></div></div>
     <div class="app-card kpi-card"><div><div class="kpi-title">К выдаче</div><div class="kpi-value">{{ ready_to_ship_orders|length }}</div><div class="kpi-caption">документы / отгрузка</div></div><div class="kpi-icon"><i class="bi bi-clipboard-check"></i></div></div>
     <div class="app-card kpi-card"><div><div class="kpi-title">Оплачено, не отгружено</div><div class="kpi-value">{{ paid_not_shipped_orders|length }}</div><div class="kpi-caption">контроль выдачи</div></div><div class="kpi-icon"><i class="bi bi-cash-coin"></i></div></div>
+    <div class="app-card kpi-card"><div><div class="kpi-title">Оплачено, документы не выданы</div><div class="kpi-value">{{ paid_docs_not_issued_orders|length }}</div><div class="kpi-caption">нужно оформить продажу</div></div><div class="kpi-icon"><i class="bi bi-file-earmark-text"></i></div></div>
+    <div class="app-card kpi-card"><div><div class="kpi-title">Продано, не отгружено</div><div class="kpi-value">{{ planned_ship_orders|length }}</div><div class="kpi-caption">юридически продано</div></div><div class="kpi-icon"><i class="bi bi-hourglass-split"></i></div></div>
+    <div class="app-card kpi-card"><div><div class="kpi-title">Выручка сегодня</div><div class="kpi-value">{{ sold_today_revenue|money }}</div><div class="kpi-caption">продано: {{ sold_today_orders|length }}</div></div><div class="kpi-icon"><i class="bi bi-graph-up-arrow"></i></div></div>
+    <div class="app-card kpi-card"><div><div class="kpi-title">Выручка за месяц</div><div class="kpi-value">{{ sold_month_revenue|money }}</div><div class="kpi-caption">продано: {{ sold_month_orders|length }}</div></div><div class="kpi-icon"><i class="bi bi-calendar3"></i></div></div>
 </div>
 
 <ul class="nav nav-tabs mb-3" role="tablist">
@@ -48,9 +55,14 @@
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#orders-tab" type="button">Заказы</button></li>
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#stock-tab" type="button">Мой склад</button></li>
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#production-tab" type="button">В производстве</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#produced-tab" type="button">Выпущено без VIN</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#ready-transfer-tab" type="button">Готово к отправке</button></li>
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#inbound-tab" type="button">В пути / к приёмке</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#movements-tab" type="button">Перемещения</button></li>
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#payments-tab" type="button">Оплаты</button></li>
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#issue-tab" type="button">К выдаче</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#planned-shipments-tab" type="button">Плановые отгрузки</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#sales-tab" type="button">Продажи</button></li>
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#other-stock-tab" type="button">Другие склады</button></li>
 </ul>
 
@@ -105,12 +117,43 @@
 
     <div class="tab-pane fade" id="stock-tab">
         <div class="app-card">
-            <div class="card-header">Мой склад</div>
+            <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span>Мой склад</span>
+                <div class="btn-group btn-group-sm stock-filter-group" role="group" aria-label="Фильтр склада">
+                    <button class="btn btn-soft active" type="button" data-stock-filter="available">Свободные</button>
+                    <button class="btn btn-soft" type="button" data-stock-filter="reserved">Резерв</button>
+                    <button class="btn btn-soft" type="button" data-stock-filter="sold_not_shipped">Проданы не отгружены</button>
+                    <button class="btn btn-soft" type="button" data-stock-filter="in_transit">В пути</button>
+                    <button class="btn btn-soft" type="button" data-stock-filter="produced_no_vin">Без VIN</button>
+                    <button class="btn btn-soft" type="button" data-stock-filter="ready_production">На складе выпуска</button>
+                    <button class="btn btn-soft" type="button" data-stock-filter="shipped">Отгружены</button>
+                    <button class="btn btn-soft" type="button" data-stock-filter="all">Все</button>
+                </div>
+            </div>
             <div class="table-responsive"><table class="table table-hover align-middle">
-                <thead><tr><th>VIN</th><th>Артикул</th><th>Модель</th><th>Статус</th><th></th></tr></thead>
-                <tbody>{% for trailer in stock_trailers + reserved_trailers %}
-                    <tr><td class="fw-semibold">{{ trailer.vin }}</td><td>{{ trailer.item.article if trailer.item else '' }}</td><td>{{ trailer.item.name if trailer.item else '' }}</td><td><span class="badge text-bg-{{ trailer.status|status_badge_class }}">{{ trailer.status|status_label }}</span></td><td class="text-end">{% if trailer.status == 'IN_STOCK' %}<a class="btn btn-sm btn-orange" href="{{ url_for('main.order_create', trailer_id=trailer.id, item_id=trailer.item_id, return_to='manager_workspace') }}">Создать заказ</a>{% endif %}</td></tr>
-                {% else %}<tr><td colspan="5" class="text-muted p-3">На складе нет свободных прицепов</td></tr>{% endfor %}</tbody>
+                <thead><tr><th>Группа</th><th>VIN</th><th>Артикул</th><th>Модель</th><th>Статус</th><th>Заказ</th><th></th></tr></thead>
+                <tbody>
+                {% for row in warehouse_stock_rows %}
+                    {% set trailer = row.trailer %}
+                    {% set unit = row.unit if row.unit is defined else None %}
+                    <tr data-stock-group="{{ row.group }}" {% if row.group != 'available' %}class="d-none"{% endif %}>
+                        <td><span class="badge text-bg-{{ row.group|status_badge_class }}">{{ row.group_label }}</span></td>
+                        <td class="fw-semibold">{{ trailer.vin if trailer else ('Ед. #' ~ (unit.id|string)) if unit else '' }}</td>
+                        <td>{{ trailer.item.article if trailer and trailer.item else unit.item.article if unit and unit.item else '' }}</td>
+                        <td>{{ trailer.item.name if trailer and trailer.item else unit.item.name if unit and unit.item else '' }}</td>
+                        <td>
+                            {% if trailer %}
+                                <span class="badge text-bg-{{ trailer.status|status_badge_class }}">{{ trailer.status|status_label }}</span>
+                            {% elif unit %}
+                                <span class="badge text-bg-{{ unit.status|status_badge_class }}">{{ unit.status|status_label }}</span>
+                            {% endif %}
+                        </td>
+                        <td>{% if row.order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=row.order.id) }}">{{ row.order.order_number }}</a>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                        <td class="text-end">{% if row.group == 'available' and trailer %}<a class="btn btn-sm btn-orange" href="{{ url_for('main.order_create', trailer_id=trailer.id, item_id=trailer.item_id, return_to='manager_workspace') }}">Создать заказ</a>{% endif %}</td>
+                    </tr>
+                {% else %}<tr><td colspan="7" class="text-muted p-3">На складе нет прицепов</td></tr>{% endfor %}
+                    <tr id="stockEmptyRow" class="{% if not warehouse_stock_rows or stock_trailers %}d-none{% endif %}"><td colspan="7" class="text-muted p-3">В выбранной группе нет прицепов</td></tr>
+                </tbody>
             </table></div>
         </div>
     </div>
@@ -119,10 +162,58 @@
         <div class="app-card">
             <div class="card-header">В производстве для склада</div>
             <div class="table-responsive"><table class="table table-hover align-middle">
-                <thead><tr><th>Заявка</th><th>Модель</th><th>Кол-во</th><th>Выпущено</th><th>Осталось</th><th>Срок</th><th>Статус</th></tr></thead>
+                <thead><tr><th>Тип</th><th>Заявка</th><th>Модель</th><th>Кол-во</th><th>Выпущено</th><th>Осталось</th><th>Срок</th><th>Статус</th><th>Заказ</th></tr></thead>
                 <tbody>{% for line in production_for_warehouse %}
-                    <tr><td>{{ line.production_request.request_number }}</td><td class="fw-semibold">{{ line.item.article if line.item else '' }} {{ line.item.name if line.item else '' }}</td><td>{{ line.quantity }}</td><td>{{ line.produced_qty or 0 }}</td><td>{{ line.quantity - (line.produced_qty or 0) }}</td><td>{{ line.supply_need.required_by|date_format if line.supply_need else '' }}</td><td><span class="badge text-bg-{{ line.status|status_badge_class }}">{{ line.status|status_label }}</span></td></tr>
-                {% else %}<tr><td colspan="7" class="text-muted p-3">Для склада нет активного производства</td></tr>{% endfor %}</tbody>
+                    <tr>
+                        <td><span class="badge text-bg-{{ line.supply_need.need_type|status_badge_class if line.supply_need else 'secondary' }}">{{ line.supply_need.need_type|status_label if line.supply_need else 'Без потребности' }}</span></td>
+                        <td>{{ line.production_request.request_number }}</td>
+                        <td class="fw-semibold">{{ line.item.article if line.item else '' }} {{ line.item.name if line.item else '' }}</td>
+                        <td>{{ line.quantity }}</td><td>{{ line.produced_qty or 0 }}</td><td>{{ line.quantity - (line.produced_qty or 0) }}</td>
+                        <td>{{ line.supply_need.required_by|date_format if line.supply_need else '' }}</td>
+                        <td><span class="badge text-bg-{{ line.status|status_badge_class }}">{{ line.status|status_label }}</span></td>
+                        <td>{% if line.supply_need and line.supply_need.order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=line.supply_need.order.id) }}">{{ line.supply_need.order.order_number }}</a>{% else %}<span class="badge text-bg-info">Пополнение склада</span>{% endif %}</td>
+                    </tr>
+                {% else %}<tr><td colspan="9" class="text-muted p-3">Для склада нет активного производства</td></tr>{% endfor %}</tbody>
+            </table></div>
+        </div>
+    </div>
+
+    <div class="tab-pane fade" id="produced-tab">
+        <div class="app-card">
+            <div class="card-header">Выпущено без VIN для склада</div>
+            <div class="table-responsive"><table class="table table-hover align-middle">
+                <thead><tr><th>Единица</th><th>Тип</th><th>Модель</th><th>Дата выпуска</th><th>Склад назначения</th><th>Статус</th></tr></thead>
+                <tbody>{% for unit in produced_units_for_warehouse %}
+                    {% set need = unit.production_request_line.supply_need if unit.production_request_line else None %}
+                    <tr>
+                        <td>#{{ unit.id }}</td>
+                        <td><span class="badge text-bg-{{ need.need_type|status_badge_class if need else 'secondary' }}">{{ need.need_type|status_label if need else 'Без потребности' }}</span></td>
+                        <td class="fw-semibold">{{ unit.item.article if unit.item else '' }} {{ unit.item.name if unit.item else '' }}</td>
+                        <td>{{ unit.produced_at|date_format }}</td>
+                        <td>{{ unit.target_warehouse.name if unit.target_warehouse else '' }}</td>
+                        <td><span class="badge text-bg-{{ unit.status|status_badge_class }}">{{ unit.status|status_label }}</span></td>
+                    </tr>
+                {% else %}<tr><td colspan="6" class="text-muted p-3">Выпущенных единиц без VIN нет</td></tr>{% endfor %}</tbody>
+            </table></div>
+        </div>
+    </div>
+
+    <div class="tab-pane fade" id="ready-transfer-tab">
+        <div class="app-card">
+            <div class="card-header">Готово на складе выпуска, ждёт отправки</div>
+            <div class="table-responsive"><table class="table table-hover align-middle">
+                <thead><tr><th>VIN</th><th>Тип</th><th>Модель</th><th>Склад выпуска</th><th>Склад назначения</th><th>Заказ</th><th>Статус</th></tr></thead>
+                <tbody>{% for row in ready_at_production_rows %}
+                    <tr>
+                        <td class="fw-semibold">{{ row.unit.trailer.vin if row.unit and row.unit.trailer else '' }}</td>
+                        <td><span class="badge text-bg-{{ row.need_type|status_badge_class }}">{{ row.need_type|status_label }}</span></td>
+                        <td>{{ row.unit.item.article if row.unit and row.unit.item else '' }} {{ row.unit.item.name if row.unit and row.unit.item else '' }}</td>
+                        <td>{{ production_warehouse.name if production_warehouse else '' }}</td>
+                        <td>{{ row.target_warehouse.name if row.target_warehouse else '' }}</td>
+                        <td>{% if row.order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=row.order.id) }}">{{ row.order.order_number }}</a>{% else %}<span class="text-muted">на склад</span>{% endif %}</td>
+                        <td><span class="badge text-bg-{{ row.unit.trailer.status|status_badge_class if row.unit and row.unit.trailer else 'secondary' }}">{{ row.unit.trailer.status|status_label if row.unit and row.unit.trailer else '' }}</span></td>
+                    </tr>
+                {% else %}<tr><td colspan="7" class="text-muted p-3">Готовых к отправке прицепов нет</td></tr>{% endfor %}</tbody>
             </table></div>
         </div>
     </div>
@@ -131,11 +222,81 @@
         <div class="app-card">
             <div class="card-header">В пути / к приёмке</div>
             <div class="table-responsive"><table class="table table-hover align-middle">
-                <thead><tr><th>VIN</th><th>Модель</th><th>Откуда</th><th>Куда</th><th>Отправка</th><th>Ожидается</th><th>Заказ</th><th></th></tr></thead>
+                <thead><tr><th>VIN</th><th>Тип</th><th>Модель</th><th>Откуда</th><th>Куда</th><th>Отправка</th><th>Ожидается</th><th>Заказ</th><th></th></tr></thead>
                 <tbody>{% for m in inbound_movements %}
-                    <tr><td class="fw-semibold">{{ m.trailer.vin if m.trailer else '' }}</td><td>{{ m.trailer.item.article if m.trailer and m.trailer.item else '' }}</td><td>{{ m.from_warehouse.name if m.from_warehouse else '' }}</td><td>{{ m.to_warehouse.name if m.to_warehouse else '' }}</td><td>{{ m.departure_date|date_format }}</td><td>{{ m.arrival_date|date_format }}</td><td>{{ m.order.order_number if m.order else '' }}</td><td class="text-end"><form method="post" action="{{ url_for('main.stock_movement_receive', movement_id=m.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-success">Принять на склад</button></form></td></tr>
-                {% else %}<tr><td colspan="8" class="text-muted p-3">Входящих перемещений нет</td></tr>{% endfor %}</tbody>
+                    <tr><td class="fw-semibold">{{ m.trailer.vin if m.trailer else '' }}</td><td>{% if m.order %}<span class="badge text-bg-secondary">Заказ клиента</span>{% else %}<span class="badge text-bg-info">Пополнение склада</span>{% endif %}</td><td>{{ m.trailer.item.article if m.trailer and m.trailer.item else '' }}</td><td>{{ m.from_warehouse.name if m.from_warehouse else '' }}</td><td>{{ m.to_warehouse.name if m.to_warehouse else '' }}</td><td>{{ m.departure_date|date_format }}</td><td>{{ m.arrival_date|date_format }}</td><td>{{ m.order.order_number if m.order else 'на склад' }}</td><td class="text-end"><form method="post" action="{{ url_for('main.stock_movement_receive', movement_id=m.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-success">Принять на склад</button></form></td></tr>
+                {% else %}<tr><td colspan="9" class="text-muted p-3">Входящих перемещений нет</td></tr>{% endfor %}</tbody>
             </table></div>
+        </div>
+    </div>
+
+    <div class="tab-pane fade" id="movements-tab">
+        <div class="row g-3">
+            <div class="col-12">
+                <div class="app-card">
+                    <div class="card-header">Входящие перемещения на мой склад</div>
+                    <div class="table-responsive"><table class="table table-hover align-middle">
+                        <thead><tr><th>Партия</th><th>VIN</th><th>Модель</th><th>Откуда</th><th>Статус</th><th>Отправка</th><th>Ожидается</th><th></th></tr></thead>
+                        <tbody>{% for m in inbound_movements %}
+                            <tr>
+                                <td>{% if m.batch_key %}<a href="{{ url_for('main.stock_movements_list', batch_key=m.batch_key) }}">{{ m.batch_key }}</a>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                                <td class="fw-semibold">{{ m.trailer.vin if m.trailer else '' }}</td>
+                                <td>{{ m.trailer.item.article if m.trailer and m.trailer.item else '' }}</td>
+                                <td>{{ m.from_warehouse.name if m.from_warehouse else '' }}</td>
+                                <td><span class="badge text-bg-{{ m.status|status_badge_class }}">{{ m.status|status_label }}</span></td>
+                                <td>{{ m.departure_date|date_format }}</td>
+                                <td>{{ m.arrival_date|date_format }}</td>
+                                <td class="text-end"><form method="post" action="{{ url_for('main.stock_movement_receive', movement_id=m.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-success">Принять</button></form></td>
+                            </tr>
+                        {% else %}<tr><td colspan="8" class="text-muted p-3">Входящих перемещений нет</td></tr>{% endfor %}</tbody>
+                    </table></div>
+                </div>
+            </div>
+
+            <div class="col-12">
+                <div class="app-card">
+                    <div class="card-header">Исходящие перемещения с моего склада</div>
+                    <div class="table-responsive"><table class="table table-hover align-middle">
+                        <thead><tr><th>Партия</th><th>VIN</th><th>Модель</th><th>Куда</th><th>Статус</th><th>Отправка</th><th>Ожидается</th><th>Заказ</th></tr></thead>
+                        <tbody>{% for m in outgoing_movements %}
+                            <tr>
+                                <td>{% if m.batch_key %}<a href="{{ url_for('main.stock_movements_list', batch_key=m.batch_key) }}">{{ m.batch_key }}</a>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                                <td class="fw-semibold">{{ m.trailer.vin if m.trailer else '' }}</td>
+                                <td>{{ m.trailer.item.article if m.trailer and m.trailer.item else '' }}</td>
+                                <td>{{ m.to_warehouse.name if m.to_warehouse else '' }}</td>
+                                <td><span class="badge text-bg-{{ m.status|status_badge_class }}">{{ m.status|status_label }}</span></td>
+                                <td>{{ m.departure_date|date_format }}</td>
+                                <td>{{ m.arrival_date|date_format }}</td>
+                                <td>{% if m.order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=m.order.id) }}">{{ m.order.order_number }}</a>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                            </tr>
+                        {% else %}<tr><td colspan="8" class="text-muted p-3">Исходящих перемещений нет</td></tr>{% endfor %}</tbody>
+                    </table></div>
+                </div>
+            </div>
+
+            <div class="col-xl-6">
+                <div class="app-card h-100">
+                    <div class="card-header">Проданные, но не отгруженные клиенту</div>
+                    <div class="table-responsive"><table class="table table-hover align-middle">
+                        <thead><tr><th>Заказ</th><th>Клиент</th><th>VIN</th><th>Документы</th><th>План</th></tr></thead>
+                        <tbody>{% for order in planned_ship_orders %}
+                            <tr><td><a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=order.id) }}">{{ order.order_number }}</a></td><td>{{ order.customer.name if order.customer else '' }}</td><td class="fw-semibold">{{ order.trailer.vin if order.trailer else '' }}</td><td>{{ order.documents_issued_at|date_format }}</td><td>{{ order.planned_ship_date|date_format if order.planned_ship_date else 'не задана' }}</td></tr>
+                        {% else %}<tr><td colspan="5" class="text-muted p-3">Таких заказов нет</td></tr>{% endfor %}</tbody>
+                    </table></div>
+                </div>
+            </div>
+
+            <div class="col-xl-6">
+                <div class="app-card h-100">
+                    <div class="card-header">Плановые отгрузки клиентам</div>
+                    <div class="table-responsive"><table class="table table-hover align-middle">
+                        <thead><tr><th>Дата</th><th>Клиент</th><th>VIN</th><th>Статус</th><th></th></tr></thead>
+                        <tbody>{% for order in planned_ship_orders %}
+                            <tr><td>{{ order.planned_ship_date|date_format if order.planned_ship_date else 'не задана' }}</td><td>{{ order.customer.name if order.customer else '' }}</td><td class="fw-semibold">{{ order.trailer.vin if order.trailer else '' }}</td><td><span class="badge text-bg-{{ order.status|status_badge_class }}">{{ order.status|status_label }}</span></td><td class="text-end"><a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=order.id) }}">Открыть</a></td></tr>
+                        {% else %}<tr><td colspan="5" class="text-muted p-3">Плановых отгрузок нет</td></tr>{% endfor %}</tbody>
+                    </table></div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -157,8 +318,32 @@
             <div class="table-responsive"><table class="table table-hover align-middle">
                 <thead><tr><th>Заказ</th><th>Клиент</th><th>VIN</th><th>Оплачено</th><th>Остаток</th><th>Документы</th><th></th></tr></thead>
                 <tbody>{% for order in ready_to_ship_orders %}
-                    <tr><td class="fw-semibold">{{ order.order_number }}</td><td>{{ order.customer.name if order.customer else '' }}</td><td>{{ order.trailer.vin if order.trailer else '' }}</td><td>{{ order.confirmed_paid_amount|money }}</td><td>{{ order.remaining_amount|money }}</td><td>{% if order.documents_issued %}<span class="badge text-bg-success">Выданы</span>{% else %}<span class="badge text-bg-secondary">Не выданы</span>{% endif %}</td><td class="text-end d-flex gap-1 justify-content-end"><a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=order.id) }}">Открыть</a>{% if not order.documents_issued %}<form method="post" action="{{ url_for('main.order_issue_documents', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-outline-primary">Документы</button></form>{% endif %}<form method="post" action="{{ url_for('main.order_ship', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-success">Отгрузить</button></form></td></tr>
+                    <tr><td class="fw-semibold">{{ order.order_number }}</td><td>{{ order.customer.name if order.customer else '' }}</td><td>{{ order.trailer.vin if order.trailer else '' }}</td><td>{{ order.confirmed_paid_amount|money }}</td><td>{{ order.remaining_amount|money }}</td><td>{% if order.documents_issued %}<span class="badge text-bg-success">Выданы</span>{% else %}<span class="badge text-bg-secondary">Не выданы</span>{% endif %}</td><td class="text-end d-flex gap-1 justify-content-end"><a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=order.id) }}">Открыть</a>{% if not order.documents_issued %}<form method="post" action="{{ url_for('main.order_issue_documents', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-outline-primary">Документы</button></form>{% endif %}<form method="post" action="{{ url_for('main.order_ship', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-success" {% if not order.documents_issued %}disabled{% endif %}>Отгрузить</button></form></td></tr>
                 {% else %}<tr><td colspan="7" class="text-muted p-3">Нет заказов к выдаче</td></tr>{% endfor %}</tbody>
+            </table></div>
+        </div>
+    </div>
+
+    <div class="tab-pane fade" id="planned-shipments-tab">
+        <div class="app-card">
+            <div class="card-header">Плановые отгрузки / выдачи</div>
+            <div class="table-responsive"><table class="table table-hover align-middle">
+                <thead><tr><th>Заказ</th><th>Клиент</th><th>Телефон</th><th>VIN</th><th>Склад</th><th>Плановая дата</th><th>Комментарий</th><th></th></tr></thead>
+                <tbody>{% for order in planned_ship_orders %}
+                    <tr><td class="fw-semibold">{{ order.order_number }}</td><td>{{ order.customer.name if order.customer else '' }}</td><td>{{ order.customer.phone if order.customer else '' }}</td><td>{{ order.trailer.vin if order.trailer else '' }}</td><td>{{ order.warehouse.name if order.warehouse else '' }}</td><td>{{ order.planned_ship_date|date_format if order.planned_ship_date else 'не задана' }}</td><td>{{ order.planned_ship_comment or '' }}</td><td class="text-end"><a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=order.id) }}">Открыть</a></td></tr>
+                {% else %}<tr><td colspan="8" class="text-muted p-3">Плановых выдач нет</td></tr>{% endfor %}</tbody>
+            </table></div>
+        </div>
+    </div>
+
+    <div class="tab-pane fade" id="sales-tab">
+        <div class="app-card">
+            <div class="card-header">Продажи по юридической выдаче документов</div>
+            <div class="table-responsive"><table class="table table-hover align-middle">
+                <thead><tr><th>Заказ</th><th>Клиент</th><th>VIN</th><th>Дата продажи</th><th>Сумма</th><th>Статус</th><th></th></tr></thead>
+                <tbody>{% for order in sold_month_orders %}
+                    <tr><td class="fw-semibold">{{ order.order_number }}</td><td>{{ order.customer.name if order.customer else '' }}</td><td>{{ order.trailer.vin if order.trailer else '' }}</td><td>{{ order.documents_issued_at|date_format }}</td><td>{{ order.price|money }}</td><td><span class="badge text-bg-{{ order.status|status_badge_class }}">{{ order.status|status_label }}</span></td><td class="text-end"><a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=order.id) }}">Открыть</a></td></tr>
+                {% else %}<tr><td colspan="7" class="text-muted p-3">Продаж за месяц нет</td></tr>{% endfor %}</tbody>
             </table></div>
         </div>
     </div>
@@ -175,4 +360,31 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const buttons = Array.from(document.querySelectorAll('[data-stock-filter]'));
+  const rows = Array.from(document.querySelectorAll('[data-stock-group]'));
+  const emptyRow = document.querySelector('#stockEmptyRow');
+  if (!buttons.length || !rows.length) return;
+
+  function applyFilter(filter) {
+    let visible = 0;
+    rows.forEach((row) => {
+      const show = filter === 'all' || row.dataset.stockGroup === filter;
+      row.classList.toggle('d-none', !show);
+      if (show) visible += 1;
+    });
+    if (emptyRow) emptyRow.classList.toggle('d-none', visible > 0);
+    buttons.forEach((button) => button.classList.toggle('active', button.dataset.stockFilter === filter));
+  }
+
+  buttons.forEach((button) => {
+    button.addEventListener('click', () => applyFilter(button.dataset.stockFilter));
+  });
+  applyFilter('available');
+})();
+</script>
 {% endblock %}

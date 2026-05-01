@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+  <h1 class="h3 mb-0">{{ title }}</h1>
+  <a class="btn btn-soft" href="{{ url_for('main.stock_movements_list') }}">Назад</a>
+</div>
+
+<form method="post" class="app-card p-4" id="batchMovementForm">
+  {{ form.hidden_tag() }}
+  <div class="row g-3">
+    <div class="col-md-6">
+      {{ form.from_warehouse_id.label(class="form-label") }}
+      {{ form.from_warehouse_id(class="form-select", id="batch_from_warehouse_id") }}
+      {% for error in form.from_warehouse_id.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+    </div>
+    <div class="col-md-6">
+      {{ form.to_warehouse_id.label(class="form-label") }}
+      {{ form.to_warehouse_id(class="form-select") }}
+      {% for error in form.to_warehouse_id.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+    </div>
+    <div class="col-md-4">
+      {{ form.movement_type.label(class="form-label") }}
+      {{ form.movement_type(class="form-select") }}
+      {% for error in form.movement_type.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+    </div>
+    <div class="col-md-4">
+      {{ form.status.label(class="form-label") }}
+      {{ form.status(class="form-select") }}
+      {% for error in form.status.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+    </div>
+    <div class="col-md-4">
+      {{ form.departure_date.label(class="form-label") }}
+      {{ form.departure_date(class="form-control") }}
+      {% for error in form.departure_date.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+    </div>
+    <div class="col-md-4">
+      {{ form.arrival_date.label(class="form-label") }}
+      {{ form.arrival_date(class="form-control") }}
+      {% for error in form.arrival_date.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+    </div>
+    <div class="col-md-8">
+      {{ form.note.label(class="form-label") }}
+      {{ form.note(class="form-control", rows="1") }}
+      {% for error in form.note.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+    </div>
+
+    <div class="col-12">
+      <label class="form-label" for="batchTrailerSearch">Добавить прицеп</label>
+      <div class="input-group">
+        <input class="form-control" id="batchTrailerSearch" list="batchTrailerOptions" autocomplete="off" placeholder="VIN, артикул, модель или склад">
+        <button class="btn btn-soft" type="button" id="addBatchTrailer">Добавить</button>
+      </div>
+      <datalist id="batchTrailerOptions"></datalist>
+      <div class="form-text">Можно выбрать несколько VIN. Количество для VIN-прицепа всегда 1.</div>
+    </div>
+
+    <div class="col-12">
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead><tr><th>VIN</th><th>Модель</th><th>Склад</th><th>Статус</th><th></th></tr></thead>
+          <tbody id="selectedTrailers">
+            {% for trailer in selected_trailers %}
+              <tr data-trailer-id="{{ trailer.id }}">
+                <td class="fw-semibold">{{ trailer.vin }}<input type="hidden" name="trailer_ids" value="{{ trailer.id }}"></td>
+                <td>{{ trailer.item.article if trailer.item else '' }}</td>
+                <td>{{ trailer.warehouse.name if trailer.warehouse else '' }}</td>
+                <td><span class="badge text-bg-{{ trailer.status|status_badge_class }}">{{ trailer.status|status_label }}</span></td>
+                <td class="text-end"><button class="btn btn-sm btn-outline-danger" type="button" data-remove-trailer>Убрать</button></td>
+              </tr>
+            {% else %}
+              <tr id="emptySelectedTrailers"><td colspan="5" class="text-muted">Прицепы не добавлены</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="col-12 d-flex gap-2">
+      {{ form.submit(class="btn btn-orange") }}
+      <a class="btn btn-soft" href="{{ url_for('main.stock_movements_list') }}">Отмена</a>
+    </div>
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const fromWarehouse = document.querySelector('#batch_from_warehouse_id');
+  const search = document.querySelector('#batchTrailerSearch');
+  const optionsList = document.querySelector('#batchTrailerOptions');
+  const addButton = document.querySelector('#addBatchTrailer');
+  const selectedBody = document.querySelector('#selectedTrailers');
+  let options = [];
+  let timer = null;
+
+  function selectedIds() {
+    return Array.from(selectedBody.querySelectorAll('[data-trailer-id]')).map((row) => row.dataset.trailerId);
+  }
+
+  function renderEmptyState() {
+    const hasRows = selectedIds().length > 0;
+    const empty = document.querySelector('#emptySelectedTrailers');
+    if (empty) empty.classList.toggle('d-none', hasRows);
+  }
+
+  async function refreshOptions() {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(async () => {
+      const params = new URLSearchParams();
+      params.set('q', search.value.trim());
+      if (fromWarehouse && fromWarehouse.value) params.set('from_warehouse_id', fromWarehouse.value);
+      const response = await fetch(`{{ url_for('main.api_movement_trailers_search') }}?${params.toString()}`);
+      if (!response.ok) return;
+      const data = await response.json();
+      options = data.trailers || [];
+      const selected = new Set(selectedIds());
+      optionsList.innerHTML = options
+        .filter((trailer) => !selected.has(String(trailer.id)))
+        .map((trailer) => `<option value="${trailer.label}" data-id="${trailer.id}"></option>`)
+        .join('');
+    }, 180);
+  }
+
+  function addSelectedTrailer() {
+    const match = options.find((trailer) => trailer.label === search.value);
+    if (!match || selectedIds().includes(String(match.id))) return;
+    const row = document.createElement('tr');
+    row.dataset.trailerId = match.id;
+    row.innerHTML = `
+      <td class="fw-semibold">${match.vin}<input type="hidden" name="trailer_ids" value="${match.id}"></td>
+      <td>${match.item || ''}</td>
+      <td>${match.warehouse || ''}</td>
+      <td><span class="badge text-bg-secondary">${match.status || ''}</span></td>
+      <td class="text-end"><button class="btn btn-sm btn-outline-danger" type="button" data-remove-trailer>Убрать</button></td>
+    `;
+    selectedBody.appendChild(row);
+    search.value = '';
+    renderEmptyState();
+    refreshOptions();
+  }
+
+  selectedBody.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-remove-trailer]');
+    if (!button) return;
+    button.closest('tr').remove();
+    renderEmptyState();
+    refreshOptions();
+  });
+  if (search) search.addEventListener('input', refreshOptions);
+  if (fromWarehouse) fromWarehouse.addEventListener('change', () => {
+    search.value = '';
+    refreshOptions();
+  });
+  if (addButton) addButton.addEventListener('click', addSelectedTrailer);
+  renderEmptyState();
+  refreshOptions();
+})();
+</script>
+{% endblock %}

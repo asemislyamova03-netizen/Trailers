@@ -1,10 +1,138 @@
 {% extends "base.html" %}
 {% block title %}{{ pr.request_number }}{% endblock %}
 {% block content %}
-<div class="d-flex justify-content-between mb-3"><h1 class="h3">{{ pr.request_number }}</h1><a class="btn btn-outline-secondary" href="{{ url_for('main.production_request_edit', request_id=pr.id) }}">Редактировать статус</a></div>
-<div class="p-3 bg-white border rounded mb-3"><b>Статус:</b> {{ pr.status }} <b class="ms-3">Склад:</b> {{ pr.target_warehouse.name if pr.target_warehouse else '' }} <b class="ms-3">Комментарий:</b> {{ pr.note or '' }}</div>
-<h2 class="h5">Позиции</h2>
-<table class="table table-sm table-striped bg-white"><thead><tr><th>Модель</th><th>Потребность</th><th>Кол-во</th><th>Статус</th><th>Комментарий</th></tr></thead><tbody>{% for l in pr.lines.order_by().all() %}<tr><td>{{ l.item.article if l.item else '' }}</td><td>#{{ l.supply_need_id or '' }}</td><td>{{ l.quantity }}</td><td>{{ l.status }}</td><td>{{ l.note or '' }}</td></tr>{% else %}<tr><td colspan="5" class="text-muted">Позиции не добавлены</td></tr>{% endfor %}</tbody></table>
-<h2 class="h5 mt-4">Добавить позицию</h2>
-<form method="post" class="row g-3">{{ form.hidden_tag() }}{% for field in form if field.name not in ['csrf_token','submit'] %}<div class="col-md-6">{{ field.label(class="form-label") }}{{ field(class="form-control") }}</div>{% endfor %}<div class="col-12">{{ form.submit(class="btn btn-primary") }}</div></form>
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
+  <div>
+    <div class="text-muted small">Заявка на производство</div>
+    <h1 class="h3 mb-0">{{ pr.request_number }}</h1>
+  </div>
+  <div class="d-flex flex-wrap gap-2">
+    <a class="btn btn-soft" href="{{ url_for('main.production_requests_list') }}">К списку</a>
+    <a class="btn btn-orange" href="{{ url_for('main.production_request_edit', request_id=pr.id) }}">Редактировать</a>
+  </div>
+</div>
+
+<div class="app-card mb-4">
+  <div class="row g-3 align-items-center">
+    <div class="col-md-3">
+      <div class="text-muted small">Статус</div>
+      <span class="badge text-bg-{{ pr.status|status_badge_class }}">{{ pr.status|status_label }}</span>
+    </div>
+    <div class="col-md-3">
+      <div class="text-muted small">Склад назначения</div>
+      <div class="fw-semibold">{{ pr.target_warehouse.name if pr.target_warehouse else 'Не выбран' }}</div>
+    </div>
+    <div class="col-md-3">
+      <div class="text-muted small">Дата создания</div>
+      <div>{{ pr.created_at|date_format }}</div>
+    </div>
+    <div class="col-md-3">
+      <div class="text-muted small">Комментарий</div>
+      <div>{{ pr.note or '—' }}</div>
+    </div>
+  </div>
+</div>
+
+<div class="app-card mb-4">
+  <div class="d-flex justify-content-between align-items-center gap-2 mb-3">
+    <h2 class="h5 mb-0">Позиции</h2>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead>
+        <tr>
+          <th>Модель</th>
+          <th>Потребность</th>
+          <th>Склад</th>
+          <th>Количество</th>
+          <th>Срок</th>
+          <th>Статус</th>
+          <th>Комментарии</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for l in pr.lines.order_by().all() %}
+          {% set need = l.supply_need %}
+          {% set order = need.order if need else None %}
+          {% set remaining = (l.quantity or 0) - (l.produced_qty or 0) %}
+          <tr>
+            <td>
+              <div class="fw-semibold">{{ l.item.article if l.item else '' }}</div>
+              <div class="text-muted small">{{ l.item.name if l.item else '' }}</div>
+            </td>
+            <td>
+              {% if need %}
+                <div><span class="badge text-bg-{{ need.need_type|status_badge_class }}">{{ need.need_type|status_label }}</span></div>
+                <div class="small mt-1">
+                  {% if order %}
+                    <a href="{{ url_for('main.order_detail', order_id=order.id) }}">Заказ {{ order.order_number }}</a>
+                    <span class="text-muted">/ {{ order.customer.name if order.customer else 'клиент не указан' }}</span>
+                  {% else %}
+                    <span class="text-muted">На склад</span>
+                  {% endif %}
+                </div>
+                <div class="text-muted small">Потребность #{{ need.id }}</div>
+              {% else %}
+                <span class="text-muted">Без потребности</span>
+              {% endif %}
+            </td>
+            <td>{{ (need.warehouse.name if need and need.warehouse else pr.target_warehouse.name if pr.target_warehouse else '—') }}</td>
+            <td>
+              <div>Заказано: <b>{{ l.quantity }}</b></div>
+              <div class="small text-muted">Выпущено: {{ l.produced_qty or 0 }}</div>
+              <div class="small text-muted">Осталось: {{ remaining if remaining > 0 else 0 }}</div>
+            </td>
+            <td>{{ need.required_by|date_format if need and need.required_by else '—' }}</td>
+            <td><span class="badge text-bg-{{ l.status|status_badge_class }}">{{ l.status|status_label }}</span></td>
+            <td class="small">
+              {% if l.note %}<div><b>Строка:</b> {{ l.note }}</div>{% endif %}
+              {% if l.production_comment %}<div><b>Производство:</b> {{ l.production_comment }}</div>{% endif %}
+              {% if need and need.note %}<div><b>Потребность:</b> {{ need.note }}</div>{% endif %}
+              {% if order and order.manager_comment %}<div><b>Менеджер:</b> {{ order.manager_comment }}</div>{% endif %}
+              {% if order and order.note %}<div><b>Заказ:</b> {{ order.note }}</div>{% endif %}
+              {% if not l.note and not l.production_comment and not (need and need.note) and not (order and order.manager_comment) and not (order and order.note) %}
+                <span class="text-muted">—</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="7" class="text-muted p-3">Позиции не добавлены</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="app-card">
+  <h2 class="h5 mb-3">Добавить позицию</h2>
+  <form method="post" class="row g-3">
+    {{ form.hidden_tag() }}
+    <div class="col-12">
+      {{ form.supply_need_id.label(class="form-label") }}
+      {{ form.supply_need_id(class="form-select") }}
+      <div class="form-text">Показываются только новые потребности без активной производственной строки и подходящие складу этой заявки.</div>
+    </div>
+    <div class="col-md-6">
+      {{ form.item_id.label(class="form-label") }}
+      {{ form.item_id(class="form-select") }}
+      <div class="form-text">Если выбрана потребность, модель возьмётся из неё.</div>
+    </div>
+    <div class="col-md-3">
+      {{ form.quantity.label(class="form-label") }}
+      {{ form.quantity(class="form-control") }}
+      <div class="form-text">Если выбрана потребность, количество возьмётся из неё.</div>
+    </div>
+    <div class="col-md-3">
+      {{ form.status.label(class="form-label") }}
+      {{ form.status(class="form-select") }}
+    </div>
+    <div class="col-12">
+      {{ form.note.label(class="form-label") }}
+      {{ form.note(class="form-control", rows=3) }}
+    </div>
+    <div class="col-12">
+      {{ form.submit(class="btn btn-orange") }}
+    </div>
+  </form>
+</div>
 {% endblock %}

@@ -4,21 +4,32 @@
   <meta charset="utf-8">
   <title>Договор № {{ contract.contract_number or contract.id }}</title>
   <style>
-    body { font-family: "Times New Roman", serif; font-size: 12pt; margin: 2cm; }
-    h1, h2, h3 { text-align: center; margin: 0; padding: 0; }
+    @page { size: A4; margin: 12mm 14mm; }
+    body { font-family: "Times New Roman", serif; font-size: 11.5pt; margin: 0; color: #000; }
+    h1, h2, h3 { text-align: center; margin: 0; padding: 0; page-break-after: avoid; }
     p { text-align: justify; margin: 4px 0; }
-    table { width: 100%; border-collapse: collapse; margin-top: 8px; margin-bottom: 8px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; margin-bottom: 8px; table-layout: fixed; word-wrap: break-word; }
     table.border td, table.border th { border: 1px solid #000; padding: 3px 4px; }
+    td, th { overflow-wrap: anywhere; vertical-align: top; }
     .signature-table td { padding-top: 25px; vertical-align: top; }
-    .page-break { page-break-after: always; margin-top: 40px; }
+    .page-break { break-after: page; page-break-after: always; margin-top: 40px; }
     .place-date { width:100%; margin: 6px 0 8px; }
     .place-date td { padding: 0; }
     .place-date .place { text-align:left; }
     .place-date .date { text-align:right; }
+    .print-toolbar { position: sticky; top: 0; margin: 0 0 12px; padding: 8px; background: #f3f4f6; border: 1px solid #ddd; text-align: right; font-family: Arial, sans-serif; }
+    .print-button { padding: 8px 14px; border: 0; border-radius: 6px; background: #f97316; color: #fff; cursor: pointer; }
+    @media print {
+      .print-toolbar { display: none; }
+      table, tr, td, th { page-break-inside: avoid; }
+    }
   </style>
 </head>
 
 <body>
+  <div class="print-toolbar">
+    <button class="print-button" onclick="window.print()">Печать / сохранить PDF</button>
+  </div>
 
   {# --------- Общие переменные --------- #}
   {% set contract_number = contract.contract_number or contract.id %}
@@ -312,10 +323,10 @@
 
   <table class="border">
     <tr>
-      <th style="width:5%;">№ п/п</th>
-      <th style="width:45%;">Наименование</th>
-      <th style="width:25%;">VIN код</th>
-      <th style="width:25%;">Характеристики</th>
+      <th style="width:8%;">№ п/п</th>
+      <th style="width:34%;">Наименование</th>
+      <th style="width:24%;">VIN код</th>
+      <th style="width:34%;">Характеристики</th>
     </tr>
     <tr>
       <td>1.</td>
@@ -400,10 +411,10 @@
 
   <table class="border">
     <tr>
-      <th style="width:5%;">№ п/п</th>
-      <th style="width:45%;">Наименование</th>
-      <th style="width:25%;">VIN код</th>
-      <th style="width:25%;">Характеристики</th>
+      <th style="width:8%;">№ п/п</th>
+      <th style="width:34%;">Наименование</th>
+      <th style="width:24%;">VIN код</th>
+      <th style="width:34%;">Характеристики</th>
     </tr>
     <tr>
       <td>1.</td>

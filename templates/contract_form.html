@@ -67,6 +67,7 @@
             {% endfor %}
         </div>
     </div>
+    {% if current_user.is_admin %}
     <div class="form-check mb-2">
         {{ form.is_paid(class="form-check-input") }}
         {{ form.is_paid.label(class="form-check-label") }}
@@ -76,6 +77,11 @@
         {{ form.is_shipped(class="form-check-input") }}
         {{ form.is_shipped.label(class="form-check-label") }}
     </div>
+    {% else %}
+    <div class="alert alert-info small">
+        Оплата договора, юридическая продажа и физическая отгрузка управляются карточкой заказа, а не формой договора.
+    </div>
+    {% endif %}
 
 
     <button type="submit" class="btn btn-primary">

@@ -58,6 +58,7 @@
             <dt class="col-5">Исполнение</dt><dd class="col-7">{{ order.fulfillment_source|status_label }}</dd>
             <dt class="col-5">Склад</dt><dd class="col-7">{{ order.warehouse.name if order.warehouse else '' }}</dd>
             <dt class="col-5">VIN</dt><dd class="col-7">{{ order.trailer.vin if order.trailer else 'не выбран' }}</dd>
+            <dt class="col-5">План выдачи</dt><dd class="col-7">{{ order.planned_ship_date|date_format if order.planned_ship_date else 'не задан' }}</dd>
           </dl>
         </div>
       </div>
@@ -110,6 +111,104 @@
       </div>
     </div>
     {% endif %}
+
+    <div class="app-card p-3 mt-4">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h3 class="h6 mb-0">Будущая доступность для склада</h3>
+      </div>
+      <div class="row g-3">
+        <div class="col-xl-3 col-lg-6">
+          <h4 class="small text-muted">В производстве</h4>
+          <table class="table table-sm align-middle">
+            <tbody>
+            {% for line in future_production_lines %}
+              <tr><td>{{ line.production_request.request_number }}</td><td>{{ line.quantity - (line.produced_qty or 0) }} шт.</td><td><span class="badge text-bg-{{ line.status|status_badge_class }}">{{ line.status|status_label }}</span></td></tr>
+            {% else %}<tr><td class="text-muted">Нет</td></tr>{% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="col-xl-3 col-lg-6">
+          <h4 class="small text-muted">Выпущено без VIN</h4>
+          <table class="table table-sm align-middle">
+            <tbody>
+            {% for row in future_produced_unit_rows %}
+              <tr>
+                <td>#{{ row.unit.id }}</td>
+                <td>{{ row.unit.produced_at|date_format }}</td>
+                <td>
+                  {% if row.attach_state == 'current' %}
+                    <span class="badge text-bg-success">Закреплено за этим заказом</span>
+                  {% elif row.attach_state == 'other' %}
+                    <span class="badge text-bg-secondary">Закреплено за другим заказом</span>
+                  {% elif row.can_attach %}
+                    <form method="post" action="{{ url_for('main.order_attach_produced_unit', order_id=order.id, unit_id=row.unit.id) }}">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <input type="hidden" name="form_token" value="{{ form_token() }}">
+                      <button class="btn btn-sm btn-soft">Закрепить под заказ</button>
+                    </form>
+                  {% else %}
+                    <span class="badge text-bg-{{ row.unit.status|status_badge_class }}">{{ row.unit.status|status_label }}</span>
+                  {% endif %}
+                </td>
+              </tr>
+            {% else %}<tr><td class="text-muted">Нет</td></tr>{% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="col-xl-3 col-lg-6">
+          <h4 class="small text-muted">Готово с VIN на складе выпуска</h4>
+          <table class="table table-sm align-middle">
+            <tbody>
+            {% for row in future_ready_trailer_rows %}
+              <tr>
+                <td class="fw-semibold">{{ row.trailer.vin }}</td>
+                <td>{{ row.trailer.warehouse.name if row.trailer.warehouse else '' }}</td>
+                <td>
+                  {% if row.attach_state == 'current' %}
+                    <span class="badge text-bg-success">Закреплено за этим заказом</span>
+                  {% elif row.attach_state == 'other' %}
+                    <span class="badge text-bg-secondary">Закреплено за другим заказом</span>
+                  {% elif row.can_attach %}
+                    <form method="post" action="{{ url_for('main.order_attach_ready_trailer', order_id=order.id, trailer_id=row.trailer.id) }}">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <input type="hidden" name="form_token" value="{{ form_token() }}">
+                      <button class="btn btn-sm btn-orange">Закрепить VIN под заказ</button>
+                    </form>
+                  {% else %}
+                    <span class="badge text-bg-{{ (row.trailer.lifecycle_status or row.trailer.status)|status_badge_class }}">{{ (row.trailer.lifecycle_status or row.trailer.status)|status_label }}</span>
+                  {% endif %}
+                </td>
+              </tr>
+            {% else %}<tr><td class="text-muted">Нет</td></tr>{% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="col-xl-3 col-lg-6">
+          <h4 class="small text-muted">В пути</h4>
+          <table class="table table-sm align-middle">
+            <tbody>
+            {% for movement in future_inbound_movements %}
+              <tr>
+                <td>{{ movement.trailer.vin if movement.trailer else '' }}</td>
+                <td>{{ movement.arrival_date|date_format }}</td>
+                <td><span class="badge text-bg-{{ movement.status|status_badge_class }}">{{ movement.status|status_label }}</span></td>
+                {% if can_manage and not order.trailer_id and not movement.order_id %}
+                <td class="text-end">
+                  <form method="post" action="{{ url_for('main.order_attach_transit', order_id=order.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="form_token" value="{{ form_token() }}">
+                    <input type="hidden" name="movement_id" value="{{ movement.id }}">
+                    <button class="btn btn-sm btn-soft">Закрепить</button>
+                  </form>
+                </td>
+                {% endif %}
+              </tr>
+            {% else %}<tr><td class="text-muted">Нет</td></tr>{% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="tab-pane fade" id="payments-tab">
@@ -131,19 +230,48 @@
           <h2 class="h5">Документы</h2>
           <p><span class="badge text-bg-{{ order.document_status|status_badge_class }}">{{ order.document_status|status_label }}</span></p>
           <p class="text-muted small mb-0">Выданы: {{ order.documents_issued_at|date_format if order.documents_issued_at else 'нет' }}</p>
+          {% if order.planned_ship_date or order.planned_ship_comment %}
+            <hr>
+            <p class="small mb-1"><strong>Плановая выдача:</strong> {{ order.planned_ship_date|date_format if order.planned_ship_date else 'дата не задана' }}</p>
+            {% if order.planned_ship_comment %}<p class="small text-muted mb-0">{{ order.planned_ship_comment }}</p>{% endif %}
+          {% endif %}
+          {% if order_contract %}
+            <hr>
+            <div class="d-flex flex-column gap-2">
+              <div><strong>Договор № {{ order_contract.contract_number or order_contract.id }}</strong></div>
+              <div class="d-flex flex-wrap gap-2">
+                {% if can_manage_contract(order_contract) %}
+                <a class="btn btn-sm btn-soft" href="{{ url_for('main.contract_edit', contract_id=order_contract.id) }}">Изменить</a>
+                {% endif %}
+                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.contract_print', contract_id=order_contract.id) }}" target="_blank">Печать</a>
+                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.contract_pdf', contract_id=order_contract.id) }}" target="_blank">PDF</a>
+                {% if can_manage_contract(order_contract) %}
+                <form method="post" action="{{ url_for('main.contract_delete', contract_id=order_contract.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button class="btn btn-sm btn-outline-danger" onclick="return confirm('Удалить договор?');">Удалить</button>
+                </form>
+                {% endif %}
+              </div>
+            </div>
+          {% endif %}
         </div>
       </div>
       <div class="col-lg-6">
         <div class="app-card p-4">
           <h2 class="h5">Действия</h2>
           {% if can_manage and order.status != 'cancelled' %}
+          {% if not order.documents_issued and not order.is_shipped %}
           <div class="d-flex flex-wrap gap-2">
             <form method="post" action="{{ url_for('main.order_mark_invoice_sent', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-soft">Счёт отправлен</button></form>
             <form method="post" action="{{ url_for('main.order_mark_contract_ready', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-soft">Договор готов</button></form>
             <form method="post" action="{{ url_for('main.order_mark_documents_ready', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-soft">Документы готовы</button></form>
-            <form method="post" action="{{ url_for('main.order_issue_documents', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-orange">Документы выданы</button></form>
-            {% if order.trailer_id %}<form method="post" action="{{ url_for('main.order_contract_create', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-outline-primary">Создать договор</button></form>{% endif %}
+            <form method="post" action="{{ url_for('main.order_issue_documents', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-orange" {% if not order_contract or order.remaining_amount > 0 or not order.trailer_id %}disabled{% endif %}>Документы выданы</button></form>
+            {% if order.trailer_id and not order_contract %}<form method="post" action="{{ url_for('main.order_contract_create', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-outline-primary">Создать договор</button></form>{% endif %}
           </div>
+          {% if not order_contract %}<div class="text-muted small mt-2">Для выдачи документов сначала создайте договор.</div>{% endif %}
+          {% else %}
+          <div class="text-muted">Документальный статус закрыт. Дальше доступна только физическая отгрузка, если она ещё не выполнена.</div>
+          {% endif %}
           {% else %}
           <div class="text-muted">Действия недоступны для вашей роли или состояния заказа.</div>
           {% endif %}
@@ -162,8 +290,8 @@
     <div class="app-card p-3 mt-4">
       <form method="post" action="{{ url_for('main.order_ship', order_id=order.id) }}" class="d-flex justify-content-between align-items-center flex-wrap gap-2">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div><strong>Отгрузка клиенту</strong><div class="text-muted small">Переведёт прицеп в SOLD и закроет активные резервы.</div></div>
-        <button class="btn btn-success">Отгрузить клиенту</button>
+        <div><strong>Физическая отгрузка клиенту</strong><div class="text-muted small">Доступна после выдачи документов. Прицеп уже должен быть юридически продан.</div></div>
+        <button class="btn btn-success" {% if not order.documents_issued %}disabled{% endif %}>Отгрузить клиенту</button>
       </form>
     </div>
     {% endif %}

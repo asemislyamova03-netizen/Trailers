@@ -1,6 +1,7 @@
 # views.py
 from functools import wraps
-from datetime import datetime, date, time
+from datetime import datetime, date, time, timedelta
+from uuid import uuid4
 
 from flask import (
     Blueprint, render_template, redirect, url_for,
@@ -12,17 +13,18 @@ from flask_login import (
 )
 
 from extensions import db
-from models import Trailer, Item, Warehouse, Customer, SalesContract, User, OTTS, Lead, LeadMessage, CustomerOrder, OrderPayment, OrderEvent, Reservation, SupplyNeed, ProductionRequest, ProductionRequestLine, ProducedUnit, StockMovement
+from models import Trailer, Item, Warehouse, Customer, SalesContract, User, OTTS, Lead, LeadMessage, CustomerOrder, OrderPayment, OrderEvent, Reservation, SupplyNeed, ProductionRequest, ProductionRequestLine, ProducedUnit, StockMovement, IdempotencyKey
 from forms import (
     TrailerCreateForm, WarehouseForm, ItemForm,
     CustomerForm, SalesContractForm, LoginForm, UserForm, OTTSForm, LeadForm, CustomerOrderForm, OrderPaymentForm,
-    SupplyNeedForm, ProductionRequestForm, ProductionRequestLineForm, StockMovementForm,
-    AssignVinForm, SendTrailerForm
+    SupplyNeedForm, ProductionRequestForm, ProductionRequestLineForm, StockMovementForm, StockMovementBatchForm,
+    AssignVinForm, SendTrailerForm, StockReplenishmentForm
 )
 from collections import defaultdict
 import sqlalchemy as sa
 from sqlalchemy import or_
 import json
+import base64
 from wtforms import StringField, SelectField, DateField, BooleanField, DecimalField, IntegerField, TextAreaField, SubmitField
 
 from flask_wtf import FlaskForm
@@ -127,7 +129,7 @@ def can_manage_order(order: CustomerOrder) -> bool:
 
 
 def _block_production_commercial_access():
-    if current_user.is_production:
+    if current_user.is_production or current_user.is_logistics:
         abort(403)
 
 
@@ -140,6 +142,41 @@ def _ensure_can_access_order(order: CustomerOrder) -> None:
 def _ensure_can_manage_order(order: CustomerOrder) -> None:
     _block_production_commercial_access()
     if not can_manage_order(order):
+        abort(403)
+
+
+def can_access_contract(contract: SalesContract) -> bool:
+    if current_user.is_admin or current_user.is_director:
+        return True
+    if current_user.is_manager:
+        if contract.order:
+            return can_access_order(contract.order)
+        return bool(current_user.warehouse_id and contract.trailer and contract.trailer.warehouse_id == current_user.warehouse_id)
+    return False
+
+
+def can_manage_contract(contract: SalesContract) -> bool:
+    if current_user.is_admin:
+        return True
+    if current_user.is_manager and contract.order:
+        return can_manage_order(contract.order) and not contract.order.documents_issued and not contract.order.is_shipped
+    return False
+
+
+@main_bp.app_template_global('can_manage_contract')
+def can_manage_contract_template(contract: SalesContract) -> bool:
+    return can_manage_contract(contract)
+
+
+def _ensure_can_access_contract(contract: SalesContract) -> None:
+    _block_production_commercial_access()
+    if not can_access_contract(contract):
+        abort(403)
+
+
+def _ensure_can_manage_contract(contract: SalesContract) -> None:
+    _block_production_commercial_access()
+    if not can_manage_contract(contract):
         abort(403)
 
 
@@ -210,6 +247,158 @@ def _add_lead_system_message(lead: Lead, text: str) -> None:
     lead.last_message_text = text
 
 
+def _need_type_key(need: SupplyNeed | None) -> str:
+    value = (need.need_type if need else '') or ''
+    value = value.upper()
+    if value in ('STOCK_REPLENISHMENT', 'WAREHOUSE_STOCK'):
+        return 'STOCK_REPLENISHMENT'
+    return 'CUSTOMER_ORDER'
+
+
+def _is_stock_replenishment_need(need: SupplyNeed | None) -> bool:
+    return _need_type_key(need) == 'STOCK_REPLENISHMENT'
+
+
+def _produced_unit_context(unit: ProducedUnit | None):
+    line = unit.production_request_line if unit else None
+    need = line.supply_need if line else None
+    order = unit.order if unit and unit.order_id else None
+    if not order:
+        order = need.order if need and need.order_id else None
+    return {
+        'unit': unit,
+        'line': line,
+        'need': need,
+        'order': order,
+        'need_type': _need_type_key(need),
+        'target_warehouse': unit.target_warehouse if unit else None,
+    }
+
+
+def _trailer_production_context(trailer: Trailer):
+    unit = getattr(trailer, 'produced_unit', None)
+    if unit is not None and not isinstance(unit, ProducedUnit):
+        unit = unit[0] if len(unit) else None
+    context = _produced_unit_context(unit)
+    if not context['order']:
+        active_reservation = _active_reservation_for_trailer(trailer.id)
+        if active_reservation:
+            context['order'] = active_reservation.order
+            context['need_type'] = 'CUSTOMER_ORDER'
+    return context
+
+
+def _trailer_is_customer_shipped(trailer: Trailer | None) -> bool:
+    return bool(trailer and (trailer.lifecycle_status or '').lower() == 'customer_shipped')
+
+
+def _trailer_available_for_sale(trailer: Trailer, exclude_order_id: int | None = None) -> bool:
+    if not trailer or trailer.status != 'IN_STOCK' or _trailer_is_customer_shipped(trailer):
+        return False
+    return _active_reservation_for_trailer(trailer.id, exclude_order_id=exclude_order_id) is None
+
+
+def _active_movement_for_trailer(trailer_id: int, exclude_movement_id: int | None = None):
+    q = StockMovement.query.filter(
+        StockMovement.trailer_id == trailer_id,
+        StockMovement.status.in_(['sent', 'in_transit']),
+    )
+    if exclude_movement_id:
+        q = q.filter(StockMovement.id != exclude_movement_id)
+    return q.first()
+
+
+def _trailer_available_for_movement(trailer: Trailer, from_warehouse_id: int | None = None, exclude_movement_id: int | None = None) -> bool:
+    if not trailer or _trailer_is_customer_shipped(trailer):
+        return False
+    if trailer.status not in ('IN_STOCK', 'RESERVED', 'SOLD'):
+        return False
+    if from_warehouse_id and trailer.warehouse_id != from_warehouse_id:
+        return False
+    return _active_movement_for_trailer(trailer.id, exclude_movement_id=exclude_movement_id) is None
+
+
+def _order_is_open_for_attachment(order: CustomerOrder) -> bool:
+    return bool(order and not order.is_shipped and order.status not in ('cancelled', 'canceled', 'shipped', 'done'))
+
+
+def _active_order_for_produced_unit(unit: ProducedUnit, exclude_order_id: int | None = None):
+    order = unit.order if unit and unit.order_id else None
+    if not order and unit and unit.production_request_line and unit.production_request_line.supply_need:
+        order = unit.production_request_line.supply_need.order
+    if order and _order_is_open_for_attachment(order) and order.id != exclude_order_id:
+        return order
+    return None
+
+
+def _active_order_for_trailer(trailer_id: int, exclude_order_id: int | None = None):
+    q = CustomerOrder.query.filter(
+        CustomerOrder.trailer_id == trailer_id,
+        CustomerOrder.status.notin_(['cancelled', 'canceled', 'shipped', 'done']),
+        CustomerOrder.is_shipped == False,
+    )
+    if exclude_order_id:
+        q = q.filter(CustomerOrder.id != exclude_order_id)
+    return q.order_by(CustomerOrder.created_at.desc()).first()
+
+
+def _order_attachment_status_for_trailer(trailer: Trailer, order: CustomerOrder):
+    if order.trailer_id == trailer.id:
+        return 'current'
+    if _active_order_for_trailer(trailer.id, exclude_order_id=order.id):
+        return 'other'
+    if _active_reservation_for_trailer(trailer.id, exclude_order_id=order.id):
+        return 'other'
+    return 'free'
+
+
+def _ensure_item_matches_order(item_id: int | None, order: CustomerOrder) -> bool:
+    return bool(item_id and order.item_id and item_id == order.item_id)
+
+
+def _ensure_target_matches_order_warehouse(target_warehouse_id: int | None, order: CustomerOrder) -> bool:
+    if not target_warehouse_id or not order.warehouse_id:
+        return True
+    return target_warehouse_id == order.warehouse_id
+
+
+def _set_trailer_status_for_order(trailer: Trailer, order: CustomerOrder) -> None:
+    if order.documents_issued or order.status == 'sold_not_shipped':
+        trailer.status = 'SOLD'
+    else:
+        trailer.status = 'RESERVED'
+
+
+def _ensure_order_reservation(order: CustomerOrder, trailer: Trailer, source_type: str) -> None:
+    if trailer.status == 'SOLD':
+        return
+    active = Reservation.query.filter_by(order_id=order.id, trailer_id=trailer.id, status='ACTIVE').first()
+    if not active:
+        db.session.add(Reservation(
+            order_id=order.id,
+            trailer_id=trailer.id,
+            item_id=order.item_id,
+            status='ACTIVE',
+            source_type=source_type,
+            priority=10,
+        ))
+
+
+def _find_order_for_sold_trailer(trailer: Trailer):
+    if not trailer:
+        return None
+    return (
+        CustomerOrder.query
+        .filter(
+            CustomerOrder.trailer_id == trailer.id,
+            CustomerOrder.is_shipped == False,
+            CustomerOrder.status.notin_(['cancelled', 'canceled', 'shipped', 'done']),
+        )
+        .order_by(CustomerOrder.documents_issued_at.desc().nullslast(), CustomerOrder.created_at.desc())
+        .first()
+    )
+
+
 def add_order_event(order, event_type, old_value=None, new_value=None, comment=None):
     user_id = None
     if current_user and current_user.is_authenticated:
@@ -224,9 +413,76 @@ def add_order_event(order, event_type, old_value=None, new_value=None, comment=N
     ))
 
 
+@main_bp.app_template_global()
+def form_token():
+    return uuid4().hex
+
+
+def _idempotency_endpoint_key() -> str:
+    return f"{request.endpoint or 'unknown'}:{request.path}"[:255]
+
+
+def _reserve_idempotency_key():
+    token = (request.form.get('form_token') or '').strip()
+    if not token or not current_user.is_authenticated:
+        return None, False
+    key = IdempotencyKey(
+        user_id=current_user.id,
+        endpoint=_idempotency_endpoint_key(),
+        form_token=token[:64],
+    )
+    db.session.add(key)
+    try:
+        db.session.flush()
+    except IntegrityError:
+        db.session.rollback()
+        existing = IdempotencyKey.query.filter_by(
+            user_id=current_user.id,
+            endpoint=_idempotency_endpoint_key(),
+            form_token=token[:64],
+        ).first()
+        return existing, True
+    return key, False
+
+
+def _finish_idempotency(key, object_type: str, object_id: int | None = None):
+    if key:
+        key.object_type = object_type
+        key.object_id = object_id
+
+
+def _duplicate_redirect(key, fallback_url=None):
+    flash('Повторный запрос не выполнен: это действие уже было обработано.', 'warning')
+    if key and key.object_type == 'CustomerOrder' and key.object_id:
+        return redirect(url_for('main.order_detail', order_id=key.object_id))
+    if key and key.object_type == 'Lead' and key.object_id:
+        return redirect(url_for('main.lead_detail', lead_id=key.object_id))
+    if key and key.object_type == 'SalesContract' and key.object_id:
+        contract = SalesContract.query.get(key.object_id)
+        if contract and contract.order_id:
+            return redirect(url_for('main.order_detail', order_id=contract.order_id))
+        return redirect(url_for('main.contracts_list'))
+    if key and key.object_type == 'Customer' and key.object_id:
+        customer = Customer.query.get(key.object_id)
+        if customer:
+            return _customer_return_redirect(
+                customer,
+                (request.args.get('return_to') or '').strip(),
+                request.args.get('order_id', type=int),
+            )
+        return redirect(url_for('main.customers_list'))
+    if key and key.object_type == 'ProductionRequest' and key.object_id:
+        return redirect(url_for('main.production_request_detail', request_id=key.object_id))
+    if key and key.object_type in ('StockMovement', 'StockMovementBatch'):
+        return redirect(url_for('main.stock_movements_list'))
+    if key and key.object_type in ('ProducedUnit', 'Trailer'):
+        return redirect(url_for('main.logistics_workspace'))
+    return redirect(fallback_url or request.referrer or url_for('main.role_home'))
+
+
 @main_bp.app_template_filter('status_label')
 def status_label(value):
-    labels = {'draft': 'Черновик', 'new': 'Новая', 'waiting_payment': 'Ждём оплату', 'prepaid': 'Предоплата', 'confirmed': 'Подтверждён', 'waiting_production': 'Ожидает производства', 'in_production': 'В производстве', 'produced_waiting_vin': 'Выпущен, ждёт VIN', 'waiting_transfer': 'Ждёт отправки', 'in_transit': 'В пути', 'arrived': 'Прибыл', 'ready_to_ship': 'Готов к выдаче', 'shipped': 'Отгружен', 'done': 'Завершён', 'cancelled': 'Отменён', 'canceled': 'Отменён', 'produced_no_vin': 'Выпущен без VIN', 'vin_assigned': 'VIN присвоен', 'planned': 'Запланирована', 'partial_ready': 'Частично выпущена', 'ready': 'Готово', 'closed': 'Закрыта', 'sent': 'Отправлено', 'in_progress': 'В работе', 'approved': 'Утверждена', 'ready_production_warehouse': 'Готов на складе выпуска', 'stock': 'Из наличия', 'other_warehouse': 'С другого склада', 'production': 'Под производство', 'not_started': 'Не начаты', 'invoice_sent': 'Счёт отправлен', 'contract_ready': 'Договор готов', 'documents_ready': 'Документы готовы', 'documents_issued': 'Документы выданы', 'unpaid': 'Не оплачено', 'partial': 'Частичная оплата', 'paid': 'Оплачено', 'order_created': 'Заказ создан', 'order_status_changed': 'Статус заказа изменён', 'payment_added': 'Оплата добавлена', 'payment_cancelled': 'Оплата отменена', 'trailer_reserved': 'Прицеп зарезервирован', 'trailer_assigned': 'Прицеп назначен', 'production_need_created': 'Создана потребность', 'production_started': 'Производство начато', 'produced_without_vin': 'Выпущено без VIN', 'transfer_requested': 'Запрошено перемещение', 'transfer_started': 'Перемещение начато', 'trailer_received': 'Прицеп принят', 'invoice_sent': 'Счёт отправлен', 'contract_ready': 'Договор готов', 'documents_ready': 'Документы готовы', 'comment_added': 'Комментарий добавлен'}
+    labels = {'draft': 'Черновик', 'new': 'Новая', 'waiting_payment': 'Ждём оплату', 'prepaid': 'Предоплата', 'confirmed': 'Подтверждён', 'waiting_production': 'Ожидает производства', 'in_production': 'В производстве', 'produced_waiting_vin': 'Выпущен, ждёт VIN', 'waiting_transfer': 'Ждёт отправки', 'in_transit': 'В пути', 'arrived': 'Прибыл', 'ready_to_ship': 'Готов к выдаче', 'sold_not_shipped': 'Продан, не отгружен', 'customer_shipped': 'Физически отгружен клиенту', 'shipped': 'Отгружен', 'done': 'Завершён', 'cancelled': 'Отменён', 'canceled': 'Отменён', 'produced_no_vin': 'Выпущен без VIN', 'vin_assigned': 'VIN присвоен', 'planned': 'Запланирована', 'partial_ready': 'Частично выпущена', 'ready': 'Готово', 'closed': 'Закрыта', 'sent': 'Отправлено', 'in_progress': 'В работе', 'approved': 'Утверждена', 'ready_production_warehouse': 'Готов на складе выпуска', 'stock': 'Из наличия', 'other_warehouse': 'С другого склада', 'production': 'Под производство', 'transit': 'В пути', 'not_started': 'Не начаты', 'invoice_sent': 'Счёт отправлен', 'contract_ready': 'Договор готов', 'documents_ready': 'Документы готовы', 'documents_issued': 'Документы выданы', 'unpaid': 'Не оплачено', 'partial': 'Частичная оплата', 'paid': 'Оплачено', 'order_created': 'Заказ создан', 'order_status_changed': 'Статус заказа изменён', 'payment_added': 'Оплата добавлена', 'payment_cancelled': 'Оплата отменена', 'trailer_reserved': 'Прицеп зарезервирован', 'trailer_assigned': 'Прицеп назначен', 'production_need_created': 'Создана потребность', 'production_started': 'Производство начато', 'produced_without_vin': 'Выпущено без VIN', 'transfer_requested': 'Запрошено перемещение', 'transfer_started': 'Перемещение начато', 'trailer_received': 'Прицеп принят', 'invoice_sent': 'Счёт отправлен', 'contract_ready': 'Договор готов', 'documents_ready': 'Документы готовы', 'documents_issued': 'Документы выданы', 'shipped': 'Отгружен', 'comment_added': 'Комментарий добавлен'}
     labels.update({
         'ai_handling': 'ИИ ведёт диалог',
         'manager_needed': 'Нужен менеджер',
@@ -240,6 +496,17 @@ def status_label(value):
         'telegram': 'Telegram',
         'phone': 'Телефон',
         'other': 'Другое',
+        'customer_order': 'Заказ клиента',
+        'stock_replenishment': 'Пополнение склада',
+        'warehouse_stock': 'Пополнение склада',
+        'warehouse_transfer': 'Между складами',
+        'production_arrival': 'Поступление с производства',
+        'customer_shipment': 'Отгрузка клиенту',
+        'ready_production_warehouse': 'Готов на складе выпуска',
+        'in_stock': 'В наличии',
+        'reserved': 'В резерве',
+        'sold': 'Продан',
+        'decommissioned': 'Списан',
     })
     normalized = str(value or '').lower()
     return labels.get(normalized, value or '')
@@ -248,18 +515,20 @@ def status_label(value):
 @main_bp.app_template_filter('status_badge_class')
 def status_badge_class(value):
     value = (value or '').lower()
-    if value in ('draft', 'new', 'planned', 'manual', 'website', 'phone', 'other'):
+    if value in ('draft', 'new', 'planned', 'manual', 'website', 'phone', 'other', 'customer_order'):
         return 'secondary'
     if value in ('in_progress', 'in_production', 'sent', 'in_transit', 'manager_handling', 'telegram'):
         return 'primary'
     if value in ('waiting_payment', 'waiting_production', 'waiting_transfer', 'produced_waiting_vin', 'produced_no_vin', 'invoice_sent', 'partial', 'not_started', 'manager_needed', 'waiting_client'):
         return 'warning'
-    if value in ('prepaid', 'partial_ready', 'ai_handling', 'whatsapp', 'instagram'):
+    if value in ('prepaid', 'partial_ready', 'ai_handling', 'whatsapp', 'instagram', 'stock_replenishment', 'warehouse_stock'):
         return 'info'
-    if value in ('ready', 'arrived', 'ready_to_ship', 'done', 'vin_assigned', 'confirmed', 'paid', 'documents_ready', 'documents_issued', 'contract_ready', 'order_created'):
+    if value in ('ready', 'arrived', 'ready_to_ship', 'sold_not_shipped', 'customer_shipped', 'done', 'vin_assigned', 'confirmed', 'paid', 'documents_ready', 'documents_issued', 'contract_ready', 'order_created', 'in_stock', 'sold'):
         return 'success'
-    if value in ('cancelled', 'canceled', 'closed', 'spam'):
+    if value in ('cancelled', 'canceled', 'closed', 'spam', 'decommissioned'):
         return 'dark'
+    if value == 'reserved':
+        return 'warning'
     return 'secondary'
 
 
@@ -455,16 +724,20 @@ def manager_workspace():
         flash('За пользователем не закреплён склад. Обратитесь к администратору.', 'warning')
         return redirect(url_for('main.trailers_list'))
 
-    stock_trailers = (
+    stock_trailers = [
+        trailer for trailer in (
         Trailer.query
         .join(Item, Item.id == Trailer.item_id)
         .filter(
             Trailer.warehouse_id == warehouse_id,
             Trailer.status == 'IN_STOCK',
+            or_(Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped'),
         )
         .order_by(Item.article, Trailer.vin)
         .all()
-    )
+        )
+        if _trailer_available_for_sale(trailer)
+    ]
     reserved_trailers = (
         Trailer.query
         .join(Item, Item.id == Trailer.item_id)
@@ -496,6 +769,7 @@ def manager_workspace():
     manager_needed_count = conversation_query.filter(Lead.conversation_status == 'manager_needed').count()
     active_orders = CustomerOrder.query.filter(CustomerOrder.warehouse_id == warehouse_id, CustomerOrder.status.notin_(['done', 'cancelled', 'shipped'])).order_by(CustomerOrder.created_at.desc()).limit(30).all()
     inbound_movements = StockMovement.query.filter(StockMovement.to_warehouse_id == warehouse_id, StockMovement.status.in_(['sent', 'in_transit'])).order_by(StockMovement.departure_date.desc().nullslast(), StockMovement.id.desc()).all()
+    outgoing_movements = StockMovement.query.filter(StockMovement.from_warehouse_id == warehouse_id, StockMovement.status.in_(['sent', 'in_transit'])).order_by(StockMovement.departure_date.desc().nullslast(), StockMovement.id.desc()).all()
     production_for_warehouse = (
         ProductionRequestLine.query
         .join(ProductionRequest, ProductionRequest.id == ProductionRequestLine.production_request_id)
@@ -506,6 +780,33 @@ def manager_workspace():
         .order_by(ProductionRequest.created_at.desc(), ProductionRequestLine.id.desc())
         .all()
     )
+    production_qty_left = sum(max((line.quantity or 0) - (line.produced_qty or 0), 0) for line in production_for_warehouse)
+    produced_units_for_warehouse = (
+        ProducedUnit.query
+        .filter(
+            ProducedUnit.target_warehouse_id == warehouse_id,
+            ProducedUnit.status == 'produced_no_vin',
+        )
+        .order_by(ProducedUnit.created_at.desc(), ProducedUnit.id.desc())
+        .all()
+    )
+    production_warehouse = _default_production_warehouse()
+    ready_at_production_units = []
+    if production_warehouse:
+        ready_at_production_units = (
+            ProducedUnit.query
+            .join(Trailer, Trailer.id == ProducedUnit.trailer_id)
+            .filter(
+                ProducedUnit.target_warehouse_id == warehouse_id,
+                ProducedUnit.status == 'vin_assigned',
+                Trailer.warehouse_id == production_warehouse.id,
+                Trailer.status.in_(['IN_STOCK', 'RESERVED']),
+                ProducedUnit.target_warehouse_id != production_warehouse.id,
+            )
+            .order_by(ProducedUnit.created_at.desc(), ProducedUnit.id.desc())
+            .all()
+        )
+    ready_at_production_rows = [_produced_unit_context(unit) for unit in ready_at_production_units]
     ready_to_ship_orders = CustomerOrder.query.filter(
         CustomerOrder.warehouse_id == warehouse_id,
         CustomerOrder.status.in_(['ready_to_ship', 'arrived']),
@@ -517,10 +818,57 @@ def manager_workspace():
         CustomerOrder.status.notin_(['done', 'cancelled', 'shipped']),
     ).order_by(CustomerOrder.created_at.desc()).all()
     ready_to_ship_orders = list({order.id: order for order in ready_to_ship_orders + ready_to_ship_extra}.values())
+    planned_ship_orders = (
+        CustomerOrder.query
+        .filter(
+            CustomerOrder.warehouse_id == warehouse_id,
+            CustomerOrder.documents_issued == True,
+            CustomerOrder.is_shipped == False,
+            CustomerOrder.status != 'cancelled',
+        )
+        .order_by(CustomerOrder.planned_ship_date.asc().nullslast(), CustomerOrder.documents_issued_at.desc().nullslast())
+        .all()
+    )
 
     paid_not_shipped_orders = [
         order for order in active_orders
         if order.confirmed_paid_amount > 0 and not order.is_shipped
+    ]
+    paid_docs_not_issued_orders = [
+        order for order in CustomerOrder.query.filter(
+            CustomerOrder.warehouse_id == warehouse_id,
+            CustomerOrder.documents_issued == False,
+            CustomerOrder.status.notin_(['done', 'cancelled', 'shipped']),
+        ).order_by(CustomerOrder.created_at.desc()).all()
+        if order.total_amount > 0 and order.confirmed_paid_amount >= order.total_amount
+    ]
+    today_start = datetime.combine(date.today(), time.min)
+    month_start = datetime(date.today().year, date.today().month, 1)
+    sales_scope_orders = (
+        CustomerOrder.query
+        .join(SalesContract, SalesContract.order_id == CustomerOrder.id)
+        .join(Trailer, Trailer.id == CustomerOrder.trailer_id)
+        .filter(
+            CustomerOrder.warehouse_id == warehouse_id,
+            CustomerOrder.documents_issued == True,
+            CustomerOrder.documents_issued_at.isnot(None),
+            CustomerOrder.status != 'cancelled',
+            Trailer.status == 'SOLD',
+        )
+        .order_by(CustomerOrder.documents_issued_at.desc())
+        .all()
+    )
+    sales_scope_orders = [
+        order for order in sales_scope_orders
+        if order.total_amount > 0 and order.confirmed_paid_amount >= order.total_amount
+    ]
+    sold_today_orders = [
+        order for order in sales_scope_orders
+        if order.documents_issued_at and order.documents_issued_at >= today_start
+    ]
+    sold_month_orders = [
+        order for order in sales_scope_orders
+        if order.documents_issued_at and order.documents_issued_at >= month_start
     ]
     payments = (
         OrderPayment.query
@@ -530,14 +878,73 @@ def manager_workspace():
         .limit(20)
         .all()
     )
-    other_stock = (
+    other_stock = [
+        trailer for trailer in (
         Trailer.query
         .join(Item, Item.id == Trailer.item_id)
         .join(Warehouse, Warehouse.id == Trailer.warehouse_id)
-        .filter(Trailer.warehouse_id != warehouse_id, Trailer.status == 'IN_STOCK')
+        .filter(
+            Trailer.warehouse_id != warehouse_id,
+            Trailer.status == 'IN_STOCK',
+            or_(Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped'),
+        )
         .order_by(Warehouse.name, Item.article, Trailer.vin)
         .all()
+        )
+        if _trailer_available_for_sale(trailer)
+    ]
+    sold_not_shipped_trailers = []
+    for order in planned_ship_orders:
+        if order.trailer and order.trailer.id not in {trailer.id for trailer in sold_not_shipped_trailers}:
+            sold_not_shipped_trailers.append(order.trailer)
+    inbound_trailers = []
+    for movement in inbound_movements:
+        if movement.trailer and movement.trailer.id not in {trailer.id for trailer in inbound_trailers}:
+            inbound_trailers.append(movement.trailer)
+    shipped_trailers = (
+        Trailer.query
+        .join(Item, Item.id == Trailer.item_id)
+        .filter(
+            Trailer.warehouse_id == warehouse_id,
+            Trailer.status == 'SOLD',
+            Trailer.lifecycle_status == 'customer_shipped',
+        )
+        .order_by(Trailer.created_at.desc(), Trailer.id.desc())
+        .limit(50)
+        .all()
     )
+    warehouse_stock_rows = []
+    for trailer in stock_trailers:
+        warehouse_stock_rows.append({'group': 'available', 'group_label': 'Свободен', 'trailer': trailer, 'order': None})
+    for trailer in reserved_trailers:
+        order = CustomerOrder.query.filter_by(trailer_id=trailer.id, is_shipped=False).filter(CustomerOrder.status != 'cancelled').order_by(CustomerOrder.created_at.desc()).first()
+        warehouse_stock_rows.append({'group': 'reserved', 'group_label': 'Резерв', 'trailer': trailer, 'order': order})
+    for trailer in sold_not_shipped_trailers:
+        order = CustomerOrder.query.filter_by(trailer_id=trailer.id, documents_issued=True, is_shipped=False).order_by(CustomerOrder.documents_issued_at.desc()).first()
+        warehouse_stock_rows.append({'group': 'sold_not_shipped', 'group_label': 'Продан, не отгружен', 'trailer': trailer, 'order': order})
+    for trailer in inbound_trailers:
+        movement = next((m for m in inbound_movements if m.trailer_id == trailer.id), None)
+        warehouse_stock_rows.append({'group': 'in_transit', 'group_label': 'В пути', 'trailer': trailer, 'order': movement.order if movement else None})
+    for unit in produced_units_for_warehouse:
+        need = unit.production_request_line.supply_need if unit.production_request_line else None
+        warehouse_stock_rows.append({
+            'group': 'produced_no_vin',
+            'group_label': 'Выпущен без VIN',
+            'trailer': None,
+            'unit': unit,
+            'order': need.order if need and need.order else None,
+        })
+    for row in ready_at_production_rows:
+        warehouse_stock_rows.append({
+            'group': 'ready_production',
+            'group_label': 'Готов на складе выпуска',
+            'trailer': row['unit'].trailer if row.get('unit') and row['unit'].trailer else None,
+            'unit': row.get('unit'),
+            'order': row.get('order'),
+        })
+    for trailer in shipped_trailers:
+        order = CustomerOrder.query.filter_by(trailer_id=trailer.id, is_shipped=True).order_by(CustomerOrder.shipped_at.desc().nullslast()).first()
+        warehouse_stock_rows.append({'group': 'shipped', 'group_label': 'Отгружен', 'trailer': trailer, 'order': order})
 
     return render_template(
         'manager_workspace.html',
@@ -554,9 +961,21 @@ def manager_workspace():
         manager_needed_count=manager_needed_count,
         active_orders=active_orders,
         inbound_movements=inbound_movements,
+        outgoing_movements=outgoing_movements,
         ready_to_ship_orders=ready_to_ship_orders,
+        planned_ship_orders=planned_ship_orders,
         production_for_warehouse=production_for_warehouse,
+        production_qty_left=production_qty_left,
+        produced_units_for_warehouse=produced_units_for_warehouse,
+        ready_at_production_rows=ready_at_production_rows,
+        production_warehouse=production_warehouse,
         paid_not_shipped_orders=paid_not_shipped_orders,
+        paid_docs_not_issued_orders=paid_docs_not_issued_orders,
+        sold_today_orders=sold_today_orders,
+        sold_today_revenue=sum(float(order.price or 0) for order in sold_today_orders),
+        sold_month_orders=sold_month_orders,
+        sold_month_revenue=sum(float(order.price or 0) for order in sold_month_orders),
+        warehouse_stock_rows=warehouse_stock_rows,
         payments=payments,
         other_stock=other_stock,
     )
@@ -738,6 +1157,8 @@ def trailers_list():
 @main_bp.route('/trailers/new', methods=['GET', 'POST'])
 @login_required
 def trailer_create():
+    if not (current_user.is_admin or current_user.is_logistics):
+        abort(403)
     form = TrailerCreateForm()
     _fill_trailer_form_choices(form)
 
@@ -765,6 +1186,8 @@ def trailer_create():
 @main_bp.route('/trailers/<int:trailer_id>/edit', methods=['GET', 'POST'])
 @login_required
 def trailer_edit(trailer_id):
+    if not (current_user.is_admin or current_user.is_logistics):
+        abort(403)
     trailer = Trailer.query.get_or_404(trailer_id)
 
     form = TrailerCreateForm(
@@ -824,6 +1247,8 @@ def trailer_edit(trailer_id):
 @main_bp.route('/trailers/<int:trailer_id>/delete')
 @login_required
 def trailer_delete(trailer_id):
+    if not (current_user.is_admin or current_user.is_logistics):
+        abort(403)
     trailer = Trailer.query.get_or_404(trailer_id)
 
     if getattr(current_user, 'is_manager', False) and trailer.warehouse_id != current_user.warehouse_id:
@@ -1228,16 +1653,57 @@ def customers_list():
         type_filter=type_filter,
     )
 
-@main_bp.route('/customers/new', methods=['GET', 'POST'])
+
+@main_bp.route('/api/customers/search')
 @login_required
-def customer_create():
+def api_customers_search():
     _block_production_commercial_access()
+    q = (request.args.get('q') or '').strip()
+    query = Customer.query.filter_by(is_active=True)
+    if q:
+        like = f'%{q}%'
+        query = query.filter(or_(
+            Customer.name.ilike(like),
+            Customer.phone.ilike(like),
+            Customer.iin_bin.ilike(like),
+            Customer.contact_person.ilike(like),
+        ))
+    customers = query.order_by(Customer.name).limit(20).all()
+    return jsonify({
+        'ok': True,
+        'customers': [
+            {
+                'id': customer.id,
+                'label': _customer_label(customer),
+                'name': customer.name,
+                'phone': customer.phone or '',
+                'iin_bin': customer.iin_bin or '',
+                'customer_type': customer.customer_type,
+            }
+            for customer in customers
+        ],
+    })
+
+@main_bp.route('/customers/new', methods=['GET', 'POST'])
+@role_required('manager')
+def customer_create():
     form = CustomerForm()
+    return_to = request.args.get('return_to', '').strip()
+    order_id = request.args.get('order_id', type=int)
 
     if form.validate_on_submit():
+        idem_key, duplicate = _reserve_idempotency_key()
+        if duplicate:
+            return _duplicate_redirect(idem_key, url_for('main.customers_list'))
         is_company = (form.customer_type.data == 'COMPANY')
         opf = _norm_str(getattr(form, "opf", None).data if hasattr(form, "opf") else None)
         is_ip = (is_company and (opf or '').upper() == 'ИП')
+        duplicate_customer = _find_duplicate_customer_from_form(form)
+        if duplicate_customer:
+            _finish_idempotency(idem_key, 'Customer', duplicate_customer.id)
+            db.session.commit()
+            flash('Клиент с таким ИИН/БИН или телефоном уже есть. Он подставлен в заказ.', 'warning')
+            return _customer_return_redirect(duplicate_customer, return_to, order_id)
 
         customer = Customer(
             customer_type=form.customer_type.data,
@@ -1273,21 +1739,31 @@ def customer_create():
             customer.contact_person = None
 
         db.session.add(customer)
+        db.session.flush()
+        _finish_idempotency(idem_key, 'Customer', customer.id)
         db.session.commit()
         flash('Клиент создан', 'success')
-        return redirect(url_for('main.customers_list'))
+        return _customer_return_redirect(customer, return_to, order_id)
 
-    return render_template('customer_form.html', form=form, title='Новый клиент')
+    back_url = _customer_back_url(return_to, order_id)
+    return render_template('customer_form.html', form=form, title='Новый клиент', back_url=back_url)
 
 
 @main_bp.route('/customers/<int:customer_id>/edit', methods=['GET', 'POST'])
-@login_required
+@role_required('manager')
 def customer_edit(customer_id):
-    _block_production_commercial_access()
     customer = Customer.query.get_or_404(customer_id)
     form = CustomerForm(obj=customer)
+    return_to = request.args.get('return_to', '').strip()
+    order_id = request.args.get('order_id', type=int)
 
     if form.validate_on_submit():
+        duplicate_customer = _find_duplicate_customer_from_form(form, exclude_id=customer.id)
+        if duplicate_customer:
+            flash('Другой клиент уже использует этот ИИН/БИН или телефон.', 'danger')
+            back_url = _customer_back_url(return_to, order_id)
+            return render_template('customer_form.html', form=form, title='Редактирование клиента', back_url=back_url)
+
         form.populate_obj(customer)
 
         # нормализация строк
@@ -1334,13 +1810,14 @@ def customer_edit(customer_id):
 
         db.session.commit()
         flash('Клиент обновлён', 'success')
-        return redirect(url_for('main.customers_list'))
+        return _customer_return_redirect(customer, return_to, order_id)
 
-    return render_template('customer_form.html', form=form, title='Редактирование клиента')
+    back_url = _customer_back_url(return_to, order_id)
+    return render_template('customer_form.html', form=form, title='Редактирование клиента', back_url=back_url)
 
 
 @main_bp.route('/customers/<int:customer_id>/delete')
-@login_required
+@admin_required
 def customer_delete(customer_id):
     customer = Customer.query.get_or_404(customer_id)
 
@@ -1367,6 +1844,48 @@ def is_contract_number_unique(number: str, exclude_id: int | None = None) -> boo
 def _norm_str(s: str | None) -> str | None:
     s = (s or '').strip()
     return s or None
+
+
+def _phone_digits(value: str | None) -> str:
+    return ''.join(ch for ch in (value or '') if ch.isdigit())
+
+
+def _find_duplicate_customer_from_form(form: CustomerForm, exclude_id: int | None = None):
+    iin_bin = _norm_str(form.iin_bin.data)
+    phone_digits = _phone_digits(form.phone.data)
+
+    if iin_bin:
+        query = Customer.query.filter(Customer.iin_bin == iin_bin)
+        if exclude_id:
+            query = query.filter(Customer.id != exclude_id)
+        customer = query.order_by(Customer.id.asc()).first()
+        if customer:
+            return customer
+
+    if len(phone_digits) >= 7:
+        query = Customer.query.filter(Customer.phone.isnot(None), Customer.phone != '')
+        if exclude_id:
+            query = query.filter(Customer.id != exclude_id)
+        for customer in query.order_by(Customer.id.asc()).all():
+            if _phone_digits(customer.phone) == phone_digits:
+                return customer
+    return None
+
+
+def _customer_back_url(return_to: str, order_id: int | None = None) -> str:
+    if return_to == 'order_edit' and order_id:
+        return url_for('main.order_edit', order_id=order_id)
+    if return_to == 'order_create':
+        return url_for('main.order_create')
+    return url_for('main.customers_list')
+
+
+def _customer_return_redirect(customer: Customer, return_to: str, order_id: int | None = None):
+    if return_to == 'order_edit' and order_id:
+        return redirect(url_for('main.order_edit', order_id=order_id, customer_id=customer.id))
+    if return_to == 'order_create':
+        return redirect(url_for('main.order_create', customer_id=customer.id))
+    return redirect(url_for('main.customer_edit', customer_id=customer.id))
 
 
 def get_next_contract_number() -> str:
@@ -1400,6 +1919,7 @@ def get_next_contract_number() -> str:
 
 def _build_contract_context(contract_id: int) -> dict:
     contract = SalesContract.query.get_or_404(contract_id)
+    _ensure_can_access_contract(contract)
     customer = contract.customer
     trailer = contract.trailer
     item = trailer.item if trailer else None
@@ -1449,7 +1969,7 @@ def _build_contract_context(contract_id: int) -> dict:
 @login_required
 def contracts_list():
     _block_production_commercial_access()
-    """Список договоров / продаж. Менеджеры видят ВСЕ договоры."""
+    """Список договоров / продаж. Менеджеры видят только свой склад/свои заказы."""
     warehouse_id = request.args.get('warehouse_id', type=int)
 
     q = (request.args.get('q') or '').strip()          # общий поиск: номер/клиент
@@ -1461,11 +1981,18 @@ def contracts_list():
 
     query = (
         SalesContract.query
+        .outerjoin(CustomerOrder, CustomerOrder.id == SalesContract.order_id)
         .outerjoin(Trailer, SalesContract.trailer_id == Trailer.id)
         .outerjoin(Item, Item.id == Trailer.item_id)
         .outerjoin(Customer, Customer.id == SalesContract.customer_id)
         .outerjoin(Warehouse, Warehouse.id == Trailer.warehouse_id)
     )
+    if current_user.is_manager:
+        query = query.filter(or_(
+            CustomerOrder.assigned_user_id == current_user.id,
+            CustomerOrder.warehouse_id == current_user.warehouse_id,
+            Trailer.warehouse_id == current_user.warehouse_id,
+        ))
 
     if warehouse_id:
         query = query.filter(Trailer.warehouse_id == warehouse_id)
@@ -1519,94 +2046,20 @@ def contracts_list():
 @login_required
 def contract_create():
     _block_production_commercial_access()
-    form = SalesContractForm()
-
-    # ----- Клиенты -----
-    customers = (
-        Customer.query
-        .filter_by(is_active=True)
-        .order_by(Customer.customer_type, Customer.name)
-        .all()
-    )
-    form.customer_id.choices = [
-        (c.id, f"{'ФЛ' if c.customer_type == 'PERSON' else 'ЮЛ'} — {c.name}")
-        for c in customers
-    ]
-
-    # ----- Прицепы (только не SOLD) -----
-    trailers = (
-        Trailer.query
-        .filter(Trailer.status != 'SOLD')
-        .order_by(Trailer.vin)
-        .all()
-    )
-    form.trailer_id.choices = [
-        (t.id, f"{t.vin} — {t.item.article if t.item else ''}")
-        for t in trailers
-    ]
-
-    # Подставляем номер при открытии формы
-    if request.method == 'GET' and not (form.contract_number.data or '').strip():
-        form.contract_number.data = get_next_contract_number()
-
-    if form.validate_on_submit():
-        trailer = Trailer.query.get(form.trailer_id.data)
-        if not trailer:
-            flash('Прицеп не найден', 'danger')
-            return render_template('contract_form.html', form=form, form_title='Новый договор')
-
-        # защита: на прицеп не должно быть договора
-        exists = SalesContract.query.filter(SalesContract.trailer_id == trailer.id).first()
-        if exists:
-            flash('На этот прицеп уже существует договор.', 'danger')
-            return render_template('contract_form.html', form=form, form_title='Новый договор')
-
-        if trailer.status == 'SOLD':
-            flash('Этот прицеп уже продан', 'danger')
-            return render_template('contract_form.html', form=form, form_title='Новый договор')
-
-        cn = _norm_str(form.contract_number.data)
-        if not cn:
-            cn = get_next_contract_number()
-            form.contract_number.data = cn
-
-        if not is_contract_number_unique(cn):
-            form.contract_number.errors.append('Такой номер договора уже существует. Введите другой.')
-            return render_template('contract_form.html', form=form, form_title='Новый договор')
-
-        contract = SalesContract(
-            contract_number=cn,
-            contract_date=form.contract_date.data,
-            customer_id=form.customer_id.data,
-            trailer_id=trailer.id,
-            price=form.price.data,
-            payment_method=_norm_str(form.payment_method.data),
-            source='manual',
-            is_paid=bool(form.is_paid.data),
-            is_shipped=bool(form.is_shipped.data),
-        )
-
-        trailer.status = 'SOLD'
-        db.session.add(contract)
-
-        try:
-            db.session.commit()
-        except IntegrityError:
-            db.session.rollback()
-            flash('Конфликт сохранения (прицеп уже занят другим договором). Обнови страницу и попробуй снова.', 'danger')
-            return render_template('contract_form.html', form=form, form_title='Новый договор')
-
-        flash('Договор успешно создан, прицеп помечен как "Продан"', 'success')
-        return redirect(url_for('main.contracts_list'))
-
-    return render_template('contract_form.html', form=form, form_title='Новый договор')
+    flash('Договор создаётся только из карточки заказа.', 'warning')
+    return redirect(url_for('main.orders_list'))
 
 
 @main_bp.route('/contracts/<int:contract_id>/edit', methods=['GET', 'POST'])
 @login_required
 def contract_edit(contract_id):
-    _block_production_commercial_access()
     contract = SalesContract.query.get_or_404(contract_id)
+    if not can_manage_contract(contract):
+        _block_production_commercial_access()
+        flash('Редактирование договора недоступно для вашей роли или после выдачи документов.', 'danger')
+        if contract.order_id and can_access_contract(contract):
+            return redirect(url_for('main.order_detail', order_id=contract.order_id))
+        abort(403)
     form = SalesContractForm(contract_id=contract.id)
 
     # ----- Клиенты -----
@@ -1647,6 +2100,9 @@ def contract_edit(contract_id):
         if not new_trailer:
             flash('Прицеп не найден', 'danger')
             return render_template('contract_form.html', form=form, form_title='Редактирование договора')
+        if contract.order and (form.customer_id.data != contract.order.customer_id or form.trailer_id.data != contract.order.trailer_id):
+            flash('Договор из заказа должен оставаться связан с клиентом и VIN этого заказа.', 'danger')
+            return render_template('contract_form.html', form=form, form_title='Редактирование договора')
 
         # защита: на новом прицепе не должно быть другого договора
         exists_other = (
@@ -1685,18 +2141,16 @@ def contract_edit(contract_id):
                 .count()
             )
             if other_cnt == 0:
-                old_trailer.status = 'IN_STOCK'
-
-        # новый прицеп помечаем проданным
-        new_trailer.status = 'SOLD'
+                old_trailer.status = 'RESERVED' if _active_reservation_for_trailer(old_trailer.id) else 'IN_STOCK'
 
         contract.contract_date = form.contract_date.data
         contract.customer_id = form.customer_id.data
         contract.trailer_id = new_trailer.id
         contract.price = form.price.data
         contract.payment_method = _norm_str(form.payment_method.data)
-        contract.is_paid = bool(form.is_paid.data)
-        contract.is_shipped = bool(form.is_shipped.data)
+        if current_user.is_admin:
+            contract.is_paid = bool(form.is_paid.data)
+            contract.is_shipped = bool(form.is_shipped.data)
 
         try:
             db.session.commit()
@@ -1706,6 +2160,8 @@ def contract_edit(contract_id):
             return render_template('contract_form.html', form=form, form_title='Редактирование договора')
 
         flash('Договор обновлён', 'success')
+        if contract.order_id:
+            return redirect(url_for('main.order_detail', order_id=contract.order_id))
         return redirect(url_for('main.contracts_list'))
 
     return render_template('contract_form.html', form=form, form_title='Редактирование договора')
@@ -1714,7 +2170,13 @@ def contract_edit(contract_id):
 @login_required
 def contract_delete(contract_id):
     contract = SalesContract.query.get_or_404(contract_id)
+    _ensure_can_manage_contract(contract)
     trailer = contract.trailer
+    order_id = contract.order_id
+
+    if contract.order and (contract.order.documents_issued or contract.order.is_shipped):
+        flash('Нельзя удалить договор после выдачи документов или отгрузки.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=contract.order_id))
 
     db.session.delete(contract)
     db.session.flush()
@@ -1722,10 +2184,12 @@ def contract_delete(contract_id):
     if trailer:
         other_cnt = SalesContract.query.filter_by(trailer_id=trailer.id).count()
         if other_cnt == 0:
-            trailer.status = 'IN_STOCK'
+            trailer.status = 'RESERVED' if _active_reservation_for_trailer(trailer.id) else 'IN_STOCK'
 
     db.session.commit()
     flash('Договор удалён', 'success')
+    if order_id:
+        return redirect(url_for('main.order_detail', order_id=order_id))
     return redirect(url_for('main.contracts_list'))
 
 
@@ -1739,9 +2203,9 @@ def contract_print(contract_id):
 @main_bp.route('/contracts/<int:contract_id>/pdf')
 @login_required
 def contract_pdf(contract_id):
+    ctx = _build_contract_context(contract_id)
     if HTML is not None:
         from flask import make_response, request
-        ctx = _build_contract_context(contract_id)
         html = render_template('contract_print.html', **ctx)
         pdf = HTML(string=html, base_url=request.host_url).write_pdf()
 
@@ -1783,18 +2247,27 @@ def contract_sign(contract_id):
     """
     ctx = _build_contract_context(contract_id)
     contract = ctx["contract"]
+    _ensure_can_manage_contract(contract)
     return render_template("contract_sign.html", contract=contract)
 
 @main_bp.route('/contracts/<int:contract_id>/sigex/pdf_base64')
 @login_required
 def contract_sigex_pdf_base64(contract_id):
-    pdf_bytes = _contract_pdf_bytes(contract_id)
+    contract = SalesContract.query.get_or_404(contract_id)
+    _ensure_can_manage_contract(contract)
+    try:
+        pdf_bytes = _contract_pdf_bytes(contract_id)
+    except RuntimeError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 503
     return jsonify({"pdfBase64": base64.b64encode(pdf_bytes).decode("utf-8")})
 
 @main_bp.route('/contracts/<int:contract_id>/sigex/preregister', methods=['POST'])
 @login_required
 def contract_sigex_preregister(contract_id):
     contract = SalesContract.query.get_or_404(contract_id)
+    _ensure_can_manage_contract(contract)
+    if HTML is None:
+        return jsonify({"ok": False, "error": "WeasyPrint is not available. HTML print/PDF fallback is available, SIGEX PDF is disabled."}), 503
 
     # если уже есть documentId — просто вернём
     if contract.sigex_document_id:
@@ -1834,6 +2307,7 @@ def contract_sigex_add_org_signature(contract_id):
     Сюда фронт пришлёт CMS подпись (base64) от NCALayer.
     """
     contract = SalesContract.query.get_or_404(contract_id)
+    _ensure_can_manage_contract(contract)
 
     if not contract.sigex_document_id:
         abort(400, "SIGEX document not preregistered")
@@ -1861,6 +2335,7 @@ def contract_sigex_add_org_signature(contract_id):
 @login_required
 def contract_sigex_start_qr(contract_id):
     contract = SalesContract.query.get_or_404(contract_id)
+    _ensure_can_manage_contract(contract)
     if not contract.sigex_document_id:
         abort(400, "SIGEX document not preregistered")
 
@@ -1885,6 +2360,7 @@ def contract_sigex_start_qr(contract_id):
 @login_required
 def contract_sigex_qr_status(contract_id):
     contract = SalesContract.query.get_or_404(contract_id)
+    _ensure_can_access_contract(contract)
     if not (contract.sigex_document_id and contract.sigex_operation_id):
         abort(400, "No active operation")
 
@@ -1906,6 +2382,7 @@ def contract_sigex_ddc(contract_id):
     Карточка электронного документа (DDC) — можно дать ссылку менеджеру.
     """
     contract = SalesContract.query.get_or_404(contract_id)
+    _ensure_can_access_contract(contract)
     if not contract.sigex_document_id:
         abort(400, "SIGEX document not preregistered")
 
@@ -1946,8 +2423,15 @@ def _refresh_order_status(order: CustomerOrder) -> None:
     price = float(order.price or 0)
     required_prepayment = price * float(order.prepayment_percent or 0) / 100
 
+    if order.status == 'cancelled':
+        return
+
     if order.is_shipped:
         order.status = 'shipped'
+        return
+
+    if order.documents_issued:
+        order.status = 'sold_not_shipped'
         return
 
     if price > 0 and paid >= price and order.trailer_id:
@@ -2005,27 +2489,277 @@ def _active_reservation_for_trailer(trailer_id: int, exclude_order_id: int | Non
     return q.first()
 
 
+def _item_label(item: Item) -> str:
+    parts = [item.article or '', item.name or '']
+    details = []
+    if item.size_body:
+        details.append(str(item.size_body))
+    if item.axle_count:
+        details.append(f'{item.axle_count} оси')
+    if item.wheel_radius:
+        details.append(str(item.wheel_radius))
+    label = ' — '.join(part for part in parts if part)
+    if details:
+        label = f'{label} ({", ".join(details)})'
+    return label or f'Модель #{item.id}'
+
+
+def _customer_label(customer: Customer) -> str:
+    parts = [customer.name or f'Клиент #{customer.id}']
+    details = []
+    if customer.phone:
+        details.append(customer.phone)
+    if customer.iin_bin:
+        details.append(customer.iin_bin)
+    if customer.customer_type:
+        details.append('ФЛ' if customer.customer_type == 'PERSON' else 'ЮЛ')
+    return f"{parts[0]} ({', '.join(details)})" if details else parts[0]
+
+
+def _customer_options(limit: int | None = None):
+    query = Customer.query.filter_by(is_active=True).order_by(Customer.name)
+    if limit:
+        query = query.limit(limit)
+    return [
+        {
+            'id': customer.id,
+            'label': _customer_label(customer),
+            'name': customer.name,
+            'phone': customer.phone or '',
+            'iin_bin': customer.iin_bin or '',
+            'customer_type': customer.customer_type,
+        }
+        for customer in query.all()
+    ]
+
+
+def _find_customer_by_search(search: str | None):
+    text = (search or '').strip()
+    if not text:
+        return None
+    normalized = text.lower()
+    customers = Customer.query.filter_by(is_active=True).order_by(Customer.name).all()
+    for customer in customers:
+        if _customer_label(customer).lower() == normalized:
+            return customer
+    exact = [
+        customer for customer in customers
+        if (customer.phone and customer.phone.lower() == normalized)
+        or (customer.iin_bin and customer.iin_bin.lower() == normalized)
+        or (customer.name and customer.name.lower() == normalized)
+    ]
+    if len(exact) == 1:
+        return exact[0]
+    contains = [
+        customer for customer in customers
+        if normalized in _customer_label(customer).lower()
+    ]
+    return contains[0] if len(contains) == 1 else None
+
+
+def _apply_customer_search(form: CustomerOrderForm) -> None:
+    customer_id = form.customer_id.data or 0
+    if request.method == 'POST' and (not customer_id or customer_id == 0):
+        customer = _find_customer_by_search(form.customer_search.data)
+        if customer:
+            form.customer_id.data = customer.id
+
+
+def _set_customer_search_label(form: CustomerOrderForm) -> None:
+    customer_id = form.customer_id.data or 0
+    if customer_id and not form.customer_search.data:
+        customer = Customer.query.get(customer_id)
+        if customer:
+            form.customer_search.data = _customer_label(customer)
+
+
+def _trailer_item_options():
+    return [
+        {'id': item.id, 'label': _item_label(item)}
+        for item in Item.query.filter(Item.item_type == 'TRAILER', Item.is_active == True).order_by(Item.article, Item.name).all()
+    ]
+
+
+def _order_trailer_options(current_order_id: int | None = None):
+    trailers = (
+        Trailer.query
+        .filter(
+            Trailer.status == 'IN_STOCK',
+            or_(Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped'),
+        )
+        .order_by(Trailer.vin)
+        .all()
+    )
+    result = []
+    for trailer in trailers:
+        if not _trailer_available_for_sale(trailer, exclude_order_id=current_order_id):
+            continue
+        result.append({
+            'id': trailer.id,
+            'item_id': trailer.item_id,
+            'warehouse_id': trailer.warehouse_id,
+            'label': f'{trailer.vin} — {trailer.item.article if trailer.item else ""} — {trailer.warehouse.name if trailer.warehouse else ""}',
+        })
+    return result
+
+
+def _find_item_by_search(search: str | None):
+    text = (search or '').strip()
+    if not text:
+        return None
+    normalized = text.lower()
+    items = Item.query.filter(Item.item_type == 'TRAILER', Item.is_active == True).order_by(Item.article, Item.name).all()
+    for item in items:
+        if _item_label(item).lower() == normalized:
+            return item
+    exact_article = [item for item in items if (item.article or '').lower() == normalized]
+    if len(exact_article) == 1:
+        return exact_article[0]
+    contains = [
+        item for item in items
+        if normalized in (_item_label(item).lower())
+    ]
+    return contains[0] if len(contains) == 1 else None
+
+
+def _apply_item_search(form, search_attr: str, item_attr: str) -> None:
+    search = getattr(form, search_attr).data or ''
+    item_id = getattr(form, item_attr).data or 0
+    if request.method == 'POST' and (not item_id or item_id == 0):
+        item = _find_item_by_search(search)
+        if item:
+            getattr(form, item_attr).data = item.id
+
+
+def _set_item_search_label(form, search_attr: str, item_attr: str) -> None:
+    item_id = getattr(form, item_attr).data or 0
+    if item_id and not getattr(form, search_attr).data:
+        item = Item.query.get(item_id)
+        if item:
+            getattr(form, search_attr).data = _item_label(item)
+
+
 def _fill_order_form_choices(form: CustomerOrderForm, item_id_prefill: int | None = None, current_order_id: int | None = None) -> None:
     leads = Lead.query.order_by(Lead.created_at.desc(), Lead.id.desc()).all()
     form.lead_id.choices = [(0, '— без заявки —')] + [(l.id, f'#{l.id} {l.customer_name} / {l.channel or l.source_channel}') for l in leads]
-    form.customer_id.choices = [(c.id, c.name) for c in Customer.query.filter_by(is_active=True).order_by(Customer.name).all()]
+    form.customer_id.choices = [(0, '— выберите клиента —')] + [(c.id, _customer_label(c)) for c in Customer.query.filter_by(is_active=True).order_by(Customer.name).all()]
     items = Item.query.filter(Item.item_type == 'TRAILER', Item.is_active == True).order_by(Item.article, Item.name).all()
-    form.item_id.choices = [(i.id, f'{i.article or ""} — {i.name}') for i in items]
+    form.item_id.choices = [(0, '— выберите модель —')] + [(i.id, _item_label(i)) for i in items]
     form.warehouse_id.choices = [(0, '— не выбрано —')] + [(w.id, w.name) for w in Warehouse.query.filter_by(is_active=True).order_by(Warehouse.name).all()]
     form.assigned_user_id.choices = [(0, '— не назначен —')] + [(u.id, u.full_name or u.username) for u in User.query.order_by(User.full_name, User.username).all()]
 
-    trailer_query = Trailer.query.filter(Trailer.status.in_(['IN_STOCK', 'RESERVED'])).order_by(Trailer.vin)
-    if item_id_prefill:
-        trailer_query = trailer_query.filter(Trailer.item_id == item_id_prefill)
+    _apply_item_search(form, 'item_search', 'item_id')
+    _apply_customer_search(form)
+    current_order = CustomerOrder.query.get(current_order_id) if current_order_id else None
+    selected_item_id = item_id_prefill or (form.item_id.data or 0)
+    selected_warehouse_id = form.warehouse_id.data or 0
+    fulfillment_source = (form.fulfillment_source.data or '').strip()
+    trailer_query = Trailer.query.filter(
+        Trailer.status.in_(['IN_STOCK', 'RESERVED']),
+        or_(Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped'),
+    ).order_by(Trailer.vin)
+    if selected_item_id:
+        trailer_query = trailer_query.filter(Trailer.item_id == selected_item_id)
+    if selected_warehouse_id:
+        if fulfillment_source == 'other_warehouse':
+            trailer_query = trailer_query.filter(Trailer.warehouse_id != selected_warehouse_id)
+        else:
+            trailer_query = trailer_query.filter(Trailer.warehouse_id == selected_warehouse_id)
     trailers = []
     for trailer in trailer_query.all():
-        active = _active_reservation_for_trailer(trailer.id, exclude_order_id=current_order_id)
-        if not active:
+        if (current_order and trailer.id == current_order.trailer_id) or _trailer_available_for_sale(trailer, exclude_order_id=current_order_id):
             trailers.append(trailer)
     form.trailer_id.choices = [(0, '— подобрать позже / под заказ —')] + [
         (t.id, f'{t.vin} — {t.item.article if t.item else ""} — {t.warehouse.name if t.warehouse else ""} — {t.status}')
         for t in trailers
     ]
+    _set_item_search_label(form, 'item_search', 'item_id')
+    _set_customer_search_label(form)
+
+
+def _fill_lead_form_choices(form: LeadForm) -> None:
+    items = Item.query.filter(Item.item_type == 'TRAILER', Item.is_active == True).order_by(Item.article, Item.name).all()
+    form.desired_item_id.choices = [(0, '— не выбрано —')] + [(i.id, _item_label(i)) for i in items]
+    form.warehouse_id.choices = [(0, '— не выбрано —')] + [(w.id, w.name) for w in Warehouse.query.filter_by(is_active=True).order_by(Warehouse.name).all()]
+    form.assigned_user_id.choices = [(0, '— не назначен —')] + [(u.id, u.full_name or u.username) for u in User.query.order_by(User.full_name, User.username).all()]
+    _apply_item_search(form, 'desired_item_search', 'desired_item_id')
+    _set_item_search_label(form, 'desired_item_search', 'desired_item_id')
+
+
+def _order_future_availability(item_id: int | None, warehouse_id: int | None):
+    if not item_id or not warehouse_id:
+        return None
+    stock = [
+        trailer for trailer in Trailer.query.filter(
+            Trailer.item_id == item_id,
+            Trailer.warehouse_id == warehouse_id,
+            Trailer.status == 'IN_STOCK',
+            or_(Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped'),
+        ).order_by(Trailer.vin).all()
+        if _trailer_available_for_sale(trailer)
+    ]
+    stock_needs = (
+        SupplyNeed.query
+        .filter(
+            SupplyNeed.item_id == item_id,
+            SupplyNeed.warehouse_id == warehouse_id,
+            SupplyNeed.need_type.in_(['STOCK_REPLENISHMENT', 'WAREHOUSE_STOCK']),
+            SupplyNeed.status.in_(['NEW', 'IN_PRODUCTION']),
+        )
+        .order_by(SupplyNeed.required_by.asc().nullslast(), SupplyNeed.created_at.desc())
+        .all()
+    )
+    production_lines = (
+        ProductionRequestLine.query
+        .join(ProductionRequest, ProductionRequest.id == ProductionRequestLine.production_request_id)
+        .filter(
+            ProductionRequestLine.item_id == item_id,
+            ProductionRequest.target_warehouse_id == warehouse_id,
+            ProductionRequestLine.status.in_(['planned', 'PLANNED', 'in_production', 'partial_ready']),
+        )
+        .order_by(ProductionRequest.created_at.desc(), ProductionRequestLine.id.desc())
+        .all()
+    )
+    produced_units = (
+        ProducedUnit.query
+        .filter(
+            ProducedUnit.item_id == item_id,
+            ProducedUnit.target_warehouse_id == warehouse_id,
+            ProducedUnit.status == 'produced_no_vin',
+        )
+        .order_by(ProducedUnit.produced_at.desc().nullslast(), ProducedUnit.created_at.desc())
+        .all()
+    )
+    inbound_movements = (
+        StockMovement.query
+        .join(Trailer, Trailer.id == StockMovement.trailer_id)
+        .filter(
+            Trailer.item_id == item_id,
+            StockMovement.to_warehouse_id == warehouse_id,
+            StockMovement.status.in_(['sent', 'in_transit']),
+        )
+        .order_by(StockMovement.arrival_date.asc().nullslast(), StockMovement.created_at.desc())
+        .all()
+    )
+    return {
+        'stock': stock,
+        'stock_needs': stock_needs,
+        'production_lines': production_lines,
+        'produced_units': produced_units,
+        'inbound_movements': inbound_movements,
+    }
+
+
+def _render_order_form(form: CustomerOrderForm, title: str):
+    return render_template(
+        'order_form.html',
+        form=form,
+        title=title,
+        customer_options=_customer_options(limit=50),
+        item_options=_trailer_item_options(),
+        trailer_options=_order_trailer_options(getattr(form, 'order_id', None)),
+        availability=_order_future_availability(form.item_id.data or None, form.warehouse_id.data or None),
+    )
 
 
 def _fill_supply_need_form_choices(form: SupplyNeedForm) -> None:
@@ -2038,25 +2772,203 @@ def _fill_supply_need_form_choices(form: SupplyNeedForm) -> None:
     form.warehouse_id.choices = [(0, '— не выбрано —')] + [(w.id, w.name) for w in Warehouse.query.filter_by(is_active=True).order_by(Warehouse.name).all()]
 
 
-def _fill_production_line_form_choices(form: ProductionRequestLineForm) -> None:
+def _fill_stock_replenishment_form_choices(form: StockReplenishmentForm) -> None:
+    warehouses = Warehouse.query.filter_by(is_active=True).order_by(Warehouse.name).all()
+    if current_user.is_manager and current_user.warehouse_id:
+        warehouses = [w for w in warehouses if w.id == current_user.warehouse_id]
+    form.warehouse_id.choices = [(w.id, w.name) for w in warehouses]
+    form.item_id.choices = [
+        (i.id, f'{i.article or ""} — {i.name}')
+        for i in Item.query.filter(Item.item_type == 'TRAILER', Item.is_active == True).order_by(Item.article, Item.name).all()
+    ]
+
+
+def _active_production_line_for_need(need_id: int | None, exclude_line_id: int | None = None):
+    if not need_id:
+        return None
+    query = ProductionRequestLine.query.filter(
+        ProductionRequestLine.supply_need_id == need_id,
+        ~ProductionRequestLine.status.in_(['ready', 'closed', 'cancelled', 'canceled']),
+    )
+    if exclude_line_id:
+        query = query.filter(ProductionRequestLine.id != exclude_line_id)
+    return query.first()
+
+
+def _production_need_label(need: SupplyNeed) -> str:
+    item_label = ''
+    if need.item:
+        item_label = ' — '.join(part for part in [need.item.article, need.item.name] if part)
+    parts = [f'#{need.id}', status_label(need.need_type), item_label]
+    if need.order:
+        customer_name = need.order.customer.name if need.order.customer else 'клиент'
+        parts.append(f'заказ {need.order.order_number} / {customer_name}')
+    elif need.warehouse:
+        parts.append(f'на склад {need.warehouse.name}')
+    parts.append(f'{need.quantity or 0} шт.')
+    if need.required_by:
+        parts.append(f'срок {date_format(need.required_by)}')
+    if need.note:
+        parts.append(need.note[:80])
+    return ' — '.join(str(part) for part in parts if part)
+
+
+def _fill_production_line_form_choices(form: ProductionRequestLineForm, target_warehouse_id: int | None = None, current_line_id: int | None = None) -> None:
+    needs_query = SupplyNeed.query.filter(SupplyNeed.status.in_(['NEW', 'IN_PRODUCTION']))
+    if target_warehouse_id:
+        needs_query = needs_query.filter(or_(SupplyNeed.warehouse_id == target_warehouse_id, SupplyNeed.warehouse_id.is_(None)))
+    needs = [
+        need for need in needs_query.order_by(SupplyNeed.priority.asc(), SupplyNeed.required_by.asc().nullslast(), SupplyNeed.created_at.desc()).all()
+        if not _active_production_line_for_need(need.id, exclude_line_id=current_line_id)
+    ]
     form.supply_need_id.choices = [(0, '— без потребности —')] + [
-        (n.id, f'#{n.id} {n.item.article if n.item else ""} / {n.status}') for n in SupplyNeed.query.order_by(SupplyNeed.priority.asc(), SupplyNeed.created_at.desc()).all()
+        (need.id, _production_need_label(need)) for need in needs
     ]
     form.item_id.choices = [
         (i.id, f'{i.article or ""} — {i.name}') for i in Item.query.filter(Item.item_type == 'TRAILER', Item.is_active == True).order_by(Item.article, Item.name).all()
     ]
 
 
-def _fill_stock_movement_form_choices(form: StockMovementForm) -> None:
+def _stock_movement_trailer_label(trailer: Trailer) -> str:
+    parts = [trailer.vin]
+    if trailer.item:
+        parts.append(trailer.item.article or trailer.item.name or '')
+    if trailer.warehouse:
+        parts.append(trailer.warehouse.name)
+    parts.append(status_label(trailer.status))
+    return ' — '.join(part for part in parts if part)
+
+
+def _stock_movement_trailer_options(from_warehouse_id: int | None = None, q: str | None = None, current_trailer_id: int | None = None, exclude_movement_id: int | None = None, limit: int = 50):
+    query = (
+        Trailer.query
+        .join(Item, Item.id == Trailer.item_id)
+        .join(Warehouse, Warehouse.id == Trailer.warehouse_id)
+        .filter(
+            Trailer.status.in_(['IN_STOCK', 'RESERVED', 'SOLD']),
+            or_(Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped'),
+        )
+    )
+    if from_warehouse_id:
+        query = query.filter(Trailer.warehouse_id == from_warehouse_id)
+    text = (q or '').strip()
+    if text:
+        like = f'%{text}%'
+        query = query.filter(or_(Trailer.vin.ilike(like), Item.article.ilike(like), Item.name.ilike(like), Warehouse.name.ilike(like)))
+    trailers = query.order_by(Trailer.vin).limit(limit).all()
+    if current_trailer_id and all(trailer.id != current_trailer_id for trailer in trailers):
+        current_trailer = Trailer.query.get(current_trailer_id)
+        if current_trailer:
+            trailers.insert(0, current_trailer)
+    return [
+        {
+            'id': trailer.id,
+            'label': _stock_movement_trailer_label(trailer),
+            'vin': trailer.vin,
+            'item': trailer.item.article if trailer.item else '',
+            'warehouse_id': trailer.warehouse_id,
+            'warehouse': trailer.warehouse.name if trailer.warehouse else '',
+            'status': trailer.status,
+        }
+        for trailer in trailers
+        if trailer.id == current_trailer_id or _trailer_available_for_movement(trailer, from_warehouse_id=from_warehouse_id, exclude_movement_id=exclude_movement_id)
+    ]
+
+
+def _find_stock_movement_trailer_by_search(search: str | None, from_warehouse_id: int | None = None, exclude_movement_id: int | None = None):
+    text = (search or '').strip()
+    if not text:
+        return None
+    normalized = text.lower()
+    options = _stock_movement_trailer_options(from_warehouse_id=from_warehouse_id, q=text, exclude_movement_id=exclude_movement_id, limit=100)
+    exact = [option for option in options if option['label'].lower() == normalized or option['vin'].lower() == normalized]
+    if len(exact) == 1:
+        return Trailer.query.get(exact[0]['id'])
+    contains = [option for option in options if normalized in option['label'].lower()]
+    if len(contains) == 1:
+        return Trailer.query.get(contains[0]['id'])
+    return None
+
+
+def _apply_stock_movement_trailer_search(form: StockMovementForm, exclude_movement_id: int | None = None) -> None:
+    trailer_id = form.trailer_id.data or 0
+    if request.method == 'POST' and (not trailer_id or trailer_id == 0):
+        trailer = _find_stock_movement_trailer_by_search(
+            form.trailer_search.data,
+            from_warehouse_id=form.from_warehouse_id.data or None,
+            exclude_movement_id=exclude_movement_id,
+        )
+        if trailer:
+            form.trailer_id.data = trailer.id
+
+
+def _set_stock_movement_trailer_search_label(form: StockMovementForm) -> None:
+    trailer_id = form.trailer_id.data or 0
+    if trailer_id and not form.trailer_search.data:
+        trailer = Trailer.query.get(trailer_id)
+        if trailer:
+            form.trailer_search.data = _stock_movement_trailer_label(trailer)
+
+
+def _fill_stock_movement_form_choices(form: StockMovementForm, current_movement_id: int | None = None) -> None:
     warehouses = Warehouse.query.filter_by(is_active=True).order_by(Warehouse.name).all()
     form.from_warehouse_id.choices = [(0, '— нет —')] + [(w.id, w.name) for w in warehouses]
     form.to_warehouse_id.choices = [(0, '— нет —')] + [(w.id, w.name) for w in warehouses]
+    _apply_stock_movement_trailer_search(form, exclude_movement_id=current_movement_id)
+    current_trailer_id = form.trailer_id.data or 0
     form.trailer_id.choices = [(0, '— без VIN —')] + [
-        (t.id, f'{t.vin} — {t.item.article if t.item else ""} — {t.status}') for t in Trailer.query.order_by(Trailer.vin).all()
+        (option['id'], option['label'])
+        for option in _stock_movement_trailer_options(
+            from_warehouse_id=form.from_warehouse_id.data or None,
+            q=form.trailer_search.data,
+            current_trailer_id=current_trailer_id,
+            exclude_movement_id=current_movement_id,
+        )
     ]
     form.order_id.choices = [(0, '— без заказа —')] + [
         (o.id, f'{o.order_number} — {o.customer.name if o.customer else ""}') for o in CustomerOrder.query.order_by(CustomerOrder.created_at.desc()).all()
     ]
+    _set_stock_movement_trailer_search_label(form)
+
+
+def _fill_stock_movement_batch_form_choices(form: StockMovementBatchForm) -> None:
+    warehouses = Warehouse.query.filter_by(is_active=True).order_by(Warehouse.name).all()
+    form.from_warehouse_id.choices = [(w.id, w.name) for w in warehouses]
+    form.to_warehouse_id.choices = [(w.id, w.name) for w in warehouses]
+
+
+def _selected_trailers_from_request() -> list[Trailer]:
+    seen = set()
+    trailers = []
+    for raw_id in request.form.getlist('trailer_ids'):
+        try:
+            trailer_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if trailer_id in seen:
+            continue
+        trailer = Trailer.query.get(trailer_id)
+        if trailer:
+            trailers.append(trailer)
+            seen.add(trailer_id)
+    return trailers
+
+
+def _movement_order_for_trailer(trailer: Trailer):
+    active_reservation = _active_reservation_for_trailer(trailer.id)
+    if active_reservation and active_reservation.order_id:
+        return active_reservation.order
+    return (
+        CustomerOrder.query
+        .filter(
+            CustomerOrder.trailer_id == trailer.id,
+            CustomerOrder.documents_issued == True,
+            CustomerOrder.is_shipped == False,
+            CustomerOrder.status != 'cancelled',
+        )
+        .order_by(CustomerOrder.documents_issued_at.desc().nullslast(), CustomerOrder.created_at.desc())
+        .first()
+    )
 
 
 @main_bp.route('/leads')
@@ -2089,15 +3001,7 @@ def leads_list():
 def lead_create():
     _block_production_commercial_access()
     form = LeadForm()
-
-    items = Item.query.filter(Item.item_type == 'TRAILER', Item.is_active == True).order_by(Item.article, Item.name).all()
-    form.desired_item_id.choices = [(0, '— не выбрано —')] + [(i.id, f'{i.article or ""} — {i.name}') for i in items]
-
-    warehouses = Warehouse.query.filter_by(is_active=True).order_by(Warehouse.name).all()
-    form.warehouse_id.choices = [(0, '— не выбрано —')] + [(w.id, w.name) for w in warehouses]
-
-    users = User.query.order_by(User.full_name, User.username).all()
-    form.assigned_user_id.choices = [(0, '— не назначен —')] + [(u.id, u.full_name or u.username) for u in users]
+    _fill_lead_form_choices(form)
 
     if request.method == 'GET':
         if current_user.warehouse_id:
@@ -2107,6 +3011,9 @@ def lead_create():
         form.created_at.data = date.today()
 
     if form.validate_on_submit():
+        idem_key, duplicate = _reserve_idempotency_key()
+        if duplicate:
+            return _duplicate_redirect(idem_key, url_for('main.leads_list'))
         lead = Lead(
             created_at=datetime.combine(form.created_at.data or date.today(), datetime.min.time()),
             channel=form.source_channel.data,
@@ -2126,13 +3033,15 @@ def lead_create():
             comment=(form.comment.data or '').strip() or None,
         )
         db.session.add(lead)
+        db.session.flush()
+        _finish_idempotency(idem_key, 'Lead', lead.id)
         db.session.commit()
         flash('Заявка создана', 'success')
         if request.args.get('return_to') == 'manager_workspace' or current_user.is_manager:
             return redirect(url_for('main.manager_workspace'))
         return redirect(url_for('main.leads_list'))
 
-    return render_template('lead_form.html', form=form, title='Новая заявка')
+    return render_template('lead_form.html', form=form, title='Новая заявка', item_options=_trailer_item_options())
 
 
 def _ensure_customer_for_lead(lead: Lead):
@@ -2416,6 +3325,66 @@ def orders_list():
     return render_template('orders_list.html', orders=orders, status=status, q=q)
 
 
+@main_bp.route('/api/order-availability')
+@login_required
+def api_order_availability():
+    _block_production_commercial_access()
+    item_id = request.args.get('item_id', type=int)
+    warehouse_id = request.args.get('warehouse_id', type=int)
+    if current_user.is_manager and warehouse_id and current_user.warehouse_id != warehouse_id:
+        abort(403)
+    availability = _order_future_availability(item_id, warehouse_id)
+    if not availability:
+        return jsonify({'ok': True, 'rows': [], 'summary': {'stock': 0, 'ordered': 0, 'production': 0, 'inbound': 0}})
+
+    rows = []
+    for trailer in availability['stock']:
+        rows.append({'source': 'В наличии', 'value': trailer.vin, 'date': '', 'status': status_label(trailer.status)})
+    for need in availability['stock_needs']:
+        rows.append({'source': 'Заказано на склад', 'value': f'{need.quantity} шт.', 'date': date_format(need.required_by), 'status': status_label(need.status)})
+    for line in availability['production_lines']:
+        rows.append({
+            'source': 'В производстве',
+            'value': f'{max((line.quantity or 0) - (line.produced_qty or 0), 0)} шт.',
+            'date': date_format(line.supply_need.required_by) if line.supply_need else '',
+            'status': status_label(line.status),
+        })
+    for unit in availability['produced_units']:
+        rows.append({'source': 'Выпущено без VIN', 'value': f'#{unit.id}', 'date': date_format(unit.produced_at), 'status': status_label(unit.status)})
+    for movement in availability['inbound_movements']:
+        rows.append({'source': 'В пути', 'value': movement.trailer.vin if movement.trailer else '', 'date': date_format(movement.arrival_date), 'status': status_label(movement.status)})
+
+    return jsonify({
+        'ok': True,
+        'summary': {
+            'stock': len(availability['stock']),
+            'ordered': len(availability['stock_needs']),
+            'production': len(availability['production_lines']),
+            'inbound': len(availability['inbound_movements']),
+        },
+        'rows': rows,
+    })
+
+
+@main_bp.route('/api/movement-trailers/search')
+@role_required('director', 'logistics')
+def api_movement_trailers_search():
+    from_warehouse_id = request.args.get('from_warehouse_id', type=int)
+    q = (request.args.get('q') or '').strip()
+    current_trailer_id = request.args.get('current_trailer_id', type=int)
+    exclude_movement_id = request.args.get('exclude_movement_id', type=int)
+    return jsonify({
+        'ok': True,
+        'trailers': _stock_movement_trailer_options(
+            from_warehouse_id=from_warehouse_id,
+            q=q,
+            current_trailer_id=current_trailer_id,
+            exclude_movement_id=exclude_movement_id,
+            limit=30,
+        ),
+    })
+
+
 @main_bp.route('/orders/new', methods=['GET', 'POST'])
 @login_required
 def order_create():
@@ -2424,7 +3393,7 @@ def order_create():
     item_id_prefill = request.args.get('item_id', type=int)
     trailer_id_prefill = request.args.get('trailer_id', type=int)
     lead_id_prefill = request.args.get('lead_id', type=int)
-    _fill_order_form_choices(form, item_id_prefill=item_id_prefill)
+    customer_id_prefill = request.args.get('customer_id', type=int)
 
     if request.method == 'GET':
         form.order_number.data = _next_number('ORD', CustomerOrder, 'order_number')
@@ -2444,6 +3413,11 @@ def order_create():
                     form.customer_id.data = lead.customer_id
                 if lead.desired_item_id:
                     form.item_id.data = lead.desired_item_id
+        if customer_id_prefill:
+            customer = Customer.query.get(customer_id_prefill)
+            if customer:
+                form.customer_id.data = customer.id
+                form.customer_search.data = _customer_label(customer)
         if item_id_prefill:
             form.item_id.data = item_id_prefill
         if trailer_id_prefill:
@@ -2453,23 +3427,37 @@ def order_create():
                 form.item_id.data = trailer.item_id
                 form.fulfillment_source.data = 'stock' if trailer.warehouse_id == form.warehouse_id.data else 'other_warehouse'
 
+    _fill_order_form_choices(form, item_id_prefill=item_id_prefill)
+
     if form.validate_on_submit():
         order_number = (form.order_number.data or '').strip() or _next_number('ORD', CustomerOrder, 'order_number')
         if CustomerOrder.query.filter_by(order_number=order_number).first():
             flash('Такой номер заказа уже существует', 'danger')
-            return render_template('order_form.html', form=form, title='Новый заказ')
+            return _render_order_form(form, 'Новый заказ')
         selected_trailer = Trailer.query.get(form.trailer_id.data) if form.trailer_id.data else None
         if selected_trailer and _active_reservation_for_trailer(selected_trailer.id):
             flash('Этот прицеп уже зарезервирован под другой активный заказ.', 'danger')
-            return render_template('order_form.html', form=form, title='Новый заказ')
-        if selected_trailer and selected_trailer.status != 'IN_STOCK':
+            return _render_order_form(form, 'Новый заказ')
+        if selected_trailer and not _trailer_available_for_sale(selected_trailer):
             flash('Можно резервировать только прицеп в наличии.', 'danger')
-            return render_template('order_form.html', form=form, title='Новый заказ')
+            return _render_order_form(form, 'Новый заказ')
+        if selected_trailer and selected_trailer.item_id != form.item_id.data:
+            flash('Выбранный VIN не соответствует выбранной модели.', 'danger')
+            return _render_order_form(form, 'Новый заказ')
+        if selected_trailer and (form.fulfillment_source.data or 'stock') != 'other_warehouse' and form.warehouse_id.data and selected_trailer.warehouse_id != form.warehouse_id.data:
+            flash('Для продажи из наличия выбранный VIN должен находиться на складе продажи.', 'danger')
+            return _render_order_form(form, 'Новый заказ')
+        if selected_trailer and form.fulfillment_source.data == 'other_warehouse' and form.warehouse_id.data and selected_trailer.warehouse_id == form.warehouse_id.data:
+            flash('Для сценария с другого склада выберите VIN не со склада продажи.', 'danger')
+            return _render_order_form(form, 'Новый заказ')
         if current_user.is_manager and form.warehouse_id.data and current_user.warehouse_id != form.warehouse_id.data:
             abort(403)
         if current_user.is_manager and selected_trailer and (form.fulfillment_source.data or 'stock') == 'stock' and selected_trailer.warehouse_id != current_user.warehouse_id:
             flash('Для сценария из наличия менеджер может выбрать только прицеп своего склада.', 'danger')
-            return render_template('order_form.html', form=form, title='Новый заказ')
+            return _render_order_form(form, 'Новый заказ')
+        idem_key, duplicate = _reserve_idempotency_key()
+        if duplicate:
+            return _duplicate_redirect(idem_key, url_for('main.orders_list'))
 
         order = CustomerOrder(
             order_number=order_number,
@@ -2482,16 +3470,17 @@ def order_create():
             quantity=form.quantity.data or 1,
             price=form.price.data,
             prepayment_percent=form.prepayment_percent.data,
-            status=form.status.data,
+            status='waiting_payment',
             fulfillment_source=(form.fulfillment_source.data or '').strip() or None,
             expected_date=form.expected_date.data,
-            documents_issued=bool(form.documents_issued.data),
-            is_shipped=bool(form.is_shipped.data),
+            planned_ship_date=form.planned_ship_date.data,
+            planned_ship_comment=(form.planned_ship_comment.data or '').strip() or None,
             note=(form.note.data or '').strip() or None,
             manager_comment=(form.manager_comment.data or '').strip() or None,
         )
         db.session.add(order)
         db.session.flush()
+        _finish_idempotency(idem_key, 'CustomerOrder', order.id)
         add_order_event(order, 'order_created', new_value=order.status, comment=f'Создан из заявки #{order.lead_id}' if order.lead_id else 'Заказ создан')
 
         if order.lead_id:
@@ -2546,7 +3535,7 @@ def order_create():
         flash('Заказ создан', 'success')
         return redirect(url_for('main.order_detail', order_id=order.id))
 
-    return render_template('order_form.html', form=form, title='Новый заказ')
+    return _render_order_form(form, 'Новый заказ')
 
 
 @main_bp.route('/orders/<int:order_id>/payments/new', methods=['GET', 'POST'])
@@ -2567,6 +3556,9 @@ def order_payment_create(order_id):
             form.stage.data = 'FULL'
 
     if form.validate_on_submit():
+        idem_key, duplicate = _reserve_idempotency_key()
+        if duplicate:
+            return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
         paid_at = form.paid_at.data
         payment = OrderPayment(
             order_id=order.id,
@@ -2581,6 +3573,7 @@ def order_payment_create(order_id):
         )
         db.session.add(payment)
         db.session.flush()
+        _finish_idempotency(idem_key, 'OrderPayment', payment.id)
 
         # если предоплата подтверждена и нет резерва — создаём/поддерживаем потребность
         if payment.status == 'CONFIRMED' and order.trailer_id is None and order.supply_needs.count() == 0:
@@ -2616,6 +3609,9 @@ def order_payment_add(order_id):
     if not form.validate_on_submit():
         flash('Не удалось добавить оплату. Проверьте сумму и дату.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
 
     paid_at = form.paid_at.data
     payment = OrderPayment(
@@ -2631,6 +3627,7 @@ def order_payment_add(order_id):
     )
     db.session.add(payment)
     db.session.flush()
+    _finish_idempotency(idem_key, 'OrderPayment', payment.id)
     old_status = order.status
     _refresh_order_status(order)
     if old_status != order.status:
@@ -2646,17 +3643,24 @@ def order_payment_add(order_id):
 def order_payment_cancel(order_id, payment_id):
     order = CustomerOrder.query.get_or_404(order_id)
     payment = OrderPayment.query.filter_by(id=payment_id, order_id=order.id).first_or_404()
+    if payment.status == 'CANCELED':
+        flash('Оплата уже отменена.', 'warning')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
     old_status = payment.status
     payment.status = 'CANCELED'
     _refresh_order_status(order)
     add_order_event(order, 'payment_cancelled', old_value=old_status, new_value='CANCELED', comment=request.form.get('reason') or None)
+    _finish_idempotency(idem_key, 'OrderPayment', payment.id)
     db.session.commit()
     flash('Оплата отменена', 'success')
     return redirect(url_for('main.order_detail', order_id=order.id))
 
 
 @main_bp.route('/supply-needs')
-@login_required
+@role_required('manager', 'director', 'logistics')
 def supply_needs_list():
     status = request.args.get('status', '').strip()
     query = SupplyNeed.query.join(Item, Item.id == SupplyNeed.item_id)
@@ -2668,6 +3672,113 @@ def supply_needs_list():
 
     needs = query.order_by(SupplyNeed.priority.asc(), SupplyNeed.created_at.desc()).all()
     return render_template('supply_needs_list.html', needs=needs, status=status)
+
+
+def _stock_replenishment_stats(need: SupplyNeed):
+    lines = list(need.production_lines or [])
+    units = (
+        ProducedUnit.query
+        .join(ProductionRequestLine, ProductionRequestLine.id == ProducedUnit.production_request_line_id)
+        .filter(ProductionRequestLine.supply_need_id == need.id)
+        .all()
+    )
+    accepted_qty = sum(
+        1 for unit in units
+        if unit.trailer and unit.trailer.warehouse_id == need.warehouse_id and unit.trailer.status == 'IN_STOCK'
+    )
+    produced_qty = len(units)
+    in_production_qty = sum(line.quantity or 0 for line in lines)
+    production_requests = {}
+    for line in lines:
+        if line.production_request:
+            production_requests[line.production_request_id] = line.production_request
+    return {
+        'in_production_qty': in_production_qty,
+        'produced_qty': produced_qty,
+        'accepted_qty': accepted_qty,
+        'remaining_qty': max((need.quantity or 0) - accepted_qty, 0),
+        'production_requests': sorted(production_requests.values(), key=lambda pr: pr.created_at or datetime.min, reverse=True),
+    }
+
+
+@main_bp.route('/stock-replenishment')
+@role_required('manager', 'director', 'logistics')
+def stock_replenishment_list():
+    status = request.args.get('status', '').strip()
+    query = SupplyNeed.query.filter(SupplyNeed.need_type.in_(['STOCK_REPLENISHMENT', 'WAREHOUSE_STOCK']))
+    if current_user.is_manager:
+        if not current_user.warehouse_id:
+            flash('Пользователь не привязан к складу.', 'warning')
+            return redirect(url_for('main.manager_workspace'))
+        query = query.filter(SupplyNeed.warehouse_id == current_user.warehouse_id)
+    if status:
+        query = query.filter(SupplyNeed.status == status)
+    needs = query.order_by(SupplyNeed.created_at.desc(), SupplyNeed.id.desc()).all()
+    stats = {need.id: _stock_replenishment_stats(need) for need in needs}
+    return render_template('stock_replenishment_list.html', needs=needs, stats=stats, status=status)
+
+
+@main_bp.route('/stock-replenishment/new', methods=['GET', 'POST'])
+@role_required('manager', 'director')
+def stock_replenishment_create():
+    form = StockReplenishmentForm()
+    _fill_stock_replenishment_form_choices(form)
+
+    if current_user.is_manager and not current_user.warehouse_id:
+        flash('Пользователь не привязан к складу. Обратитесь к администратору.', 'warning')
+        return redirect(url_for('main.manager_workspace'))
+
+    if request.method == 'GET' and current_user.is_manager:
+        form.warehouse_id.data = current_user.warehouse_id
+
+    if form.validate_on_submit():
+        warehouse_id = current_user.warehouse_id if current_user.is_manager else form.warehouse_id.data
+        if not warehouse_id:
+            flash('Выберите склад назначения.', 'danger')
+            return render_template('stock_replenishment_form.html', form=form, title='Заказать на склад')
+        idem_key, duplicate = _reserve_idempotency_key()
+        if duplicate:
+            return _duplicate_redirect(idem_key, url_for('main.stock_replenishment_list'))
+        need = SupplyNeed(
+            need_type='STOCK_REPLENISHMENT',
+            order_id=None,
+            item_id=form.item_id.data,
+            warehouse_id=warehouse_id,
+            quantity=form.quantity.data,
+            required_by=form.required_by.data,
+            status='NEW',
+            priority=100,
+            note=(form.comment.data or '').strip() or None,
+        )
+        db.session.add(need)
+        db.session.flush()
+        _finish_idempotency(idem_key, 'SupplyNeed', need.id)
+        db.session.commit()
+        flash('Заявка на пополнение склада создана.', 'success')
+        if current_user.is_manager:
+            return redirect(url_for('main.manager_workspace'))
+        return redirect(url_for('main.stock_replenishment_list'))
+
+    return render_template('stock_replenishment_form.html', form=form, title='Заказать на склад')
+
+
+@main_bp.route('/supply-needs/<int:need_id>/cancel', methods=['POST'])
+@login_required
+def supply_need_cancel(need_id):
+    need = SupplyNeed.query.get_or_404(need_id)
+    if current_user.is_admin or current_user.is_director:
+        pass
+    elif current_user.is_manager and _is_stock_replenishment_need(need) and current_user.warehouse_id == need.warehouse_id:
+        pass
+    else:
+        abort(403)
+    if need.status != 'NEW':
+        flash('Отменить можно только новую потребность.', 'warning')
+    else:
+        need.status = 'CANCELLED'
+        db.session.commit()
+        flash('Потребность отменена.', 'success')
+    return redirect(request.referrer or url_for('main.stock_replenishment_list'))
 
 
 @main_bp.route('/leads/<int:lead_id>')
@@ -2682,16 +3793,14 @@ def lead_detail(lead_id):
 def lead_edit(lead_id):
     lead = Lead.query.get_or_404(lead_id)
     form = LeadForm(obj=lead)
-    items = Item.query.filter(Item.item_type == 'TRAILER', Item.is_active == True).order_by(Item.article, Item.name).all()
-    form.desired_item_id.choices = [(0, '— не выбрано —')] + [(i.id, f'{i.article or ""} — {i.name}') for i in items]
-    form.warehouse_id.choices = [(0, '— не выбрано —')] + [(w.id, w.name) for w in Warehouse.query.filter_by(is_active=True).order_by(Warehouse.name).all()]
-    form.assigned_user_id.choices = [(0, '— не назначен —')] + [(u.id, u.full_name or u.username) for u in User.query.order_by(User.full_name, User.username).all()]
+    _fill_lead_form_choices(form)
 
     if request.method == 'GET':
         form.created_at.data = lead.created_at.date() if lead.created_at else date.today()
         form.source_channel.data = lead.channel or (lead.source_channel or 'MANUAL').lower()
         form.source_name.data = lead.source_name or lead.source_account
         form.desired_item_id.data = lead.desired_item_id or 0
+        _set_item_search_label(form, 'desired_item_search', 'desired_item_id')
         form.warehouse_id.data = lead.warehouse_id or 0
         form.assigned_user_id.data = lead.assigned_user_id or 0
 
@@ -2716,7 +3825,7 @@ def lead_edit(lead_id):
         flash('Заявка обновлена', 'success')
         return redirect(url_for('main.lead_detail', lead_id=lead.id))
 
-    return render_template('lead_form.html', form=form, title='Редактирование заявки')
+    return render_template('lead_form.html', form=form, title='Редактирование заявки', item_options=_trailer_item_options())
 
 
 @main_bp.route('/leads/<int:lead_id>/create-order', methods=['GET', 'POST'])
@@ -2758,25 +3867,172 @@ def order_detail(order_id):
     payment_form = OrderPaymentForm()
     payment_form.paid_at.data = date.today()
 
-    stock_query = Trailer.query.filter(Trailer.item_id == order.item_id, Trailer.status == 'IN_STOCK').order_by(Trailer.vin)
-    if current_user.is_manager:
+    stock_query = Trailer.query.filter(
+        Trailer.item_id == order.item_id,
+        Trailer.status == 'IN_STOCK',
+        or_(Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped'),
+    ).order_by(Trailer.vin)
+    if order.warehouse_id:
+        stock_query = stock_query.filter(Trailer.warehouse_id == order.warehouse_id)
+    elif current_user.is_manager:
         stock_query = stock_query.filter(Trailer.warehouse_id == current_user.warehouse_id)
-    available_stock_trailers = stock_query.all()
-    other_warehouse_trailers = (
+    available_stock_trailers = [
+        trailer for trailer in stock_query.all()
+        if _trailer_available_for_sale(trailer, exclude_order_id=order.id)
+    ]
+    other_warehouse_trailers = [
+        trailer for trailer in (
         Trailer.query
         .filter(
             Trailer.item_id == order.item_id,
             Trailer.status == 'IN_STOCK',
             Trailer.warehouse_id != order.warehouse_id,
+            or_(Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped'),
         )
         .order_by(Trailer.vin)
         .all()
-    )
+        )
+        if _trailer_available_for_sale(trailer, exclude_order_id=order.id)
+    ]
     movements = StockMovement.query.filter_by(order_id=order.id).order_by(StockMovement.created_at.desc(), StockMovement.id.desc()).all()
     events = order.events.order_by(OrderEvent.created_at.desc(), OrderEvent.id.desc()).all()
     payments = order.payments.order_by(OrderPayment.created_at.desc()).all()
     reservations = order.reservations.order_by(Reservation.created_at.desc()).all()
     supply_needs = order.supply_needs.order_by(SupplyNeed.created_at.desc()).all()
+    order_contract = SalesContract.query.filter_by(order_id=order.id).first()
+    future_production_lines = []
+    future_produced_unit_rows = []
+    future_ready_trailer_rows = []
+    future_inbound_movements = []
+    if order.warehouse_id:
+        future_production_lines = (
+            ProductionRequestLine.query
+            .join(ProductionRequest, ProductionRequest.id == ProductionRequestLine.production_request_id)
+            .filter(
+                ProductionRequest.target_warehouse_id == order.warehouse_id,
+                ProductionRequestLine.item_id == order.item_id,
+                ProductionRequestLine.status.in_(['planned', 'PLANNED', 'in_production', 'partial_ready']),
+            )
+            .order_by(ProductionRequest.created_at.desc(), ProductionRequestLine.id.desc())
+            .all()
+        )
+        produced_units = (
+            ProducedUnit.query
+            .filter(
+                ProducedUnit.target_warehouse_id == order.warehouse_id,
+                ProducedUnit.item_id == order.item_id,
+                ProducedUnit.status == 'produced_no_vin',
+            )
+            .order_by(ProducedUnit.created_at.desc(), ProducedUnit.id.desc())
+            .all()
+        )
+        for unit in produced_units:
+            context = _produced_unit_context(unit)
+            attached_order = context.get('order')
+            if attached_order and attached_order.id == order.id:
+                attach_state = 'current'
+            elif attached_order and _order_is_open_for_attachment(attached_order):
+                attach_state = 'other'
+            else:
+                attach_state = 'free'
+            context['attach_state'] = attach_state
+            context['can_attach'] = (
+                can_manage_order(order)
+                and attach_state in ('free', 'current')
+                and attach_state != 'current'
+                and not order.trailer_id
+                and _order_is_open_for_attachment(order)
+                and not unit.trailer_id
+                and _ensure_item_matches_order(unit.item_id, order)
+                and _ensure_target_matches_order_warehouse(unit.target_warehouse_id, order)
+            )
+            future_produced_unit_rows.append(context)
+        production_warehouse = _default_production_warehouse()
+        if production_warehouse:
+            ready_units = (
+                ProducedUnit.query
+                .join(Trailer, Trailer.id == ProducedUnit.trailer_id)
+                .filter(
+                    ProducedUnit.target_warehouse_id == order.warehouse_id,
+                    ProducedUnit.item_id == order.item_id,
+                    ProducedUnit.status == 'vin_assigned',
+                    Trailer.warehouse_id == production_warehouse.id,
+                    or_(Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped'),
+                )
+                .order_by(ProducedUnit.created_at.desc(), ProducedUnit.id.desc())
+                .all()
+            )
+            ready_trailer_ids = set()
+            for unit in ready_units:
+                trailer = unit.trailer
+                if not trailer or _active_movement_for_trailer(trailer.id):
+                    continue
+                ready_trailer_ids.add(trailer.id)
+                if trailer.status == 'SOLD' and order.trailer_id != trailer.id:
+                    continue
+                attach_state = _order_attachment_status_for_trailer(trailer, order)
+                context = _produced_unit_context(unit)
+                context['trailer'] = trailer
+                context['attach_state'] = attach_state
+                context['can_attach'] = (
+                    can_manage_order(order)
+                    and attach_state == 'free'
+                    and not order.trailer_id
+                    and _order_is_open_for_attachment(order)
+                    and bool(trailer.vin)
+                    and trailer.status != 'SOLD'
+                    and _ensure_item_matches_order(trailer.item_id, order)
+                    and not _trailer_is_customer_shipped(trailer)
+                    and not _active_movement_for_trailer(trailer.id)
+                )
+                future_ready_trailer_rows.append(context)
+            extra_ready_trailers = (
+                Trailer.query
+                .filter(
+                    Trailer.item_id == order.item_id,
+                    Trailer.warehouse_id == production_warehouse.id,
+                    Trailer.status.in_(['IN_STOCK', 'RESERVED']),
+                    or_(Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped'),
+                )
+                .order_by(Trailer.created_at.desc(), Trailer.id.desc())
+                .all()
+            )
+            for trailer in extra_ready_trailers:
+                if trailer.id in ready_trailer_ids or _active_movement_for_trailer(trailer.id):
+                    continue
+                attach_state = _order_attachment_status_for_trailer(trailer, order)
+                context = {
+                    'unit': None,
+                    'line': None,
+                    'need': None,
+                    'order': order if attach_state == 'current' else None,
+                    'need_type': 'CUSTOMER_ORDER',
+                    'target_warehouse': order.warehouse,
+                    'trailer': trailer,
+                    'attach_state': attach_state,
+                    'can_attach': (
+                        can_manage_order(order)
+                        and attach_state == 'free'
+                        and not order.trailer_id
+                        and _order_is_open_for_attachment(order)
+                        and bool(trailer.vin)
+                        and _ensure_item_matches_order(trailer.item_id, order)
+                        and not _trailer_is_customer_shipped(trailer)
+                    ),
+                }
+                future_ready_trailer_rows.append(context)
+        future_inbound_movements = (
+            StockMovement.query
+            .join(Trailer, Trailer.id == StockMovement.trailer_id)
+            .filter(
+                StockMovement.to_warehouse_id == order.warehouse_id,
+                StockMovement.status.in_(['sent', 'in_transit']),
+                Trailer.item_id == order.item_id,
+                or_(StockMovement.order_id.is_(None), StockMovement.order_id == order.id),
+            )
+            .order_by(StockMovement.created_at.desc(), StockMovement.id.desc())
+            .all()
+        )
     return render_template(
         'order_detail.html',
         order=order,
@@ -2788,6 +4044,11 @@ def order_detail(order_id):
         payments=payments,
         reservations=reservations,
         supply_needs=supply_needs,
+        order_contract=order_contract,
+        future_production_lines=future_production_lines,
+        future_produced_unit_rows=future_produced_unit_rows,
+        future_ready_trailer_rows=future_ready_trailer_rows,
+        future_inbound_movements=future_inbound_movements,
         can_manage=can_manage_order(order),
     )
 
@@ -2802,6 +4063,15 @@ def order_edit(order_id):
 
     if request.method == 'GET':
         form.lead_id.data = order.lead_id or 0
+        customer_id_prefill = request.args.get('customer_id', type=int)
+        if customer_id_prefill:
+            customer = Customer.query.get(customer_id_prefill)
+            if customer:
+                form.customer_id.data = customer.id
+                form.customer_search.data = _customer_label(customer)
+        else:
+            form.customer_id.data = order.customer_id
+            _set_customer_search_label(form)
         form.trailer_id.data = order.trailer_id or 0
         form.warehouse_id.data = order.warehouse_id or 0
         form.assigned_user_id.data = order.assigned_user_id or 0
@@ -2811,7 +4081,20 @@ def order_edit(order_id):
         new_trailer_id = form.trailer_id.data or None
         if new_trailer_id and _active_reservation_for_trailer(new_trailer_id, exclude_order_id=order.id):
             flash('Этот прицеп уже зарезервирован под другой активный заказ.', 'danger')
-            return render_template('order_form.html', form=form, title='Редактирование заказа')
+            return _render_order_form(form, 'Редактирование заказа')
+        selected_trailer = Trailer.query.get(new_trailer_id) if new_trailer_id else None
+        if selected_trailer and selected_trailer.item_id != form.item_id.data:
+            flash('Выбранный VIN не соответствует выбранной модели.', 'danger')
+            return _render_order_form(form, 'Редактирование заказа')
+        if selected_trailer and selected_trailer.status == 'SOLD':
+            flash('Проданный прицеп нельзя выбрать для новой продажи.', 'danger')
+            return _render_order_form(form, 'Редактирование заказа')
+        if selected_trailer and (form.fulfillment_source.data or 'stock') != 'other_warehouse' and form.warehouse_id.data and selected_trailer.warehouse_id != form.warehouse_id.data:
+            flash('Для продажи из наличия выбранный VIN должен находиться на складе продажи.', 'danger')
+            return _render_order_form(form, 'Редактирование заказа')
+        if selected_trailer and form.fulfillment_source.data == 'other_warehouse' and form.warehouse_id.data and selected_trailer.warehouse_id == form.warehouse_id.data:
+            flash('Для сценария с другого склада выберите VIN не со склада продажи.', 'danger')
+            return _render_order_form(form, 'Редактирование заказа')
 
         old_trailer_id = order.trailer_id
         order.order_number = (form.order_number.data or '').strip() or order.order_number
@@ -2826,8 +4109,8 @@ def order_edit(order_id):
         order.prepayment_percent = form.prepayment_percent.data
         order.fulfillment_source = (form.fulfillment_source.data or '').strip() or None
         order.expected_date = form.expected_date.data
-        order.documents_issued = bool(form.documents_issued.data)
-        order.is_shipped = bool(form.is_shipped.data)
+        order.planned_ship_date = form.planned_ship_date.data
+        order.planned_ship_comment = (form.planned_ship_comment.data or '').strip() or None
         order.note = (form.note.data or '').strip() or None
         order.manager_comment = (form.manager_comment.data or '').strip() or None
 
@@ -2862,7 +4145,7 @@ def order_edit(order_id):
         flash('Заказ обновлен', 'success')
         return redirect(url_for('main.order_detail', order_id=order.id))
 
-    return render_template('order_form.html', form=form, title='Редактирование заказа')
+    return _render_order_form(form, 'Редактирование заказа')
 
 
 @main_bp.route('/orders/<int:order_id>/contract/new', methods=['POST'])
@@ -2870,16 +4153,22 @@ def order_edit(order_id):
 def order_contract_create(order_id):
     order = CustomerOrder.query.get_or_404(order_id)
     _ensure_can_manage_order(order)
+    if order.status == 'cancelled' or order.documents_issued or order.is_shipped:
+        flash('Договор можно создать только до выдачи документов и физической отгрузки.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
     if not order.trailer_id:
         flash('Для договора нужен конкретный прицеп/VIN. Сначала зарезервируйте прицеп.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
     existing = SalesContract.query.filter_by(order_id=order.id).first()
     if existing:
         flash('Договор по этому заказу уже создан.', 'warning')
-        return redirect(url_for('main.contracts_list'))
+        return redirect(url_for('main.order_detail', order_id=order.id))
     if SalesContract.query.filter_by(trailer_id=order.trailer_id).first():
         flash('На этот прицеп уже существует договор.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
     contract = SalesContract(
         contract_number=get_next_contract_number(),
         contract_date=date.today(),
@@ -2893,9 +4182,19 @@ def order_contract_create(order_id):
         is_shipped=bool(order.is_shipped),
     )
     db.session.add(contract)
+    db.session.flush()
+    _finish_idempotency(idem_key, 'SalesContract', contract.id)
     order.document_status = 'contract_ready'
     add_order_event(order, 'contract_ready', new_value=contract.contract_number or contract.id)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        if SalesContract.query.filter_by(order_id=order.id).first():
+            flash('Договор по этому заказу уже создан.', 'warning')
+        else:
+            flash('Не удалось создать договор: конфликт номера, прицепа или заказа.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
     flash('Договор создан из заказа. Прицеп не переведен в SOLD этим действием.', 'success')
     return redirect(url_for('main.order_detail', order_id=order.id))
 
@@ -2905,25 +4204,44 @@ def order_contract_create(order_id):
 def order_ship(order_id):
     order = CustomerOrder.query.get_or_404(order_id)
     _ensure_can_manage_order(order)
-    if not can_ship_order(order) or not order.trailer_id or order.status == 'cancelled' or order.is_shipped:
+    if order.is_shipped:
+        flash('Заказ уже физически отгружен.', 'warning')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if not can_ship_order(order) or not order.trailer_id or order.status == 'cancelled':
         abort(403)
     if not order.trailer:
         abort(400)
+    contract = SalesContract.query.filter_by(order_id=order.id).first()
+    if not order.documents_issued or not contract:
+        flash('Сначала выдайте документы и зафиксируйте юридическую продажу.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if order.trailer.status != 'SOLD':
+        flash('Юридическая продажа не зафиксирована: прицеп ещё не SOLD.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if order.status not in ('sold_not_shipped', 'ready_to_ship', 'arrived'):
+        flash('Заказ пока не находится в статусе, допустимом для физической отгрузки.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
     if not current_user.is_admin and order.trailer.warehouse_id != order.warehouse_id:
         flash('Прицеп ещё не на складе выдачи.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
     order.is_shipped = True
     order.shipped_at = datetime.utcnow()
     order.status = 'shipped'
     if order.trailer:
-        order.trailer.status = 'SOLD'
-        order.trailer.lifecycle_status = 'sold'
+        order.trailer.lifecycle_status = 'customer_shipped'
+    contract.is_shipped = True
     for reservation in order.reservations.filter_by(status='ACTIVE').all():
         reservation.status = 'CLOSED'
-    db.session.add(StockMovement(movement_type='customer_shipment', status='arrived', order_id=order.id, trailer_id=order.trailer_id, from_warehouse_id=order.warehouse_id, departure_date=date.today(), arrival_date=date.today(), received_at=datetime.utcnow(), note=f'Отгрузка клиенту по заказу №{order.order_number}'))
+    shipment = StockMovement(movement_type='customer_shipment', status='arrived', order_id=order.id, trailer_id=order.trailer_id, from_warehouse_id=order.warehouse_id, departure_date=date.today(), arrival_date=date.today(), received_at=datetime.utcnow(), note=f'Отгрузка клиенту по заказу №{order.order_number}')
+    db.session.add(shipment)
+    db.session.flush()
+    _finish_idempotency(idem_key, 'StockMovement', shipment.id)
     add_order_event(order, 'shipped', new_value=order.trailer.vin if order.trailer else order.trailer_id)
     db.session.commit()
-    flash('Заказ отгружен, прицеп переведен в SOLD.', 'success')
+    flash('Прицеп физически отгружен клиенту.', 'success')
     return redirect(url_for('main.order_detail', order_id=order.id))
 
 
@@ -2937,16 +4255,28 @@ def order_reserve_trailer(order_id):
     trailer = Trailer.query.get_or_404(request.form.get('trailer_id', type=int))
     if current_user.is_manager and trailer.warehouse_id != current_user.warehouse_id:
         abort(403)
-    if trailer.status != 'IN_STOCK' or _active_reservation_for_trailer(trailer.id, exclude_order_id=order.id):
+    if trailer.item_id != order.item_id:
+        flash('Выбранный VIN не соответствует модели заказа.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if trailer.warehouse_id != order.warehouse_id:
+        flash('Для резерва из наличия VIN должен быть на складе продажи.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if not _trailer_available_for_sale(trailer, exclude_order_id=order.id):
         flash('Этот прицеп уже недоступен для резерва.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
 
     old_trailer_id = order.trailer_id
     order.trailer_id = trailer.id
     order.fulfillment_source = 'stock'
     trailer.status = 'RESERVED'
     trailer.lifecycle_status = 'reserved'
-    db.session.add(Reservation(order_id=order.id, trailer_id=trailer.id, item_id=order.item_id, status='ACTIVE', source_type='STOCK', priority=10))
+    reservation = Reservation(order_id=order.id, trailer_id=trailer.id, item_id=order.item_id, status='ACTIVE', source_type='STOCK', priority=10)
+    db.session.add(reservation)
+    db.session.flush()
+    _finish_idempotency(idem_key, 'Reservation', reservation.id)
     _refresh_order_status(order)
     add_order_event(order, 'trailer_reserved', old_value=old_trailer_id, new_value=trailer.vin)
     db.session.commit()
@@ -2962,22 +4292,220 @@ def order_request_transfer(order_id):
     if order.is_shipped or order.status == 'cancelled':
         abort(400)
     trailer = Trailer.query.get_or_404(request.form.get('trailer_id', type=int))
+    if trailer.item_id != order.item_id:
+        flash('Выбранный VIN не соответствует модели заказа.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
     if trailer.status != 'IN_STOCK' or trailer.warehouse_id == order.warehouse_id:
         flash('Для запроса перемещения нужен свободный прицеп на другом складе.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
-    if _active_reservation_for_trailer(trailer.id, exclude_order_id=order.id):
+    if not _trailer_available_for_sale(trailer, exclude_order_id=order.id):
         flash('Этот прицеп уже зарезервирован.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
 
     order.trailer_id = trailer.id
     order.fulfillment_source = 'other_warehouse'
     order.status = 'waiting_transfer'
     trailer.status = 'RESERVED'
     trailer.lifecycle_status = 'reserved'
-    db.session.add(Reservation(order_id=order.id, trailer_id=trailer.id, item_id=order.item_id, status='ACTIVE', source_type='TRANSFER', priority=10))
+    reservation = Reservation(order_id=order.id, trailer_id=trailer.id, item_id=order.item_id, status='ACTIVE', source_type='TRANSFER', priority=10)
+    db.session.add(reservation)
+    db.session.flush()
+    _finish_idempotency(idem_key, 'Reservation', reservation.id)
     add_order_event(order, 'transfer_requested', new_value=trailer.vin, comment='Прицеп зарезервирован на другом складе. Нужна отправка.')
     db.session.commit()
     flash('Прицеп зарезервирован на другом складе. Нужна отправка.', 'success')
+    return redirect(url_for('main.order_detail', order_id=order.id))
+
+
+@main_bp.route('/orders/<int:order_id>/attach-transit', methods=['POST'])
+@login_required
+def order_attach_transit(order_id):
+    order = CustomerOrder.query.get_or_404(order_id)
+    _ensure_can_manage_order(order)
+    if order.trailer_id or order.is_shipped or order.status == 'cancelled':
+        flash('Нельзя закрепить прицеп в пути: у заказа уже есть VIN, заказ отгружен или отменён.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    movement_id = request.form.get('movement_id', type=int)
+    movement = StockMovement.query.get_or_404(movement_id)
+    trailer = movement.trailer
+    if not trailer or movement.status not in ('sent', 'in_transit'):
+        flash('Можно закрепить только активное входящее перемещение.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if movement.order_id and movement.order_id != order.id:
+        flash('Это перемещение уже закреплено за другим заказом.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if trailer.item_id != order.item_id:
+        flash('Прицеп в пути не соответствует модели заказа.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if order.warehouse_id and movement.to_warehouse_id != order.warehouse_id:
+        flash('Прицеп едет не на склад этого заказа.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if _active_reservation_for_trailer(trailer.id, exclude_order_id=order.id):
+        flash('Этот прицеп уже зарезервирован под другой активный заказ.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
+
+    movement.order_id = order.id
+    order.trailer_id = trailer.id
+    order.fulfillment_source = 'transit'
+    old_status = order.status
+    order.status = 'in_transit'
+    db.session.add(Reservation(
+        order_id=order.id,
+        trailer_id=trailer.id,
+        item_id=order.item_id,
+        status='ACTIVE',
+        source_type='TRANSIT',
+        priority=10,
+        note='Прицеп в пути закреплён из карточки заказа',
+    ))
+    add_order_event(order, 'trailer_assigned', old_value=old_status, new_value=trailer.vin, comment='Закреплён прицеп в пути')
+    _finish_idempotency(idem_key, 'CustomerOrder', order.id)
+    db.session.commit()
+    flash('Прицеп в пути закреплён за заказом.', 'success')
+    return redirect(url_for('main.order_detail', order_id=order.id))
+
+
+@main_bp.route('/orders/<int:order_id>/attach-produced-unit/<int:unit_id>', methods=['POST'])
+@login_required
+def order_attach_produced_unit(order_id, unit_id):
+    order = CustomerOrder.query.get_or_404(order_id)
+    _ensure_can_manage_order(order)
+    unit = ProducedUnit.query.get_or_404(unit_id)
+    if not _order_is_open_for_attachment(order):
+        flash('Нельзя закрепить единицу: заказ отменён или уже отгружен.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if order.trailer_id:
+        flash('У заказа уже есть конкретный VIN.', 'warning')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if unit.status != 'produced_no_vin' or unit.trailer_id:
+        flash('Можно закрепить только выпущенную единицу без VIN.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    other_order = _active_order_for_produced_unit(unit, exclude_order_id=order.id)
+    if other_order:
+        flash(f'Эта единица уже закреплена за заказом {other_order.order_number}.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if unit.order_id == order.id:
+        flash('Эта выпущенная единица уже закреплена за этим заказом.', 'warning')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if not _ensure_item_matches_order(unit.item_id, order):
+        flash('Выпущенная единица не соответствует модели заказа.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if not _ensure_target_matches_order_warehouse(unit.target_warehouse_id, order):
+        flash('Выпущенная единица предназначена для другого склада.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
+    unit.order_id = order.id
+    order.fulfillment_source = 'production'
+    if order.status not in ('sold_not_shipped',):
+        order.status = 'produced_waiting_vin'
+    add_order_event(order, 'trailer_assigned', new_value=f'ProducedUnit #{unit.id}', comment='Выпущенная единица без VIN закреплена за заказом')
+    _finish_idempotency(idem_key, 'CustomerOrder', order.id)
+    db.session.commit()
+    flash('Выпущенная единица без VIN закреплена за заказом.', 'success')
+    return redirect(url_for('main.order_detail', order_id=order.id))
+
+
+@main_bp.route('/orders/<int:order_id>/attach-ready-trailer/<int:trailer_id>', methods=['POST'])
+@login_required
+def order_attach_ready_trailer(order_id, trailer_id):
+    order = CustomerOrder.query.get_or_404(order_id)
+    _ensure_can_manage_order(order)
+    trailer = Trailer.query.get_or_404(trailer_id)
+    if not _order_is_open_for_attachment(order):
+        flash('Нельзя закрепить VIN: заказ отменён или уже отгружен.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if order.trailer_id and order.trailer_id != trailer.id:
+        flash('У заказа уже закреплён другой VIN.', 'warning')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if order.trailer_id == trailer.id:
+        flash('Этот VIN уже закреплён за этим заказом.', 'warning')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if not trailer.vin:
+        flash('У прицепа нет VIN.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if _trailer_is_customer_shipped(trailer):
+        flash('Физически отгруженный прицеп нельзя закрепить.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    production_warehouse = _default_production_warehouse()
+    if not production_warehouse or trailer.warehouse_id != production_warehouse.id:
+        flash('Закрепить можно только готовый VIN на производственном складе.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if not _ensure_item_matches_order(trailer.item_id, order):
+        flash('VIN не соответствует модели заказа.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if _active_movement_for_trailer(trailer.id):
+        flash('Этот прицеп уже находится в активном перемещении.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    other_order = _active_order_for_trailer(trailer.id, exclude_order_id=order.id)
+    if other_order:
+        flash(f'Этот VIN уже закреплён за заказом {other_order.order_number}.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if _active_reservation_for_trailer(trailer.id, exclude_order_id=order.id):
+        flash('Этот VIN уже зарезервирован под другой активный заказ.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if trailer.status == 'SOLD' and order.trailer_id != trailer.id:
+        flash('Проданный VIN нельзя закрепить за другим заказом.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
+
+    old_trailer_id = order.trailer_id
+    order.trailer_id = trailer.id
+    order.fulfillment_source = 'production'
+    unit = getattr(trailer, 'produced_unit', None)
+    if unit is not None and not isinstance(unit, ProducedUnit):
+        unit = unit[0] if len(unit) else None
+    if unit:
+        unit.order_id = order.id
+    _set_trailer_status_for_order(trailer, order)
+    _ensure_order_reservation(order, trailer, 'PRODUCTION')
+    movement = None
+    if order.warehouse_id and trailer.warehouse_id != order.warehouse_id:
+        movement = StockMovement.query.filter(
+            StockMovement.trailer_id == trailer.id,
+            StockMovement.order_id == order.id,
+            StockMovement.status.in_(['sent', 'in_transit']),
+        ).first()
+        if not movement:
+            movement = StockMovement(
+                movement_type='warehouse_transfer',
+                status='in_transit',
+                from_warehouse_id=trailer.warehouse_id,
+                to_warehouse_id=order.warehouse_id,
+                trailer_id=trailer.id,
+                item_id=trailer.item_id,
+                order_id=order.id,
+                departure_date=date.today(),
+                note=f'Перемещение под заказ №{order.order_number}',
+            )
+            db.session.add(movement)
+        if trailer.status != 'SOLD':
+            trailer.status = 'IN_TRANSIT'
+        trailer.lifecycle_status = 'in_transit'
+        if not order.documents_issued:
+            order.status = 'in_transit'
+    else:
+        if order.warehouse_id:
+            trailer.lifecycle_status = 'ready_production_warehouse'
+            _refresh_order_status(order)
+        else:
+            flash('Склад выдачи / назначения не задан. Сначала укажите склад выдачи в заказе.', 'warning')
+    add_order_event(order, 'trailer_assigned', old_value=old_trailer_id, new_value=trailer.vin, comment='Готовый VIN на производственном складе закреплён за заказом')
+    if movement:
+        add_order_event(order, 'transfer_started', new_value=trailer.vin, comment='Автоматически создано перемещение под заказ')
+    _finish_idempotency(idem_key, 'CustomerOrder', order.id)
+    db.session.commit()
+    flash('Готовый прицеп с VIN закреплен за заказом.', 'success')
     return redirect(url_for('main.order_detail', order_id=order.id))
 
 
@@ -2992,8 +4520,13 @@ def order_create_production_need(order_id):
     if existing:
         flash('Потребность по этому заказу уже существует.', 'warning')
         return redirect(url_for('main.order_detail', order_id=order.id))
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
     need = SupplyNeed(order_id=order.id, item_id=order.item_id, warehouse_id=order.warehouse_id, quantity=order.quantity or 1, required_by=order.expected_date, status='NEW', need_type='CUSTOMER_ORDER', priority=10, note='Потребность создана из карточки заказа')
     db.session.add(need)
+    db.session.flush()
+    _finish_idempotency(idem_key, 'SupplyNeed', need.id)
     order.fulfillment_source = 'production'
     old_status = order.status
     order.status = 'waiting_production'
@@ -3005,12 +4538,21 @@ def order_create_production_need(order_id):
 
 def _mark_order_document(order: CustomerOrder, status: str, event_type: str, message: str):
     _ensure_can_manage_order(order)
+    if status == 'documents_issued':
+        abort(400)
+    if order.documents_issued or order.is_shipped:
+        flash('Документальный статус уже закрыт юридической продажей или физической отгрузкой.', 'warning')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if order.document_status == status:
+        flash('Это действие уже отмечено.', 'warning')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
     old_status = order.document_status
     order.document_status = status
-    if status == 'documents_issued':
-        order.documents_issued = True
-        order.documents_issued_at = datetime.utcnow()
     add_order_event(order, event_type, old_value=old_status, new_value=status)
+    _finish_idempotency(idem_key, 'CustomerOrder', order.id)
     db.session.commit()
     flash(message, 'success')
     return redirect(url_for('main.order_detail', order_id=order.id))
@@ -3037,7 +4579,50 @@ def order_mark_documents_ready(order_id):
 @main_bp.route('/orders/<int:order_id>/issue-documents', methods=['POST'])
 @login_required
 def order_issue_documents(order_id):
-    return _mark_order_document(CustomerOrder.query.get_or_404(order_id), 'documents_issued', 'documents_issued', 'Документы выданы')
+    order = CustomerOrder.query.get_or_404(order_id)
+    _ensure_can_manage_order(order)
+    if order.documents_issued:
+        flash('Документы по этому заказу уже выданы.', 'warning')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if order.status == 'cancelled':
+        flash('Нельзя выдать документы по отменённому заказу.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if order.is_shipped:
+        flash('Заказ уже физически отгружен.', 'warning')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if not order.trailer_id or not order.trailer:
+        flash('Нельзя выдать документы: сначала нужен конкретный прицеп/VIN.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    contract = SalesContract.query.filter_by(order_id=order.id).first()
+    if not contract:
+        flash('Сначала создайте договор.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if float(order.price or 0) <= 0:
+        flash('Нельзя выдать документы: сумма заказа должна быть больше 0.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if order.remaining_amount > 0:
+        flash('Нельзя выдать документы: заказ оплачен не полностью.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
+
+    old_document_status = order.document_status
+    old_order_status = order.status
+    order.document_status = 'documents_issued'
+    order.documents_issued = True
+    order.documents_issued_at = datetime.utcnow()
+    order.status = 'sold_not_shipped'
+    order.trailer.status = 'SOLD'
+    contract.is_paid = True
+    contract.is_shipped = False
+    add_order_event(order, 'documents_issued', old_value=old_document_status, new_value='documents_issued', comment='Юридическая продажа зафиксирована')
+    if old_order_status != order.status:
+        add_order_event(order, 'order_status_changed', old_value=old_order_status, new_value=order.status)
+    _finish_idempotency(idem_key, 'CustomerOrder', order.id)
+    db.session.commit()
+    flash('Документы выданы. Прицеп юридически продан, но ещё не отгружен клиенту.', 'success')
+    return redirect(url_for('main.order_detail', order_id=order.id))
 
 
 @main_bp.route('/orders/<int:order_id>/comment', methods=['POST'])
@@ -3060,9 +4645,15 @@ def order_add_comment(order_id):
 def order_cancel(order_id):
     order = CustomerOrder.query.get_or_404(order_id)
     _ensure_can_manage_order(order)
+    if order.status == 'cancelled':
+        flash('Заказ уже отменён.', 'warning')
+        return redirect(url_for('main.order_detail', order_id=order.id))
     if not current_user.is_admin and (order.confirmed_paid_amount > 0 or order.is_shipped):
         flash('Менеджер может отменить только заказ без подтверждённых оплат и без отгрузки.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
     reason = (request.form.get('cancel_reason') or '').strip() or None
     order.status = 'cancelled'
     order.cancelled_at = datetime.utcnow()
@@ -3075,21 +4666,26 @@ def order_cancel(order_id):
     for need in order.supply_needs.filter_by(status='NEW').all():
         need.status = 'CANCELLED'
     add_order_event(order, 'cancelled', new_value='cancelled', comment=reason)
+    _finish_idempotency(idem_key, 'CustomerOrder', order.id)
     db.session.commit()
     flash('Заказ отменён', 'success')
     return redirect(url_for('main.order_detail', order_id=order.id))
 
 
 @main_bp.route('/supply-needs/new', methods=['GET', 'POST'])
-@login_required
+@role_required('manager', 'director', 'logistics')
 def supply_need_create():
     form = SupplyNeedForm()
     _fill_supply_need_form_choices(form)
     if form.validate_on_submit():
+        idem_key, duplicate = _reserve_idempotency_key()
+        if duplicate:
+            return _duplicate_redirect(idem_key, url_for('main.supply_needs_list'))
+        need_type = form.need_type.data
         need = SupplyNeed(
-            need_type=form.need_type.data,
+            need_type=need_type,
             status=form.status.data,
-            order_id=form.order_id.data or None,
+            order_id=None if need_type == 'STOCK_REPLENISHMENT' else (form.order_id.data or None),
             item_id=form.item_id.data,
             warehouse_id=form.warehouse_id.data or None,
             quantity=form.quantity.data,
@@ -3098,6 +4694,8 @@ def supply_need_create():
             note=(form.note.data or '').strip() or None,
         )
         db.session.add(need)
+        db.session.flush()
+        _finish_idempotency(idem_key, 'SupplyNeed', need.id)
         db.session.commit()
         flash('Потребность создана', 'success')
         return redirect(url_for('main.supply_needs_list'))
@@ -3105,7 +4703,7 @@ def supply_need_create():
 
 
 @main_bp.route('/supply-needs/<int:need_id>/edit', methods=['GET', 'POST'])
-@login_required
+@role_required('manager', 'director', 'logistics')
 def supply_need_edit(need_id):
     need = SupplyNeed.query.get_or_404(need_id)
     form = SupplyNeedForm(obj=need)
@@ -3116,7 +4714,7 @@ def supply_need_edit(need_id):
     if form.validate_on_submit():
         need.need_type = form.need_type.data
         need.status = form.status.data
-        need.order_id = form.order_id.data or None
+        need.order_id = None if need.need_type == 'STOCK_REPLENISHMENT' else (form.order_id.data or None)
         need.item_id = form.item_id.data
         need.warehouse_id = form.warehouse_id.data or None
         need.quantity = form.quantity.data
@@ -3133,20 +4731,51 @@ def supply_need_edit(need_id):
 @role_required('admin', 'director', 'logistics')
 def supply_need_create_production_request(need_id):
     need = SupplyNeed.query.get_or_404(need_id)
-    pr = ProductionRequest(request_number=_next_number('PR', ProductionRequest, 'request_number'), status='approved', target_warehouse_id=need.warehouse_id, note=f'Создана из потребности #{need.id}')
+    if need.status != 'NEW':
+        flash('Заявку на производство можно создать только из новой потребности.', 'warning')
+        return redirect(request.referrer or url_for('main.supply_needs_list'))
+    existing_line = _active_production_line_for_need(need.id)
+    if existing_line:
+        flash('По этой потребности уже есть производственная строка.', 'warning')
+        return redirect(url_for('main.production_request_detail', request_id=existing_line.production_request_id))
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.supply_needs_list'))
+
+    is_stock_need = _is_stock_replenishment_need(need)
+    note_prefix = 'Пополнение склада' if is_stock_need else 'Клиентский заказ'
+    pr = ProductionRequest(
+        request_number=_next_number('PR', ProductionRequest, 'request_number'),
+        status='approved',
+        target_warehouse_id=need.warehouse_id,
+        note=f'{note_prefix}. Создана из потребности #{need.id}',
+    )
     db.session.add(pr)
     db.session.flush()
-    db.session.add(ProductionRequestLine(production_request_id=pr.id, supply_need_id=need.id, item_id=need.item_id, quantity=need.quantity, produced_qty=0, status='planned', note=need.note))
+    _finish_idempotency(idem_key, 'ProductionRequest', pr.id)
+    db.session.add(ProductionRequestLine(
+        production_request_id=pr.id,
+        supply_need_id=need.id,
+        item_id=need.item_id,
+        quantity=need.quantity,
+        produced_qty=0,
+        status='planned',
+        note=need.note,
+    ))
     need.status = 'IN_PRODUCTION'
     if need.order:
         need.order.status = 'in_production'
+        add_order_event(need.order, 'production_started', new_value=pr.request_number, comment='Создана заявка на производство')
     db.session.commit()
-    flash('Заявка на производство создана из потребности', 'success')
+    if is_stock_need:
+        flash('Заявка на производство для пополнения склада создана.', 'success')
+    else:
+        flash('Заявка на производство создана из потребности клиента.', 'success')
     return redirect(url_for('main.production_request_detail', request_id=pr.id))
 
 
 @main_bp.route('/production-requests')
-@login_required
+@role_required('director', 'logistics')
 def production_requests_list():
     status = request.args.get('status', '').strip()
     query = ProductionRequest.query
@@ -3157,7 +4786,7 @@ def production_requests_list():
 
 
 @main_bp.route('/production-requests/new', methods=['GET', 'POST'])
-@login_required
+@role_required('director', 'logistics')
 def production_request_create():
     form = ProductionRequestForm()
     form.target_warehouse_id.choices = [(0, '— не выбрано —')] + [(w.id, w.name) for w in Warehouse.query.filter_by(is_active=True).order_by(Warehouse.name).all()]
@@ -3165,8 +4794,13 @@ def production_request_create():
         form.request_number.data = _next_number('PR', ProductionRequest, 'request_number')
         form.status.data = 'draft'
     if form.validate_on_submit():
+        idem_key, duplicate = _reserve_idempotency_key()
+        if duplicate:
+            return _duplicate_redirect(idem_key, url_for('main.production_requests_list'))
         pr = ProductionRequest(request_number=(form.request_number.data or '').strip() or _next_number('PR', ProductionRequest, 'request_number'), status=form.status.data, target_warehouse_id=form.target_warehouse_id.data or None, note=(form.note.data or '').strip() or None)
         db.session.add(pr)
+        db.session.flush()
+        _finish_idempotency(idem_key, 'ProductionRequest', pr.id)
         db.session.commit()
         flash('Заявка на производство создана', 'success')
         return redirect(url_for('main.production_request_detail', request_id=pr.id))
@@ -3174,16 +4808,52 @@ def production_request_create():
 
 
 @main_bp.route('/production-requests/<int:request_id>', methods=['GET', 'POST'])
-@login_required
+@role_required('director', 'logistics')
 def production_request_detail(request_id):
     pr = ProductionRequest.query.get_or_404(request_id)
     form = ProductionRequestLineForm()
-    _fill_production_line_form_choices(form)
+    _fill_production_line_form_choices(form, target_warehouse_id=pr.target_warehouse_id)
     if form.validate_on_submit():
-        line = ProductionRequestLine(production_request_id=pr.id, supply_need_id=form.supply_need_id.data or None, item_id=form.item_id.data, quantity=form.quantity.data, status=form.status.data, note=(form.note.data or '').strip() or None)
+        idem_key, duplicate = _reserve_idempotency_key()
+        if duplicate:
+            return _duplicate_redirect(idem_key, url_for('main.production_request_detail', request_id=pr.id))
+        selected_need = SupplyNeed.query.get(form.supply_need_id.data) if form.supply_need_id.data else None
+        if selected_need and _active_production_line_for_need(selected_need.id):
+            flash('Эта потребность уже привязана к активной строке производства.', 'warning')
+            return redirect(url_for('main.production_request_detail', request_id=pr.id))
+        if selected_need and pr.target_warehouse_id and selected_need.warehouse_id and selected_need.warehouse_id != pr.target_warehouse_id:
+            flash('Склад потребности не совпадает со складом заявки на производство.', 'danger')
+            return redirect(url_for('main.production_request_detail', request_id=pr.id))
+        if selected_need and not pr.target_warehouse_id and selected_need.warehouse_id:
+            pr.target_warehouse_id = selected_need.warehouse_id
+
+        line_item_id = selected_need.item_id if selected_need else form.item_id.data
+        line_quantity = selected_need.quantity if selected_need else form.quantity.data
+        line_note = (form.note.data or '').strip() or (selected_need.note if selected_need else None)
+        line = ProductionRequestLine(
+            production_request_id=pr.id,
+            supply_need_id=selected_need.id if selected_need else None,
+            item_id=line_item_id,
+            quantity=line_quantity,
+            status=form.status.data,
+            note=line_note,
+        )
         db.session.add(line)
-        if line.supply_need:
-            line.supply_need.status = 'IN_PRODUCTION'
+        if selected_need:
+            selected_need.status = 'IN_PRODUCTION'
+            if selected_need.order:
+                old_status = selected_need.order.status
+                selected_need.order.status = 'in_production'
+                if old_status != selected_need.order.status:
+                    add_order_event(
+                        selected_need.order,
+                        'production_started',
+                        old_value=old_status,
+                        new_value='in_production',
+                        comment=f'Добавлена строка производства в заявку {pr.request_number}',
+                    )
+        db.session.flush()
+        _finish_idempotency(idem_key, 'ProductionRequestLine', line.id)
         db.session.commit()
         flash('Позиция добавлена', 'success')
         return redirect(url_for('main.production_request_detail', request_id=pr.id))
@@ -3191,7 +4861,7 @@ def production_request_detail(request_id):
 
 
 @main_bp.route('/production-requests/<int:request_id>/edit', methods=['GET', 'POST'])
-@login_required
+@role_required('director', 'logistics')
 def production_request_edit(request_id):
     pr = ProductionRequest.query.get_or_404(request_id)
     form = ProductionRequestForm(obj=pr)
@@ -3213,23 +4883,32 @@ def production_request_edit(request_id):
 @login_required
 def stock_movements_list():
     status = request.args.get('status', '').strip()
+    batch_key = request.args.get('batch_key', '').strip()
     query = StockMovement.query
     if status:
         query = query.filter_by(status=status)
+    if batch_key:
+        query = query.filter_by(batch_key=batch_key)
     movements = query.order_by(StockMovement.created_at.desc(), StockMovement.id.desc()).all()
-    return render_template('stock_movements_list.html', movements=movements, status=status)
+    return render_template('stock_movements_list.html', movements=movements, status=status, batch_key=batch_key)
 
 
 @main_bp.route('/stock-movements/new', methods=['GET', 'POST'])
-@login_required
+@role_required('director', 'logistics')
 def stock_movement_create():
     form = StockMovementForm()
     _fill_stock_movement_form_choices(form)
     if form.validate_on_submit():
+        if not _validate_stock_movement_selection(form):
+            return render_template('stock_movement_form.html', form=form, title='Новое перемещение', trailer_options=_stock_movement_trailer_options(form.from_warehouse_id.data or None, form.trailer_search.data, form.trailer_id.data or None))
+        idem_key, duplicate = _reserve_idempotency_key()
+        if duplicate:
+            return _duplicate_redirect(idem_key, url_for('main.stock_movements_list'))
         movement = StockMovement(
             from_warehouse_id=form.from_warehouse_id.data or None,
             to_warehouse_id=form.to_warehouse_id.data or None,
             trailer_id=form.trailer_id.data or None,
+            item_id=Trailer.query.get(form.trailer_id.data).item_id if form.trailer_id.data and Trailer.query.get(form.trailer_id.data) else None,
             order_id=form.order_id.data or None,
             movement_type=form.movement_type.data,
             status=form.status.data,
@@ -3238,39 +4917,112 @@ def stock_movement_create():
             note=(form.note.data or '').strip() or None,
         )
         db.session.add(movement)
+        _apply_sent_stock_movement(movement)
         _apply_arrived_stock_movement(movement)
+        db.session.flush()
+        _finish_idempotency(idem_key, 'StockMovement', movement.id)
         db.session.commit()
         flash('Перемещение создано', 'success')
         return redirect(url_for('main.stock_movements_list'))
-    return render_template('stock_movement_form.html', form=form, title='Новое перемещение')
+    return render_template('stock_movement_form.html', form=form, title='Новое перемещение', trailer_options=_stock_movement_trailer_options(form.from_warehouse_id.data or None, form.trailer_search.data, form.trailer_id.data or None))
+
+
+@main_bp.route('/stock-movements/batch/new', methods=['GET', 'POST'])
+@role_required('director', 'logistics')
+def stock_movement_batch_create():
+    form = StockMovementBatchForm()
+    _fill_stock_movement_batch_form_choices(form)
+    selected_trailers = _selected_trailers_from_request() if request.method == 'POST' else []
+
+    if request.method == 'GET':
+        production_warehouse = _default_production_warehouse()
+        if current_user.warehouse_id:
+            form.from_warehouse_id.data = current_user.warehouse_id
+        elif production_warehouse:
+            form.from_warehouse_id.data = production_warehouse.id
+        form.status.data = 'in_transit'
+        form.movement_type.data = 'warehouse_transfer'
+        form.departure_date.data = date.today()
+
+    if form.validate_on_submit():
+        if not _validate_batch_movement_selection(form, selected_trailers):
+            return render_template(
+                'stock_movement_batch_form.html',
+                form=form,
+                title='Партийное перемещение',
+                selected_trailers=selected_trailers,
+            )
+        idem_key, duplicate = _reserve_idempotency_key()
+        if duplicate:
+            return _duplicate_redirect(idem_key, url_for('main.stock_movements_list'))
+
+        batch_key = f"SMB-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{current_user.id}-{uuid4().hex[:6].upper()}"
+        movements = []
+        for trailer in selected_trailers:
+            order = _movement_order_for_trailer(trailer)
+            movement = StockMovement(
+                batch_key=batch_key,
+                from_warehouse_id=form.from_warehouse_id.data,
+                to_warehouse_id=form.to_warehouse_id.data,
+                trailer_id=trailer.id,
+                item_id=trailer.item_id,
+                order_id=order.id if order else None,
+                movement_type=form.movement_type.data,
+                status=form.status.data,
+                departure_date=form.departure_date.data,
+                arrival_date=form.arrival_date.data,
+                note=(form.note.data or '').strip() or None,
+            )
+            db.session.add(movement)
+            _apply_sent_stock_movement(movement)
+            _apply_arrived_stock_movement(movement)
+            movements.append(movement)
+            if movement.order:
+                add_order_event(movement.order, 'transfer_started', new_value=batch_key, comment=f'Партийное перемещение VIN {trailer.vin}')
+        db.session.flush()
+        _finish_idempotency(idem_key, 'StockMovementBatch', movements[0].id if movements else None)
+        db.session.commit()
+        flash(f'Партия перемещения {batch_key} создана: {len(movements)} прицепов.', 'success')
+        return redirect(url_for('main.stock_movements_list', batch_key=batch_key))
+
+    return render_template(
+        'stock_movement_batch_form.html',
+        form=form,
+        title='Партийное перемещение',
+        selected_trailers=selected_trailers,
+    )
 
 
 @main_bp.route('/stock-movements/<int:movement_id>/edit', methods=['GET', 'POST'])
-@login_required
+@role_required('director', 'logistics')
 def stock_movement_edit(movement_id):
     movement = StockMovement.query.get_or_404(movement_id)
     form = StockMovementForm(obj=movement)
-    _fill_stock_movement_form_choices(form)
     if request.method == 'GET':
         form.from_warehouse_id.data = movement.from_warehouse_id or 0
         form.to_warehouse_id.data = movement.to_warehouse_id or 0
         form.trailer_id.data = movement.trailer_id or 0
         form.order_id.data = movement.order_id or 0
+    _fill_stock_movement_form_choices(form, current_movement_id=movement.id)
     if form.validate_on_submit():
+        if not _validate_stock_movement_selection(form, current_movement_id=movement.id):
+            return render_template('stock_movement_form.html', form=form, title='Редактирование перемещения', trailer_options=_stock_movement_trailer_options(form.from_warehouse_id.data or None, form.trailer_search.data, form.trailer_id.data or None, movement.id))
         movement.from_warehouse_id = form.from_warehouse_id.data or None
         movement.to_warehouse_id = form.to_warehouse_id.data or None
         movement.trailer_id = form.trailer_id.data or None
+        movement.item_id = movement.trailer.item_id if movement.trailer else None
         movement.order_id = form.order_id.data or None
         movement.movement_type = form.movement_type.data
         movement.status = form.status.data
         movement.departure_date = form.departure_date.data
         movement.arrival_date = form.arrival_date.data
         movement.note = (form.note.data or '').strip() or None
+        _apply_sent_stock_movement(movement)
         _apply_arrived_stock_movement(movement)
         db.session.commit()
         flash('Перемещение обновлено', 'success')
         return redirect(url_for('main.stock_movements_list'))
-    return render_template('stock_movement_form.html', form=form, title='Редактирование перемещения')
+    return render_template('stock_movement_form.html', form=form, title='Редактирование перемещения', trailer_options=_stock_movement_trailer_options(form.from_warehouse_id.data or None, form.trailer_search.data, form.trailer_id.data or None, movement.id), movement=movement)
 
 
 def _apply_arrived_stock_movement(movement: StockMovement) -> None:
@@ -3289,7 +5041,56 @@ def _apply_arrived_stock_movement(movement: StockMovement) -> None:
                 db.session.add(Reservation(order_id=movement.order.id, trailer_id=movement.trailer_id, item_id=movement.order.item_id, status='ACTIVE', source_type='TRANSIT', priority=10))
                 if movement.trailer:
                     movement.trailer.status = 'RESERVED'
-        movement.order.status = 'ready_to_ship'
+        movement.order.status = 'sold_not_shipped' if movement.order.documents_issued else 'ready_to_ship'
+
+
+def _apply_sent_stock_movement(movement: StockMovement) -> None:
+    if movement.status not in ('sent', 'in_transit'):
+        return
+    if movement.trailer:
+        if movement.trailer.status != 'SOLD':
+            movement.trailer.status = 'IN_TRANSIT'
+        movement.trailer.lifecycle_status = 'in_transit'
+    if movement.order:
+        movement.order.status = 'in_transit'
+
+
+def _validate_stock_movement_selection(form: StockMovementForm, current_movement_id: int | None = None) -> bool:
+    from_warehouse_id = form.from_warehouse_id.data or None
+    to_warehouse_id = form.to_warehouse_id.data or None
+    if from_warehouse_id and to_warehouse_id and from_warehouse_id == to_warehouse_id:
+        flash('Нельзя создать перемещение на тот же склад.', 'danger')
+        return False
+    trailer_id = form.trailer_id.data or None
+    if not trailer_id:
+        return True
+    trailer = Trailer.query.get(trailer_id)
+    if not trailer:
+        flash('Выбранный прицеп не найден.', 'danger')
+        return False
+    if not _trailer_available_for_movement(trailer, from_warehouse_id=from_warehouse_id, exclude_movement_id=current_movement_id):
+        flash('Этот прицеп нельзя перемещать: проверьте склад, статус или активное перемещение.', 'danger')
+        return False
+    return True
+
+
+def _validate_batch_movement_selection(form: StockMovementBatchForm, trailers: list[Trailer]) -> bool:
+    from_warehouse_id = form.from_warehouse_id.data or None
+    to_warehouse_id = form.to_warehouse_id.data or None
+    if not trailers:
+        flash('Добавьте хотя бы один прицеп в партию.', 'danger')
+        return False
+    if from_warehouse_id and to_warehouse_id and from_warehouse_id == to_warehouse_id:
+        flash('Нельзя создать перемещение на тот же склад.', 'danger')
+        return False
+    invalid = [
+        trailer.vin for trailer in trailers
+        if not _trailer_available_for_movement(trailer, from_warehouse_id=from_warehouse_id)
+    ]
+    if invalid:
+        flash('Нельзя переместить эти прицепы: ' + ', '.join(invalid), 'danger')
+        return False
+    return True
 
 
 def _refresh_production_request_status(production_request: ProductionRequest) -> None:
@@ -3343,6 +5144,12 @@ def production_workspace():
 @role_required('production')
 def production_line_start(line_id):
     line = ProductionRequestLine.query.get_or_404(line_id)
+    if (line.status or '').lower() in ('in_production', 'partial_ready', 'ready', 'closed', 'cancelled', 'canceled'):
+        flash('Позиция уже в работе.', 'warning')
+        return redirect(url_for('main.production_workspace', tab='in_work'))
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.production_workspace', tab='in_work'))
     line.status = 'in_production'
     line.started_at = line.started_at or datetime.utcnow()
     line.production_request.status = 'in_progress'
@@ -3351,6 +5158,7 @@ def production_line_start(line_id):
         if line.supply_need.order:
             line.supply_need.order.status = 'in_production'
             add_order_event(line.supply_need.order, 'production_started', new_value=line.production_request.request_number)
+    _finish_idempotency(idem_key, 'ProductionRequestLine', line.id)
     db.session.commit()
     flash('Позиция взята в работу.', 'success')
     return redirect(url_for('main.production_workspace', tab='in_work'))
@@ -3363,6 +5171,9 @@ def production_line_produce_one(line_id):
     if line.produced_qty >= line.quantity:
         flash('По этой позиции уже выпущено нужное количество', 'warning')
         return redirect(url_for('main.production_workspace', tab='in_work'))
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.production_workspace', tab='done_today'))
     if (line.status or '').lower() in ('planned', 'draft', 'waiting_production'):
         line.status = 'in_production'
         line.started_at = line.started_at or datetime.utcnow()
@@ -3374,6 +5185,8 @@ def production_line_produce_one(line_id):
         line.completed_at = datetime.utcnow()
     produced_unit = ProducedUnit(production_request_line_id=line.id, item_id=line.item_id, target_warehouse_id=line.production_request.target_warehouse_id, produced_at=datetime.utcnow(), status='produced_no_vin')
     db.session.add(produced_unit)
+    db.session.flush()
+    _finish_idempotency(idem_key, 'ProducedUnit', produced_unit.id)
     if line.supply_need:
         line.supply_need.status = 'READY' if line.status == 'ready' else 'IN_PRODUCTION'
         if line.supply_need.order:
@@ -3422,20 +5235,85 @@ def logistics_workspace():
         .all()
     )
     produced_units = ProducedUnit.query.filter_by(status='produced_no_vin').order_by(ProducedUnit.created_at.desc()).all()
+    produced_unit_rows = [_produced_unit_context(unit) for unit in produced_units]
     ready_trailers = (
         Trailer.query
         .filter(
             Trailer.warehouse_id == production_warehouse.id,
             Trailer.status.in_(['IN_STOCK', 'RESERVED']),
-            or_(Trailer.lifecycle_status.is_(None), ~Trailer.lifecycle_status.in_(['in_transit', 'sold'])),
+            or_(Trailer.lifecycle_status.is_(None), ~Trailer.lifecycle_status.in_(['in_transit', 'sold', 'customer_shipped'])),
         )
         .order_by(Trailer.created_at.desc())
         .all()
         if production_warehouse else []
     )
-    inbound = StockMovement.query.filter(StockMovement.status.in_(['sent', 'in_transit'])).order_by(StockMovement.created_at.desc()).all()
+    ready_trailer_rows = []
+    for trailer in ready_trailers:
+        if _active_movement_for_trailer(trailer.id):
+            continue
+        context = _trailer_production_context(trailer)
+        target_warehouse = context.get('target_warehouse')
+        if not target_warehouse or target_warehouse.id == production_warehouse.id:
+            continue
+        context['trailer'] = trailer
+        ready_trailer_rows.append(context)
+    sold_not_shipped_trailers = (
+        Trailer.query
+        .filter(
+            Trailer.status == 'SOLD',
+            or_(Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped'),
+        )
+        .order_by(Trailer.created_at.desc(), Trailer.id.desc())
+        .all()
+    )
+    sold_not_shipped_rows = []
+    for trailer in sold_not_shipped_trailers:
+        order = (
+            CustomerOrder.query
+            .filter(
+                CustomerOrder.trailer_id == trailer.id,
+                CustomerOrder.documents_issued == True,
+                CustomerOrder.is_shipped == False,
+                CustomerOrder.status != 'cancelled',
+            )
+            .order_by(CustomerOrder.documents_issued_at.desc().nullslast(), CustomerOrder.created_at.desc())
+            .first()
+        )
+        target_warehouse = order.warehouse if order else None
+        can_send = bool(
+            production_warehouse
+            and order
+            and target_warehouse
+            and trailer.warehouse_id == production_warehouse.id
+            and target_warehouse.id != trailer.warehouse_id
+            and not _trailer_is_customer_shipped(trailer)
+            and not _active_movement_for_trailer(trailer.id)
+        )
+        sold_not_shipped_rows.append({
+            'trailer': trailer,
+            'order': order,
+            'target_warehouse': target_warehouse,
+            'can_send': can_send,
+        })
+    inbound = (
+        StockMovement.query
+        .outerjoin(Trailer, Trailer.id == StockMovement.trailer_id)
+        .filter(
+            StockMovement.status.in_(['sent', 'in_transit']),
+            or_(Trailer.id.is_(None), Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped'),
+        )
+        .order_by(StockMovement.created_at.desc())
+        .all()
+    )
     send_form = SendTrailerForm()
-    send_form.trailer_id.choices = [(t.id, f'{t.vin} — {t.item.article if t.item else ""}') for t in ready_trailers]
+    sendable_sold_rows = [row for row in sold_not_shipped_rows if row.get('can_send')]
+    send_form.trailer_id.choices = [
+        (row['trailer'].id, f"{row['trailer'].vin} — {row['trailer'].item.article if row['trailer'].item else ''} — {row['target_warehouse'].name if row['target_warehouse'] else 'без назначения'}")
+        for row in ready_trailer_rows
+    ] + [
+        (row['trailer'].id, f"{row['trailer'].vin} — продан, выдача: {row['target_warehouse'].name if row['target_warehouse'] else 'без назначения'}")
+        for row in sendable_sold_rows
+    ]
     send_form.to_warehouse_id.choices = [(w.id, w.name) for w in Warehouse.query.filter_by(is_active=True).order_by(Warehouse.name).all() if not production_warehouse or w.id != production_warehouse.id]
     send_form.order_id.choices = [(0, '— без заказа —')] + [(o.id, o.order_number) for o in CustomerOrder.query.filter(CustomerOrder.status.notin_(['done', 'cancelled'])).order_by(CustomerOrder.created_at.desc()).all()]
     return render_template(
@@ -3446,7 +5324,10 @@ def logistics_workspace():
         production_needs=production_needs,
         production_lines=production_lines,
         produced_units=produced_units,
+        produced_unit_rows=produced_unit_rows,
         ready_trailers=ready_trailers,
+        ready_trailer_rows=ready_trailer_rows,
+        sold_not_shipped_rows=sold_not_shipped_rows,
         inbound=inbound,
         send_form=send_form,
     )
@@ -3457,6 +5338,9 @@ def logistics_workspace():
 def logistics_assign_vin(unit_id):
     unit = ProducedUnit.query.get_or_404(unit_id)
     form = AssignVinForm()
+    if unit.status != 'produced_no_vin':
+        flash('По этой единице VIN уже присвоен или она недоступна.', 'warning')
+        return redirect(url_for('main.logistics_workspace'))
     if request.method == 'GET':
         form.manufacture_date.data = date.today()
     if form.validate_on_submit():
@@ -3468,17 +5352,32 @@ def logistics_assign_vin(unit_id):
         if Trailer.query.filter_by(vin=vin).first():
             form.vin.errors.append('Такой VIN уже существует.')
             return render_template('assign_vin_form.html', form=form, unit=unit)
+        idem_key, duplicate = _reserve_idempotency_key()
+        if duplicate:
+            return _duplicate_redirect(idem_key, url_for('main.logistics_workspace'))
         line = unit.production_request_line
-        order = line.supply_need.order if line and line.supply_need else None
-        trailer = Trailer(vin=vin, item_id=unit.item_id, warehouse_id=production_warehouse.id, manufacture_date=form.manufacture_date.data, status='RESERVED' if order else 'IN_STOCK', lifecycle_status='ready_production_warehouse')
+        order = unit.order if unit.order_id else None
+        if not order and line and line.supply_need:
+            order = line.supply_need.order
+        trailer_status = 'IN_STOCK'
+        if order:
+            trailer_status = 'SOLD' if order.documents_issued or order.status == 'sold_not_shipped' else 'RESERVED'
+        trailer = Trailer(vin=vin, item_id=unit.item_id, warehouse_id=production_warehouse.id, manufacture_date=form.manufacture_date.data, status=trailer_status, lifecycle_status='ready_production_warehouse')
         db.session.add(trailer)
         db.session.flush()
+        _finish_idempotency(idem_key, 'Trailer', trailer.id)
         unit.status = 'vin_assigned'
         unit.trailer_id = trailer.id
         if order:
+            unit.order_id = order.id
             order.trailer_id = trailer.id
-            order.status = 'waiting_transfer' if unit.target_warehouse_id and unit.target_warehouse_id != production_warehouse.id else 'ready_to_ship'
-            db.session.add(Reservation(order_id=order.id, trailer_id=trailer.id, item_id=order.item_id, status='ACTIVE', source_type='PRODUCTION', priority=10))
+            if order.documents_issued or order.status == 'sold_not_shipped':
+                order.status = 'sold_not_shipped'
+            elif unit.target_warehouse_id and unit.target_warehouse_id != production_warehouse.id:
+                order.status = 'waiting_transfer'
+            else:
+                order.status = 'ready_to_ship'
+            _ensure_order_reservation(order, trailer, 'PRODUCTION')
             add_order_event(order, 'vin_assigned', new_value=vin)
             add_order_event(order, 'trailer_assigned', new_value=vin)
         db.session.commit()
@@ -3494,8 +5393,8 @@ def logistics_send_trailer():
     production_warehouse = _default_production_warehouse()
     ready_query = Trailer.query.filter(
         Trailer.warehouse_id == production_warehouse.id,
-        Trailer.status.in_(['IN_STOCK', 'RESERVED']),
-        or_(Trailer.lifecycle_status.is_(None), ~Trailer.lifecycle_status.in_(['in_transit', 'sold'])),
+        Trailer.status.in_(['IN_STOCK', 'RESERVED', 'SOLD']),
+        or_(Trailer.lifecycle_status.is_(None), ~Trailer.lifecycle_status.in_(['in_transit', 'customer_shipped'])),
     ) if production_warehouse else Trailer.query.filter(False)
     form.trailer_id.choices = [(t.id, t.vin) for t in ready_query.order_by(Trailer.vin).all()]
     form.to_warehouse_id.choices = [(w.id, w.name) for w in Warehouse.query.filter_by(is_active=True).order_by(Warehouse.name).all() if not production_warehouse or w.id != production_warehouse.id]
@@ -3504,21 +5403,74 @@ def logistics_send_trailer():
         flash('Не удалось отправить прицеп. Проверьте производственный склад и данные формы.', 'danger')
         return redirect(url_for('main.logistics_workspace'))
     trailer = Trailer.query.get_or_404(form.trailer_id.data)
-    if trailer.warehouse_id != production_warehouse.id or trailer.status in ('IN_TRANSIT', 'SOLD') or (trailer.lifecycle_status or '') in ('in_transit', 'sold'):
-        flash('Этот прицеп нельзя отправить со склада выпуска.', 'danger')
+    to_warehouse = Warehouse.query.get(form.to_warehouse_id.data)
+    if not trailer.vin:
+        flash('Нельзя отправить прицеп без VIN.', 'danger')
         return redirect(url_for('main.logistics_workspace'))
-    if form.to_warehouse_id.data == production_warehouse.id:
+    if not trailer.warehouse_id:
+        flash('У прицепа не задан текущий склад.', 'danger')
+        return redirect(url_for('main.logistics_workspace'))
+    if not to_warehouse:
+        flash('Склад назначения не задан.', 'danger')
+        return redirect(url_for('main.logistics_workspace'))
+    if trailer.warehouse_id == to_warehouse.id:
         flash('Нельзя отправить прицеп на тот же склад.', 'danger')
         return redirect(url_for('main.logistics_workspace'))
-    movement = StockMovement(movement_type='warehouse_transfer', status='in_transit', from_warehouse_id=production_warehouse.id, to_warehouse_id=form.to_warehouse_id.data, trailer_id=trailer.id, order_id=form.order_id.data or None, departure_date=form.departure_date.data or date.today(), arrival_date=form.arrival_date.data, note=(form.note.data or '').strip() or None)
-    trailer.status = 'IN_TRANSIT'
+    if trailer.warehouse_id != production_warehouse.id or trailer.status not in ('IN_STOCK', 'RESERVED', 'SOLD') or (trailer.lifecycle_status or '') in ('in_transit', 'customer_shipped'):
+        flash('Этот прицеп нельзя отправить со склада выпуска.', 'danger')
+        return redirect(url_for('main.logistics_workspace'))
+    context = _trailer_production_context(trailer)
+    order_id = form.order_id.data or None
+    order = CustomerOrder.query.get(order_id) if order_id else None
+    if not order and context.get('order'):
+        order = context['order']
+    if not order and trailer.status == 'SOLD':
+        order = _find_order_for_sold_trailer(trailer)
+    target_warehouse = order.warehouse if order and order.warehouse_id else context.get('target_warehouse')
+    if not target_warehouse or target_warehouse.id == production_warehouse.id:
+        flash('Для этого прицепа склад назначения не задан или совпадает со складом выпуска.', 'danger')
+        return redirect(url_for('main.logistics_workspace'))
+    if target_warehouse.id != form.to_warehouse_id.data:
+        flash(f'Для этого прицепа склад назначения: {target_warehouse.name}.', 'danger')
+        return redirect(url_for('main.logistics_workspace'))
+    if _active_movement_for_trailer(trailer.id):
+        flash('Этот прицеп уже находится в активном перемещении.', 'warning')
+        return redirect(url_for('main.logistics_workspace'))
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.logistics_workspace'))
+    if order:
+        order_id = order.id
+    note = (form.note.data or '').strip() or None
+    if order and not note:
+        note = f'Перемещение под заказ №{order.order_number}'
+    movement = StockMovement(
+        movement_type='warehouse_transfer',
+        status='in_transit',
+        from_warehouse_id=production_warehouse.id,
+        to_warehouse_id=form.to_warehouse_id.data,
+        trailer_id=trailer.id,
+        item_id=trailer.item_id,
+        order_id=order_id,
+        departure_date=form.departure_date.data or date.today(),
+        arrival_date=form.arrival_date.data,
+        note=note,
+    )
+    if trailer.status != 'SOLD':
+        trailer.status = 'IN_TRANSIT'
     trailer.lifecycle_status = 'in_transit'
     if movement.order:
-        movement.order.status = 'in_transit'
+        if not movement.order.documents_issued and movement.order.status != 'sold_not_shipped':
+            movement.order.status = 'in_transit'
         add_order_event(movement.order, 'transfer_started', new_value=trailer.vin, comment=f'Отправка на склад #{form.to_warehouse_id.data}')
     db.session.add(movement)
+    db.session.flush()
+    _finish_idempotency(idem_key, 'StockMovement', movement.id)
     db.session.commit()
-    flash('Прицеп отправлен на склад.', 'success')
+    if trailer.status == 'SOLD':
+        flash('Прицеп продан, но не отгружен клиенту. Создано перемещение до склада выдачи.', 'success')
+    else:
+        flash('Прицеп отправлен на склад.', 'success')
     return redirect(url_for('main.logistics_workspace'))
 
 
@@ -3528,15 +5480,30 @@ def stock_movement_receive(movement_id):
     movement = StockMovement.query.get_or_404(movement_id)
     if not can_receive_movement(movement):
         abort(403)
+    if movement.status == 'arrived':
+        flash('Перемещение уже принято на склад.', 'warning')
+        if current_user.is_manager:
+            return redirect(url_for('main.manager_workspace'))
+        return redirect(url_for('main.stock_movements_list'))
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.manager_workspace') if current_user.is_manager else url_for('main.stock_movements_list'))
     movement.status = 'arrived'
     movement.received_at = datetime.utcnow()
     _apply_arrived_stock_movement(movement)
     if movement.trailer:
-        movement.trailer.status = 'RESERVED' if _active_reservation_for_trailer(movement.trailer.id) else 'IN_STOCK'
+        if movement.order_id:
+            if movement.order and movement.order.documents_issued:
+                movement.trailer.status = 'SOLD'
+            else:
+                movement.trailer.status = 'RESERVED' if _active_reservation_for_trailer(movement.trailer.id) else 'IN_STOCK'
+        else:
+            movement.trailer.status = 'IN_STOCK'
         movement.trailer.lifecycle_status = 'arrived'
     if movement.order:
-        movement.order.status = 'ready_to_ship'
+        movement.order.status = 'sold_not_shipped' if movement.order.documents_issued else 'ready_to_ship'
         add_order_event(movement.order, 'trailer_received', new_value=movement.trailer.vin if movement.trailer else movement.trailer_id)
+    _finish_idempotency(idem_key, 'StockMovement', movement.id)
     db.session.commit()
     flash('Прицеп принят на склад', 'success')
     if current_user.is_manager:
@@ -3548,59 +5515,540 @@ def stock_movement_receive(movement_id):
 @role_required('manager', 'director')
 def order_documents_issued(order_id):
     order = CustomerOrder.query.get_or_404(order_id)
-    return _mark_order_document(order, 'documents_issued', 'documents_issued', 'Выдача документов отмечена')
+    _ensure_can_access_order(order)
+    flash('Выдача документов выполняется только через действие в карточке заказа.', 'warning')
+    return redirect(url_for('main.order_detail', order_id=order.id))
 
 
 @main_bp.route('/director/dashboard')
 @role_required('director')
 def director_dashboard():
-    warehouses = Warehouse.query.order_by(Warehouse.name).all()
-    items = Item.query.filter(Item.item_type == 'TRAILER', Item.is_active == True).order_by(Item.article, Item.name).all()
-    rows = []
-    for item in items:
-        row = {'item': item, 'warehouses': {}, 'in_production': 0, 'produced_no_vin': 0, 'in_transit': 0, 'reserved': 0, 'sold': 0}
-        for warehouse in warehouses:
-            row['warehouses'][warehouse.id] = Trailer.query.filter_by(item_id=item.id, warehouse_id=warehouse.id, status='IN_STOCK').count()
-        active_lines = ProductionRequestLine.query.filter_by(item_id=item.id).filter(ProductionRequestLine.status.in_(['planned', 'PLANNED', 'in_production', 'partial_ready'])).all()
-        row['in_production'] = sum(max((line.quantity or 0) - (line.produced_qty or 0), 0) for line in active_lines)
-        row['produced_no_vin'] = ProducedUnit.query.filter_by(item_id=item.id, status='produced_no_vin').count()
-        row['in_transit'] = Trailer.query.filter_by(item_id=item.id, status='IN_TRANSIT').count()
-        row['reserved'] = Trailer.query.filter_by(item_id=item.id, status='RESERVED').count()
-        row['sold'] = Trailer.query.filter_by(item_id=item.id, status='SOLD').count()
-        rows.append(row)
-    month_start = date.today().replace(day=1)
-    month_revenue = sum(
-        float(payment.amount or 0)
-        for payment in OrderPayment.query.filter(
-            OrderPayment.status == 'CONFIRMED',
-            OrderPayment.paid_at >= datetime.combine(month_start, time.min),
-        ).all()
-    )
-    payment_pending = OrderPayment.query.filter_by(status='PENDING').order_by(OrderPayment.created_at.desc()).all()
-    active_orders = CustomerOrder.query.filter(CustomerOrder.status.notin_(['done', 'cancelled'])).all()
-    paid_not_shipped = [order for order in active_orders if order.confirmed_paid_amount > 0 and not order.is_shipped]
-    unpaid_orders = [order for order in active_orders if order.confirmed_paid_amount == 0]
-    overdue_production = (
-        ProductionRequestLine.query
-        .join(SupplyNeed, SupplyNeed.id == ProductionRequestLine.supply_need_id)
-        .filter(
-            ~ProductionRequestLine.status.in_(['ready', 'closed', 'cancelled', 'CANCELLED']),
-            SupplyNeed.required_by.isnot(None),
-            SupplyNeed.required_by < date.today(),
+    warehouses = Warehouse.query.filter_by(is_active=True).order_by(Warehouse.name).all()
+    period = request.args.get('period', 'month')
+    warehouse_id = request.args.get('warehouse_id', type=int)
+    status_filter = (request.args.get('status') or 'all').strip()
+    show_zero = request.args.get('show_zero') == '1'
+    today = date.today()
+
+    if period == 'day':
+        date_from = today
+        date_to = today
+    elif period == 'week':
+        date_from = today - timedelta(days=today.weekday())
+        date_to = today
+    elif period == 'custom':
+        try:
+            date_from = datetime.strptime(request.args.get('date_from') or '', '%Y-%m-%d').date()
+        except ValueError:
+            date_from = today.replace(day=1)
+        try:
+            date_to = datetime.strptime(request.args.get('date_to') or '', '%Y-%m-%d').date()
+        except ValueError:
+            date_to = today
+    else:
+        period = 'month'
+        date_from = today.replace(day=1)
+        date_to = today
+
+    period_start = datetime.combine(date_from, time.min)
+    period_end = datetime.combine(date_to, time.max)
+
+    def scoped_order_query():
+        query = CustomerOrder.query
+        if warehouse_id:
+            query = query.filter(CustomerOrder.warehouse_id == warehouse_id)
+        return query
+
+    def scoped_trailer_query():
+        query = Trailer.query
+        if warehouse_id:
+            query = query.filter(Trailer.warehouse_id == warehouse_id)
+        return query
+
+    def scoped_movement_query():
+        query = StockMovement.query
+        if warehouse_id:
+            query = query.filter(or_(StockMovement.from_warehouse_id == warehouse_id, StockMovement.to_warehouse_id == warehouse_id))
+        return query
+
+    def legal_sales_between(start_dt: datetime, end_dt: datetime):
+        query = (
+            scoped_order_query()
+            .join(SalesContract, SalesContract.order_id == CustomerOrder.id)
+            .join(Trailer, Trailer.id == CustomerOrder.trailer_id)
+            .filter(
+                CustomerOrder.documents_issued == True,
+                CustomerOrder.documents_issued_at >= start_dt,
+                CustomerOrder.documents_issued_at <= end_dt,
+                CustomerOrder.status != 'cancelled',
+                Trailer.status == 'SOLD',
+            )
+            .order_by(CustomerOrder.documents_issued_at.desc())
         )
+        return [
+            order for order in query.all()
+            if order.total_amount > 0 and order.confirmed_paid_amount >= order.total_amount
+        ]
+
+    today_start = datetime.combine(today, time.min)
+    today_end = datetime.combine(today, time.max)
+    week_start = datetime.combine(today - timedelta(days=today.weekday()), time.min)
+    sales_today = legal_sales_between(today_start, today_end)
+    sales_week = legal_sales_between(week_start, today_end)
+    sales_period = legal_sales_between(period_start, period_end)
+
+    active_orders = scoped_order_query().filter(CustomerOrder.status.notin_(['done', 'cancelled', 'shipped', 'sold_not_shipped'])).all()
+    reserved_count = scoped_trailer_query().filter(Trailer.status == 'RESERVED').count()
+    free_count = len([
+        trailer for trailer in scoped_trailer_query().filter(Trailer.status == 'IN_STOCK').all()
+        if _trailer_available_for_sale(trailer)
+    ])
+    sold_not_shipped_orders = scoped_order_query().filter(
+        CustomerOrder.documents_issued == True,
+        CustomerOrder.is_shipped == False,
+        CustomerOrder.status != 'cancelled',
+    ).order_by(CustomerOrder.documents_issued_at.desc().nullslast()).all()
+    sold_not_shipped_amount = sum(float(order.price or 0) for order in sold_not_shipped_orders)
+    in_transit_movements = scoped_movement_query().filter(StockMovement.status.in_(['sent', 'in_transit'])).order_by(StockMovement.arrival_date.asc().nullslast()).all()
+    shipped_period_count = scoped_order_query().filter(
+        CustomerOrder.is_shipped == True,
+        CustomerOrder.shipped_at >= period_start,
+        CustomerOrder.shipped_at <= period_end,
+    ).count()
+
+    production_warehouse = _default_production_warehouse()
+    active_lines_query = ProductionRequestLine.query.join(ProductionRequest, ProductionRequest.id == ProductionRequestLine.production_request_id).filter(
+        ProductionRequestLine.status.in_(['planned', 'PLANNED', 'in_production', 'partial_ready'])
+    )
+    if warehouse_id:
+        active_lines_query = active_lines_query.filter(ProductionRequest.target_warehouse_id == warehouse_id)
+    active_lines = active_lines_query.all()
+    production_ordered = sum(line.quantity or 0 for line in active_lines)
+    production_left = sum(max((line.quantity or 0) - (line.produced_qty or 0), 0) for line in active_lines)
+    production_customer_left = sum(max((line.quantity or 0) - (line.produced_qty or 0), 0) for line in active_lines if not _is_stock_replenishment_need(line.supply_need))
+    production_stock_left = sum(max((line.quantity or 0) - (line.produced_qty or 0), 0) for line in active_lines if _is_stock_replenishment_need(line.supply_need))
+
+    produced_no_vin_query = ProducedUnit.query.filter_by(status='produced_no_vin')
+    if warehouse_id:
+        produced_no_vin_query = produced_no_vin_query.filter(ProducedUnit.target_warehouse_id == warehouse_id)
+    produced_no_vin_units = produced_no_vin_query.order_by(ProducedUnit.produced_at.asc().nullslast(), ProducedUnit.id.asc()).all()
+
+    ready_with_vin_query = ProducedUnit.query.join(Trailer, Trailer.id == ProducedUnit.trailer_id).filter(
+        ProducedUnit.status == 'vin_assigned',
+        Trailer.status.in_(['IN_STOCK', 'RESERVED']),
+        or_(Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped'),
+    )
+    if production_warehouse:
+        ready_with_vin_query = ready_with_vin_query.filter(Trailer.warehouse_id == production_warehouse.id)
+    if warehouse_id:
+        ready_with_vin_query = ready_with_vin_query.filter(ProducedUnit.target_warehouse_id == warehouse_id)
+    ready_with_vin_units = ready_with_vin_query.order_by(ProducedUnit.created_at.asc()).all()
+
+    overdue_production = (
+        active_lines_query
+        .join(SupplyNeed, SupplyNeed.id == ProductionRequestLine.supply_need_id)
+        .filter(SupplyNeed.required_by.isnot(None), SupplyNeed.required_by < today)
         .all()
     )
-    overdue_movements = StockMovement.query.filter(StockMovement.status.in_(['sent', 'in_transit']), StockMovement.arrival_date.isnot(None), StockMovement.arrival_date < date.today()).all()
+    overdue_movements = scoped_movement_query().filter(StockMovement.status.in_(['sent', 'in_transit']), StockMovement.arrival_date.isnot(None), StockMovement.arrival_date < today).all()
+
+    unprocessed_leads = Lead.query.filter(Lead.status.in_(['NEW', 'IN_PROGRESS'])).filter(or_(Lead.assigned_user_id.is_(None), Lead.conversation_status.in_(['new', 'manager_needed']))).count()
+    if warehouse_id:
+        unprocessed_leads = Lead.query.filter(
+            Lead.status.in_(['NEW', 'IN_PROGRESS']),
+            or_(Lead.warehouse_id == warehouse_id, Lead.warehouse_id.is_(None)),
+            or_(Lead.assigned_user_id.is_(None), Lead.conversation_status.in_(['new', 'manager_needed'])),
+        ).count()
+    orders_without_trailer = scoped_order_query().filter(
+        CustomerOrder.trailer_id.is_(None),
+        CustomerOrder.status.notin_(['done', 'cancelled', 'shipped']),
+    ).order_by(CustomerOrder.created_at.desc()).limit(10).all()
+    paid_without_contract = [
+        order for order in scoped_order_query().filter(
+            CustomerOrder.documents_issued == False,
+            CustomerOrder.status.notin_(['done', 'cancelled', 'shipped']),
+        ).order_by(CustomerOrder.created_at.desc()).all()
+        if order.total_amount > 0 and order.confirmed_paid_amount >= order.total_amount and not SalesContract.query.filter_by(order_id=order.id).first()
+    ]
+    contract_without_docs = (
+        scoped_order_query()
+        .join(SalesContract, SalesContract.order_id == CustomerOrder.id)
+        .filter(
+            CustomerOrder.documents_issued == False,
+            CustomerOrder.status != 'cancelled',
+        )
+        .order_by(CustomerOrder.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    sold_wrong_warehouse = [
+        order for order in sold_not_shipped_orders
+        if order.trailer and order.warehouse_id and order.trailer.warehouse_id != order.warehouse_id and order.trailer.lifecycle_status != 'in_transit'
+    ][:10]
+    stale_produced_no_vin = [
+        unit for unit in produced_no_vin_units
+        if unit.produced_at and unit.produced_at.date() < today
+    ][:10]
+    ready_not_sent = [
+        unit for unit in ready_with_vin_units
+        if unit.target_warehouse_id and production_warehouse and unit.target_warehouse_id != production_warehouse.id
+    ][:10]
+
+    problem_cards = [
+        {'title': 'Заявки без ответа', 'count': unprocessed_leads, 'kind': 'lead'},
+        {'title': 'Заказы без прицепа', 'count': len(orders_without_trailer), 'kind': 'order'},
+        {'title': 'Оплачено, но нет договора', 'count': len(paid_without_contract), 'kind': 'contract'},
+        {'title': 'Договор есть, документы не выданы', 'count': len(contract_without_docs), 'kind': 'docs'},
+        {'title': 'Документы выданы, не отгружено', 'count': len(sold_not_shipped_orders), 'kind': 'shipment'},
+        {'title': 'Продано, не на складе выдачи', 'count': len(sold_wrong_warehouse), 'kind': 'warehouse'},
+        {'title': 'Перемещения просрочены', 'count': len(overdue_movements), 'kind': 'movement'},
+        {'title': 'Производство просрочено', 'count': len(overdue_production), 'kind': 'production'},
+        {'title': 'Выпущено без VIN со вчера', 'count': len(stale_produced_no_vin), 'kind': 'vin'},
+        {'title': 'Готово с VIN, не отправлено', 'count': len(ready_not_sent), 'kind': 'ready'},
+    ]
+
+    items = Item.query.filter(Item.item_type == 'TRAILER', Item.is_active == True).order_by(Item.article, Item.name).all()
+    inventory_rows = []
+    for item in items:
+        row = {
+            'item': item,
+            'warehouses': {},
+            'stock_total': 0,
+            'in_production': 0,
+            'in_production_customer': 0,
+            'in_production_stock': 0,
+            'produced_no_vin': 0,
+            'ready_at_production': 0,
+            'in_transit': 0,
+            'in_transit_customer': 0,
+            'in_transit_stock': 0,
+            'reserved': 0,
+            'sold': 0,
+        }
+        for warehouse in warehouses:
+            if warehouse_id and warehouse.id != warehouse_id:
+                row['warehouses'][warehouse.id] = 0
+                continue
+            count = len([
+                trailer for trailer in Trailer.query.filter_by(item_id=item.id, warehouse_id=warehouse.id, status='IN_STOCK').all()
+                if _trailer_available_for_sale(trailer)
+            ])
+            row['warehouses'][warehouse.id] = count
+            row['stock_total'] += count
+        item_active_lines = [line for line in active_lines if line.item_id == item.id]
+        for line in item_active_lines:
+            qty_left = max((line.quantity or 0) - (line.produced_qty or 0), 0)
+            row['in_production'] += qty_left
+            if _is_stock_replenishment_need(line.supply_need):
+                row['in_production_stock'] += qty_left
+            else:
+                row['in_production_customer'] += qty_left
+        row['produced_no_vin'] = len([unit for unit in produced_no_vin_units if unit.item_id == item.id])
+        row['ready_at_production'] = len([unit for unit in ready_with_vin_units if unit.item_id == item.id])
+        item_movements = [movement for movement in in_transit_movements if movement.trailer and movement.trailer.item_id == item.id]
+        row['in_transit'] = len(item_movements)
+        row['in_transit_customer'] = len([movement for movement in item_movements if movement.order_id])
+        row['in_transit_stock'] = len([movement for movement in item_movements if not movement.order_id])
+        row['reserved'] = scoped_trailer_query().filter_by(item_id=item.id, status='RESERVED').count()
+        row['sold'] = scoped_trailer_query().filter_by(item_id=item.id, status='SOLD').filter(or_(Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped')).count()
+        row_total = row['stock_total'] + row['in_production'] + row['produced_no_vin'] + row['ready_at_production'] + row['in_transit'] + row['reserved'] + row['sold']
+        if status_filter != 'all':
+            status_metric = {
+                'free': 'stock_total',
+                'reserved': 'reserved',
+                'sold_not_shipped': 'sold',
+                'in_transit': 'in_transit',
+                'in_production': 'in_production',
+                'produced_no_vin': 'produced_no_vin',
+                'ready_to_send': 'ready_at_production',
+            }.get(status_filter)
+            row_total = row.get(status_metric, row_total) if status_metric else row_total
+        if show_zero or row_total > 0:
+            inventory_rows.append(row)
+
+    payment_pending = OrderPayment.query.filter_by(status='PENDING').order_by(OrderPayment.created_at.desc()).all()
     return render_template(
         'director_dashboard.html',
         warehouses=warehouses,
-        rows=rows,
+        warehouse_id=warehouse_id,
+        period=period,
+        date_from=date_from,
+        date_to=date_to,
+        status_filter=status_filter,
+        show_zero=show_zero,
+        inventory_rows=inventory_rows,
         payment_pending=payment_pending,
-        paid_not_shipped=paid_not_shipped,
-        unpaid_orders=unpaid_orders,
+        sales_today=sales_today,
+        sales_week=sales_week,
+        sales_period=sales_period,
+        revenue_today=sum(float(order.price or 0) for order in sales_today),
+        revenue_week=sum(float(order.price or 0) for order in sales_week),
+        revenue_period=sum(float(order.price or 0) for order in sales_period),
+        active_orders=active_orders,
+        free_count=free_count,
+        reserved_count=reserved_count,
+        sold_not_shipped_orders=sold_not_shipped_orders,
+        sold_not_shipped_amount=sold_not_shipped_amount,
+        in_transit_movements=in_transit_movements,
+        shipped_period_count=shipped_period_count,
+        production_ordered=production_ordered,
+        production_left=production_left,
+        production_customer_left=production_customer_left,
+        production_stock_left=production_stock_left,
+        produced_no_vin_units=produced_no_vin_units,
+        ready_with_vin_units=ready_with_vin_units,
         overdue_production=overdue_production,
         overdue_movements=overdue_movements,
-        month_revenue=month_revenue,
+        problem_cards=problem_cards,
+        orders_without_trailer=orders_without_trailer,
+        paid_without_contract=paid_without_contract[:10],
+        contract_without_docs=contract_without_docs,
+        sold_wrong_warehouse=sold_wrong_warehouse,
+        stale_produced_no_vin=stale_produced_no_vin,
+        ready_not_sent=ready_not_sent,
+    )
+
+
+@main_bp.route('/director/reports')
+@main_bp.route('/director/reports/<section>')
+@role_required('director')
+def director_report(section='sales'):
+    sections = {
+        'sales': 'Продажи',
+        'stock': 'Склад',
+        'production': 'Производство',
+        'movements': 'Перемещения',
+        'problems': 'Проблемные заказы',
+        'finance': 'Финансовая сводка',
+    }
+    if section not in sections:
+        abort(404)
+
+    warehouses = Warehouse.query.filter_by(is_active=True).order_by(Warehouse.name).all()
+    managers = User.query.filter(User.role == 'manager').order_by(User.full_name, User.username).all()
+    warehouse_id = request.args.get('warehouse_id', type=int)
+    manager_id = request.args.get('manager_id', type=int)
+    status_filter = (request.args.get('status') or 'all').strip()
+    search = (request.args.get('q') or '').strip()
+    period = request.args.get('period', 'month')
+    today = date.today()
+
+    if period == 'day':
+        date_from = today
+        date_to = today
+    elif period == 'week':
+        date_from = today - timedelta(days=today.weekday())
+        date_to = today
+    elif period == 'custom':
+        try:
+            date_from = datetime.strptime(request.args.get('date_from') or '', '%Y-%m-%d').date()
+        except ValueError:
+            date_from = today.replace(day=1)
+        try:
+            date_to = datetime.strptime(request.args.get('date_to') or '', '%Y-%m-%d').date()
+        except ValueError:
+            date_to = today
+    else:
+        period = 'month'
+        date_from = today.replace(day=1)
+        date_to = today
+
+    period_start = datetime.combine(date_from, time.min)
+    period_end = datetime.combine(date_to, time.max)
+
+    def order_scope(query):
+        if warehouse_id:
+            query = query.filter(CustomerOrder.warehouse_id == warehouse_id)
+        if manager_id:
+            query = query.filter(CustomerOrder.assigned_user_id == manager_id)
+        return query
+
+    cards = []
+    rows = []
+    problem_rows = []
+
+    if section in ('sales', 'finance'):
+        sales_query = (
+            order_scope(CustomerOrder.query)
+            .join(SalesContract, SalesContract.order_id == CustomerOrder.id)
+            .join(Trailer, Trailer.id == CustomerOrder.trailer_id)
+            .filter(
+                CustomerOrder.documents_issued == True,
+                CustomerOrder.documents_issued_at >= period_start,
+                CustomerOrder.documents_issued_at <= period_end,
+                CustomerOrder.status != 'cancelled',
+                Trailer.status == 'SOLD',
+            )
+            .order_by(CustomerOrder.documents_issued_at.desc())
+        )
+        rows = [
+            order for order in sales_query.all()
+            if order.total_amount > 0 and order.confirmed_paid_amount >= order.total_amount
+        ]
+        revenue = sum(float(order.price or 0) for order in rows)
+        cards = [
+            {'title': 'Выручка', 'value': money(revenue), 'caption': 'юридические продажи за период'},
+            {'title': 'Продано', 'value': len(rows), 'caption': 'прицепов'},
+            {'title': 'Средний чек', 'value': money(revenue / len(rows) if rows else 0), 'caption': 'по закрытым продажам'},
+            {'title': 'Резервы', 'value': order_scope(CustomerOrder.query).filter(CustomerOrder.status.in_(['reserved', 'waiting_payment', 'prepaid', 'ready_to_ship'])).count(), 'caption': 'активные заказы'},
+        ]
+        if section == 'finance':
+            rows = (
+                OrderPayment.query
+                .join(CustomerOrder, CustomerOrder.id == OrderPayment.order_id)
+                .filter(OrderPayment.paid_at >= period_start, OrderPayment.paid_at <= period_end)
+            )
+            if warehouse_id:
+                rows = rows.filter(CustomerOrder.warehouse_id == warehouse_id)
+            if manager_id:
+                rows = rows.filter(CustomerOrder.assigned_user_id == manager_id)
+            if status_filter != 'all':
+                rows = rows.filter(OrderPayment.status == status_filter)
+            rows = rows.order_by(OrderPayment.paid_at.desc().nullslast(), OrderPayment.id.desc()).limit(300).all()
+            confirmed_sum = sum(float(payment.amount or 0) for payment in rows if payment.status == 'CONFIRMED')
+            cards = [
+                {'title': 'Подтверждено', 'value': money(confirmed_sum), 'caption': 'оплаты за период'},
+                {'title': 'Оплат всего', 'value': len(rows), 'caption': 'операций'},
+                {'title': 'На проверке', 'value': len([p for p in rows if p.status == 'PENDING']), 'caption': 'PENDING'},
+                {'title': 'Отменено', 'value': len([p for p in rows if p.status == 'CANCELED']), 'caption': 'CANCELED'},
+            ]
+
+    elif section == 'stock':
+        query = Trailer.query.join(Item, Item.id == Trailer.item_id)
+        if warehouse_id:
+            query = query.filter(Trailer.warehouse_id == warehouse_id)
+        if search:
+            like = f'%{search}%'
+            query = query.filter(or_(Trailer.vin.ilike(like), Item.article.ilike(like), Item.name.ilike(like)))
+        trailers = query.order_by(Trailer.id.desc()).limit(500).all()
+        if status_filter == 'free':
+            rows = [trailer for trailer in trailers if _trailer_available_for_sale(trailer)]
+        elif status_filter == 'reserved':
+            rows = [trailer for trailer in trailers if trailer.status == 'RESERVED']
+        elif status_filter == 'sold_not_shipped':
+            rows = [trailer for trailer in trailers if trailer.status == 'SOLD' and not _trailer_is_customer_shipped(trailer)]
+        elif status_filter == 'in_transit':
+            rows = [trailer for trailer in trailers if trailer.status == 'IN_TRANSIT' or trailer.lifecycle_status == 'in_transit']
+        elif status_filter == 'shipped':
+            rows = [trailer for trailer in trailers if _trailer_is_customer_shipped(trailer)]
+        else:
+            rows = trailers
+        cards = [
+            {'title': 'Свободно', 'value': len([t for t in trailers if _trailer_available_for_sale(t)]), 'caption': 'доступно к продаже'},
+            {'title': 'В резерве', 'value': len([t for t in trailers if t.status == 'RESERVED']), 'caption': 'занято заказами'},
+            {'title': 'Продано, не отгружено', 'value': len([t for t in trailers if t.status == 'SOLD' and not _trailer_is_customer_shipped(t)]), 'caption': 'контроль выдачи'},
+            {'title': 'В пути', 'value': len([t for t in trailers if t.status == 'IN_TRANSIT' or t.lifecycle_status == 'in_transit']), 'caption': 'логистика'},
+        ]
+
+    elif section == 'production':
+        query = ProductionRequestLine.query.join(ProductionRequest, ProductionRequest.id == ProductionRequestLine.production_request_id)
+        if warehouse_id:
+            query = query.filter(ProductionRequest.target_warehouse_id == warehouse_id)
+        if status_filter != 'all':
+            query = query.filter(ProductionRequestLine.status == status_filter)
+        rows = query.order_by(ProductionRequest.created_at.desc(), ProductionRequestLine.id.desc()).limit(300).all()
+        active_rows = [line for line in rows if (line.status or '').lower() not in ('ready', 'closed', 'cancelled', 'canceled')]
+        produced_no_vin = ProducedUnit.query.filter_by(status='produced_no_vin')
+        if warehouse_id:
+            produced_no_vin = produced_no_vin.filter(ProducedUnit.target_warehouse_id == warehouse_id)
+        cards = [
+            {'title': 'Заказано', 'value': sum(line.quantity or 0 for line in active_rows), 'caption': 'активное производство'},
+            {'title': 'Осталось выпустить', 'value': sum(max((line.quantity or 0) - (line.produced_qty or 0), 0) for line in active_rows), 'caption': 'по активным строкам'},
+            {'title': 'Выпущено без VIN', 'value': produced_no_vin.count(), 'caption': 'ждёт логиста'},
+            {'title': 'Просрочено', 'value': len([line for line in active_rows if line.supply_need and line.supply_need.required_by and line.supply_need.required_by < today]), 'caption': 'по сроку'},
+        ]
+
+    elif section == 'movements':
+        query = StockMovement.query.filter(StockMovement.created_at >= period_start, StockMovement.created_at <= period_end)
+        if warehouse_id:
+            query = query.filter(or_(StockMovement.from_warehouse_id == warehouse_id, StockMovement.to_warehouse_id == warehouse_id))
+        if status_filter != 'all':
+            query = query.filter(StockMovement.status == status_filter)
+        if search:
+            like = f'%{search}%'
+            query = query.join(Trailer, Trailer.id == StockMovement.trailer_id, isouter=True).join(Item, Item.id == Trailer.item_id, isouter=True).filter(
+                or_(Trailer.vin.ilike(like), Item.article.ilike(like), Item.name.ilike(like), StockMovement.batch_key.ilike(like))
+            )
+        rows = query.order_by(StockMovement.created_at.desc(), StockMovement.id.desc()).limit(500).all()
+        cards = [
+            {'title': 'Создано', 'value': len(rows), 'caption': 'строк перемещения'},
+            {'title': 'В пути', 'value': len([m for m in rows if m.status in ('sent', 'in_transit')]), 'caption': 'не принято'},
+            {'title': 'Принято', 'value': len([m for m in rows if m.status == 'arrived']), 'caption': 'закрыто складом'},
+            {'title': 'Просрочено', 'value': len([m for m in rows if m.status in ('sent', 'in_transit') and m.arrival_date and m.arrival_date < today]), 'caption': 'по ожидаемой дате'},
+        ]
+
+    else:
+        paid_without_contract = [
+            order for order in order_scope(CustomerOrder.query).filter(
+                CustomerOrder.documents_issued == False,
+                CustomerOrder.status.notin_(['done', 'cancelled', 'shipped']),
+            ).order_by(CustomerOrder.created_at.desc()).all()
+            if order.total_amount > 0 and order.confirmed_paid_amount >= order.total_amount and not SalesContract.query.filter_by(order_id=order.id).first()
+        ]
+        contract_without_docs = (
+            order_scope(CustomerOrder.query)
+            .join(SalesContract, SalesContract.order_id == CustomerOrder.id)
+            .filter(CustomerOrder.documents_issued == False, CustomerOrder.status != 'cancelled')
+            .order_by(CustomerOrder.created_at.desc())
+            .all()
+        )
+        sold_not_shipped = order_scope(CustomerOrder.query).filter(
+            CustomerOrder.documents_issued == True,
+            CustomerOrder.is_shipped == False,
+            CustomerOrder.status != 'cancelled',
+        ).order_by(CustomerOrder.documents_issued_at.desc().nullslast()).all()
+        overdue_movements = StockMovement.query.filter(
+            StockMovement.status.in_(['sent', 'in_transit']),
+            StockMovement.arrival_date.isnot(None),
+            StockMovement.arrival_date < today,
+        )
+        if warehouse_id:
+            overdue_movements = overdue_movements.filter(or_(StockMovement.from_warehouse_id == warehouse_id, StockMovement.to_warehouse_id == warehouse_id))
+        overdue_movements = overdue_movements.order_by(StockMovement.arrival_date.asc()).all()
+        overdue_production = (
+            ProductionRequestLine.query
+            .join(ProductionRequest, ProductionRequest.id == ProductionRequestLine.production_request_id)
+            .join(SupplyNeed, SupplyNeed.id == ProductionRequestLine.supply_need_id)
+            .filter(
+                ProductionRequestLine.status.notin_(['ready', 'closed', 'cancelled', 'canceled']),
+                SupplyNeed.required_by.isnot(None),
+                SupplyNeed.required_by < today,
+            )
+        )
+        if warehouse_id:
+            overdue_production = overdue_production.filter(ProductionRequest.target_warehouse_id == warehouse_id)
+        overdue_production = overdue_production.order_by(SupplyNeed.required_by.asc()).all()
+        problem_rows = [
+            {'type': 'Оплачено, но нет договора', 'items': paid_without_contract},
+            {'type': 'Договор есть, документы не выданы', 'items': contract_without_docs},
+            {'type': 'Документы выданы, не отгружено', 'items': sold_not_shipped},
+            {'type': 'Перемещение просрочено', 'items': overdue_movements},
+            {'type': 'Производство просрочено', 'items': overdue_production},
+        ]
+        cards = [
+            {'title': 'Без договора', 'value': len(paid_without_contract), 'caption': 'полная оплата есть'},
+            {'title': 'Без документов', 'value': len(contract_without_docs), 'caption': 'договор создан'},
+            {'title': 'Не отгружено', 'value': len(sold_not_shipped), 'caption': 'юридически продано'},
+            {'title': 'Просрочки', 'value': len(overdue_movements) + len(overdue_production), 'caption': 'логистика + производство'},
+        ]
+
+    return render_template(
+        'director_report.html',
+        section=section,
+        sections=sections,
+        title=sections[section],
+        warehouses=warehouses,
+        managers=managers,
+        warehouse_id=warehouse_id,
+        manager_id=manager_id,
+        status_filter=status_filter,
+        search=search,
+        period=period,
+        date_from=date_from,
+        date_to=date_to,
+        cards=cards,
+        rows=rows,
+        problem_rows=problem_rows,
     )
 
 

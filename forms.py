@@ -1,12 +1,17 @@
 # forms.py
 from flask_wtf import FlaskForm
+from uuid import uuid4
 from wtforms import (
     StringField, PasswordField, BooleanField, SubmitField,
-    SelectField, DecimalField, IntegerField, TextAreaField, DateField
+    SelectField, DecimalField, IntegerField, TextAreaField, DateField, HiddenField
 )
 from wtforms.validators import DataRequired, Optional, Length, NumberRange, Email, input_required
 from wtforms import ValidationError
 from models import SalesContract, CustomerOrder
+
+
+class IdempotentFlaskForm(FlaskForm):
+    form_token = HiddenField(default=lambda: uuid4().hex)
 
 # -------- Аутентификация --------
 
@@ -24,7 +29,7 @@ class LoginForm(FlaskForm):
 
 # -------- Пользователи --------
 
-class UserForm(FlaskForm):
+class UserForm(IdempotentFlaskForm):
     username = StringField(
         'Логин',
         validators=[DataRequired(), Length(max=64)]
@@ -61,7 +66,7 @@ class UserForm(FlaskForm):
 
 # -------- Склады --------
 
-class WarehouseForm(FlaskForm):
+class WarehouseForm(IdempotentFlaskForm):
     name = StringField(
         'Название склада',
         validators=[DataRequired(), Length(max=128)]
@@ -73,7 +78,7 @@ class WarehouseForm(FlaskForm):
 
 # -------- Номенклатура (прицепы + комплектующие) --------
 
-class ItemForm(FlaskForm):
+class ItemForm(IdempotentFlaskForm):
     item_type = SelectField(
         'Тип позиции',
         choices=[
@@ -154,7 +159,7 @@ class ItemForm(FlaskForm):
 # -------- Прицепы (конкретные единицы с VIN) --------
 
 
-class TrailerCreateForm(FlaskForm):
+class TrailerCreateForm(IdempotentFlaskForm):
     vin = StringField('VIN', validators=[DataRequired()])
     warehouse_id = SelectField('Склад', coerce=int, validators=[DataRequired()])
     manufacture_date = DateField('Дата выпуска', format='%Y-%m-%d', validators=[Optional()])
@@ -196,7 +201,7 @@ class TrailerCreateForm(FlaskForm):
 
 # -------- Клиенты --------
 
-class CustomerForm(FlaskForm):
+class CustomerForm(IdempotentFlaskForm):
     customer_type = SelectField(
         'Тип клиента',
         choices=[
@@ -319,7 +324,7 @@ class CustomerForm(FlaskForm):
 
         return True
 
-class SalesContractForm(FlaskForm):
+class SalesContractForm(IdempotentFlaskForm):
     def __init__(self, *args, **kwargs):
         # передай сюда contract_id при редактировании
         self.contract_id = kwargs.pop('contract_id', None)
@@ -379,7 +384,7 @@ class SalesContractForm(FlaskForm):
             raise ValidationError('Такой номер договора уже существует.')
         
 
-class OTTSForm(FlaskForm):
+class OTTSForm(IdempotentFlaskForm):
     number = StringField('Номер ОТТС', validators=[DataRequired()])
     date = DateField('Дата ОТТС', format='%Y-%m-%d', validators=[Optional()])
     modification = StringField('Модификация (например, 002)', validators=[DataRequired()])
@@ -392,7 +397,7 @@ class OTTSForm(FlaskForm):
 
 
 
-class LeadForm(FlaskForm):
+class LeadForm(IdempotentFlaskForm):
     created_at = DateField('Дата заявки', format='%Y-%m-%d', validators=[Optional()])
     source_channel = SelectField(
         'Канал',
@@ -412,6 +417,7 @@ class LeadForm(FlaskForm):
     customer_name = StringField('Имя клиента', validators=[DataRequired(), Length(max=255)])
     phone = StringField('Телефон', validators=[Optional(), Length(max=50)])
     messenger_username = StringField('Ник / username', validators=[Optional(), Length(max=100)])
+    desired_item_search = StringField('Поиск модели', validators=[Optional(), Length(max=255)])
     desired_item_id = SelectField('Модель из номенклатуры', coerce=int, validators=[Optional()])
     desired_model = StringField('Модель текстом', validators=[Optional(), Length(max=255)])
     desired_specs = TextAreaField('Пожелания / комплектация', validators=[Optional()])
@@ -434,14 +440,16 @@ class LeadForm(FlaskForm):
     submit = SubmitField('Сохранить')
 
 
-class CustomerOrderForm(FlaskForm):
+class CustomerOrderForm(IdempotentFlaskForm):
     def __init__(self, *args, **kwargs):
         self.order_id = kwargs.pop('order_id', None)
         super().__init__(*args, **kwargs)
 
     order_number = StringField('Номер заказа', validators=[Optional(), Length(max=50)])
     lead_id = SelectField('Заявка', coerce=int, validators=[Optional()])
+    customer_search = StringField('Поиск клиента', validators=[Optional(), Length(max=255)])
     customer_id = SelectField('Клиент', coerce=int, validators=[DataRequired()])
+    item_search = StringField('Поиск модели', validators=[Optional(), Length(max=255)])
     item_id = SelectField('Модель', coerce=int, validators=[DataRequired()])
     trailer_id = SelectField('Конкретный прицеп', coerce=int, validators=[Optional()])
     warehouse_id = SelectField('Склад продажи', coerce=int, validators=[Optional()])
@@ -464,6 +472,7 @@ class CustomerOrderForm(FlaskForm):
             ('arrived', 'Прибыл'),
             ('waiting_arrival', 'Ожидает прибытия'),
             ('ready_to_ship', 'Готов к отгрузке'),
+            ('sold_not_shipped', 'Продан, не отгружен'),
             ('shipped', 'Отгружен'),
             ('done', 'Завершен'),
             ('cancelled', 'Отменен'),
@@ -482,6 +491,8 @@ class CustomerOrderForm(FlaskForm):
         validators=[Optional()]
     )
     expected_date = DateField('Плановая дата готовности', format='%Y-%m-%d', validators=[Optional()])
+    planned_ship_date = DateField('Плановая дата выдачи клиенту', format='%Y-%m-%d', validators=[Optional()])
+    planned_ship_comment = TextAreaField('Комментарий к выдаче', validators=[Optional()])
     documents_issued = BooleanField('Документы выданы')
     is_shipped = BooleanField('Отгружен')
     note = TextAreaField('Комментарий', validators=[Optional()])
@@ -499,7 +510,7 @@ class CustomerOrderForm(FlaskForm):
             raise ValidationError('Такой номер заказа уже существует.')
 
 
-class OrderPaymentForm(FlaskForm):
+class OrderPaymentForm(IdempotentFlaskForm):
     paid_at = DateField('Дата оплаты', format='%Y-%m-%d', validators=[Optional()])
     stage = SelectField(
         'Этап оплаты',
@@ -540,12 +551,12 @@ class OrderPaymentForm(FlaskForm):
     submit = SubmitField('Сохранить')
 
 
-class SupplyNeedForm(FlaskForm):
+class SupplyNeedForm(IdempotentFlaskForm):
     need_type = SelectField(
         'Тип потребности',
         choices=[
             ('CUSTOMER_ORDER', 'Под клиента'),
-            ('WAREHOUSE_STOCK', 'Пополнение склада'),
+            ('STOCK_REPLENISHMENT', 'Пополнение склада'),
         ],
         validators=[DataRequired()]
     )
@@ -557,7 +568,7 @@ class SupplyNeedForm(FlaskForm):
             ('IN_TRANSIT', 'В пути'),
             ('ARRIVED', 'Прибыла'),
             ('CLOSED', 'Закрыта'),
-            ('CANCELED', 'Отменена'),
+            ('CANCELLED', 'Отменена'),
         ],
         validators=[DataRequired()]
     )
@@ -571,7 +582,16 @@ class SupplyNeedForm(FlaskForm):
     submit = SubmitField('Сохранить')
 
 
-class ProductionRequestForm(FlaskForm):
+class StockReplenishmentForm(IdempotentFlaskForm):
+    warehouse_id = SelectField('Склад назначения', coerce=int, validators=[DataRequired()])
+    item_id = SelectField('Номенклатура', coerce=int, validators=[DataRequired()])
+    quantity = IntegerField('Количество', validators=[DataRequired(), NumberRange(min=1)], default=1)
+    required_by = DateField('Желаемый срок', format='%Y-%m-%d', validators=[Optional()])
+    comment = TextAreaField('Комментарий', validators=[Optional()])
+    submit = SubmitField('Создать заявку')
+
+
+class ProductionRequestForm(IdempotentFlaskForm):
     request_number = StringField('Номер заявки', validators=[Optional(), Length(max=50)])
     status = SelectField(
         'Статус',
@@ -591,7 +611,7 @@ class ProductionRequestForm(FlaskForm):
     submit = SubmitField('Сохранить')
 
 
-class ProductionRequestLineForm(FlaskForm):
+class ProductionRequestLineForm(IdempotentFlaskForm):
     supply_need_id = SelectField('Потребность', coerce=int, validators=[Optional()])
     item_id = SelectField('Модель', coerce=int, validators=[DataRequired()])
     quantity = IntegerField('Количество', validators=[DataRequired(), NumberRange(min=1)], default=1)
@@ -612,13 +632,13 @@ class ProductionRequestLineForm(FlaskForm):
     submit = SubmitField('Добавить позицию')
 
 
-class AssignVinForm(FlaskForm):
+class AssignVinForm(IdempotentFlaskForm):
     vin = StringField('VIN', validators=[DataRequired(), Length(max=50)])
     manufacture_date = DateField('Дата выпуска', format='%Y-%m-%d', validators=[Optional()])
     submit = SubmitField('Присвоить VIN')
 
 
-class SendTrailerForm(FlaskForm):
+class SendTrailerForm(IdempotentFlaskForm):
     trailer_id = SelectField('Прицеп', coerce=int, validators=[DataRequired()])
     to_warehouse_id = SelectField('Склад назначения', coerce=int, validators=[DataRequired()])
     order_id = SelectField('Заказ', coerce=int, validators=[Optional()])
@@ -628,9 +648,10 @@ class SendTrailerForm(FlaskForm):
     submit = SubmitField('Отправить')
 
 
-class StockMovementForm(FlaskForm):
+class StockMovementForm(IdempotentFlaskForm):
     from_warehouse_id = SelectField('Со склада', coerce=int, validators=[Optional()])
     to_warehouse_id = SelectField('На склад', coerce=int, validators=[Optional()])
+    trailer_search = StringField('Поиск прицепа', validators=[Optional(), Length(max=255)])
     trailer_id = SelectField('Прицеп', coerce=int, validators=[Optional()])
     order_id = SelectField('Заказ', coerce=int, validators=[Optional()])
     movement_type = SelectField(
@@ -657,3 +678,29 @@ class StockMovementForm(FlaskForm):
     arrival_date = DateField('Дата прибытия', format='%Y-%m-%d', validators=[Optional()])
     note = TextAreaField('Комментарий', validators=[Optional()])
     submit = SubmitField('Сохранить')
+
+
+class StockMovementBatchForm(IdempotentFlaskForm):
+    from_warehouse_id = SelectField('Со склада', coerce=int, validators=[DataRequired()])
+    to_warehouse_id = SelectField('На склад', coerce=int, validators=[DataRequired()])
+    movement_type = SelectField(
+        'Тип перемещения',
+        choices=[
+            ('warehouse_transfer', 'Между складами'),
+            ('production_arrival', 'Поступление с производства'),
+        ],
+        validators=[DataRequired()]
+    )
+    status = SelectField(
+        'Статус',
+        choices=[
+            ('sent', 'Отправлено'),
+            ('in_transit', 'В пути'),
+            ('draft', 'Черновик'),
+        ],
+        validators=[DataRequired()]
+    )
+    departure_date = DateField('Дата отправки', format='%Y-%m-%d', validators=[Optional()])
+    arrival_date = DateField('Ожидаемое прибытие', format='%Y-%m-%d', validators=[Optional()])
+    note = TextAreaField('Комментарий', validators=[Optional()])
+    submit = SubmitField('Создать партию')

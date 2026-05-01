@@ -25,6 +25,7 @@
         </div>
         <dl class="row small mb-0">
           <dt class="col-5">Модель</dt><dd class="col-7">{{ unit.item.article if unit.item else '' }} {{ unit.item.name if unit.item else '' }}</dd>
+          <dt class="col-5">Тип</dt><dd class="col-7"><span class="badge text-bg-{{ unit.production_request_line.supply_need.need_type|status_badge_class if unit.production_request_line and unit.production_request_line.supply_need else 'secondary' }}">{{ unit.production_request_line.supply_need.need_type|status_label if unit.production_request_line and unit.production_request_line.supply_need else 'Без потребности' }}</span></dd>
           <dt class="col-5">Склад</dt><dd class="col-7">{{ unit.target_warehouse.name if unit.target_warehouse else '' }}</dd>
           <dt class="col-5">Дата выпуска</dt><dd class="col-7">{{ unit.produced_at|date_format }}</dd>
           <dt class="col-5">VIN</dt><dd class="col-7">{{ unit.trailer.vin if unit.trailer else 'ждёт логиста' }}</dd>
@@ -49,18 +50,28 @@
         <div class="small text-muted mb-2">{{ line.production_request.request_number }}</div>
         <dl class="row small mb-2">
           <dt class="col-5">Модель</dt><dd class="col-7">{{ line.item.name }}</dd>
+          <dt class="col-5">Тип</dt><dd class="col-7"><span class="badge text-bg-{{ line.supply_need.need_type|status_badge_class if line.supply_need else 'secondary' }}">{{ line.supply_need.need_type|status_label if line.supply_need else 'Без потребности' }}</span></dd>
           <dt class="col-5">Кузов</dt><dd class="col-7">{{ line.item.size_body or '' }}</dd>
           <dt class="col-5">Склад</dt><dd class="col-7">{{ line.production_request.target_warehouse.name if line.production_request.target_warehouse else '' }}</dd>
           <dt class="col-5">Срок</dt><dd class="col-7">{{ line.supply_need.required_by|date_format if line.supply_need else '' }}</dd>
           <dt class="col-5">Выпущено</dt><dd class="col-7">{{ line.produced_qty or 0 }} из {{ line.quantity }}</dd>
         </dl>
-        {% if line.production_comment %}<div class="alert alert-warning py-2 small">{{ line.production_comment }}</div>{% endif %}
+        <div class="production-notes small mb-2">
+          {% if line.production_request.note %}<div><strong>Заявка:</strong> {{ line.production_request.note }}</div>{% endif %}
+          {% if line.note %}<div><strong>Позиция:</strong> {{ line.note }}</div>{% endif %}
+          {% if line.supply_need and line.supply_need.note %}<div><strong>Потребность:</strong> {{ line.supply_need.note }}</div>{% endif %}
+          {% if line.supply_need and line.supply_need.order and line.supply_need.order.manager_comment %}<div><strong>Менеджер:</strong> {{ line.supply_need.order.manager_comment }}</div>{% endif %}
+          {% if line.supply_need and line.supply_need.order and line.supply_need.order.note %}<div><strong>Заказ:</strong> {{ line.supply_need.order.note }}</div>{% endif %}
+        </div>
+        {% if line.production_comment %}<div class="alert alert-warning py-2 small"><strong>Производство:</strong> {{ line.production_comment }}</div>{% endif %}
         <div class="d-flex gap-2 flex-wrap">
           {% if line.status not in ['ready', 'closed', 'cancelled'] %}
+          {% if line.status in ['planned', 'PLANNED', 'draft', 'DRAFT', 'waiting_production'] %}
           <form method="post" action="{{ url_for('main.production_line_start', line_id=line.id) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button class="btn btn-sm btn-primary-app">Взять в работу</button>
           </form>
+          {% endif %}
           <form method="post" action="{{ url_for('main.production_line_produce_one', line_id=line.id) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button class="btn btn-sm btn-success">Выпущено 1 шт.</button>

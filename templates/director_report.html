@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+{% block title %}Отчет: {{ title }}{% endblock %}
+{% block content %}
+<section class="hero-dashboard">
+  <div>
+    <h1>{{ title }}</h1>
+    <p>Подробная директорская таблица с фильтрами. Главная панель остаётся краткой, детали вынесены сюда.</p>
+  </div>
+  <a href="{{ url_for('main.director_dashboard') }}" class="btn btn-soft"><i class="bi bi-arrow-left me-1"></i>Панель</a>
+</section>
+
+<div class="app-card p-3 mb-4">
+  <div class="d-flex flex-wrap gap-2 mb-3">
+    {% for key, label in sections.items() %}
+      <a class="btn btn-sm {{ 'btn-orange' if section == key else 'btn-soft' }}" href="{{ url_for('main.director_report', section=key) }}">{{ label }}</a>
+    {% endfor %}
+  </div>
+  <form method="get" class="row g-3 align-items-end">
+    <div class="col-md-2">
+      <label class="form-label">Период</label>
+      <select name="period" class="form-select">
+        <option value="day" {% if period == 'day' %}selected{% endif %}>День</option>
+        <option value="week" {% if period == 'week' %}selected{% endif %}>Неделя</option>
+        <option value="month" {% if period == 'month' %}selected{% endif %}>Месяц</option>
+        <option value="custom" {% if period == 'custom' %}selected{% endif %}>Период</option>
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">С даты</label>
+      <input type="date" name="date_from" value="{{ date_from.isoformat() }}" class="form-control">
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">По дату</label>
+      <input type="date" name="date_to" value="{{ date_to.isoformat() }}" class="form-control">
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Склад</label>
+      <select name="warehouse_id" class="form-select">
+        <option value="">Все</option>
+        {% for warehouse in warehouses %}
+          <option value="{{ warehouse.id }}" {% if warehouse_id == warehouse.id %}selected{% endif %}>{{ warehouse.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Менеджер</label>
+      <select name="manager_id" class="form-select">
+        <option value="">Все</option>
+        {% for manager in managers %}
+          <option value="{{ manager.id }}" {% if manager_id == manager.id %}selected{% endif %}>{{ manager.full_name or manager.username }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Статус</label>
+      <select name="status" class="form-select">
+        <option value="all" {% if status_filter == 'all' %}selected{% endif %}>Все</option>
+        <option value="free" {% if status_filter == 'free' %}selected{% endif %}>Свободные</option>
+        <option value="reserved" {% if status_filter == 'reserved' %}selected{% endif %}>Резерв</option>
+        <option value="sold_not_shipped" {% if status_filter == 'sold_not_shipped' %}selected{% endif %}>Продано, не отгружено</option>
+        <option value="in_transit" {% if status_filter == 'in_transit' %}selected{% endif %}>В пути</option>
+        <option value="planned" {% if status_filter == 'planned' %}selected{% endif %}>Запланировано</option>
+        <option value="in_production" {% if status_filter == 'in_production' %}selected{% endif %}>В производстве</option>
+        <option value="partial_ready" {% if status_filter == 'partial_ready' %}selected{% endif %}>Частично выпущено</option>
+        <option value="ready" {% if status_filter == 'ready' %}selected{% endif %}>Готово</option>
+        <option value="CONFIRMED" {% if status_filter == 'CONFIRMED' %}selected{% endif %}>Оплата подтверждена</option>
+        <option value="PENDING" {% if status_filter == 'PENDING' %}selected{% endif %}>Оплата на проверке</option>
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Поиск</label>
+      <div class="input-group">
+        <input name="q" value="{{ search }}" class="form-control" placeholder="VIN, модель, партия">
+        <button class="btn btn-orange" type="submit">ОК</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<section class="kpi-grid mb-4">
+  {% for card in cards %}
+    <div class="app-card kpi-card">
+      <div>
+        <div class="kpi-title">{{ card.title }}</div>
+        <div class="kpi-value">{{ card.value }}</div>
+        <div class="kpi-caption">{{ card.caption }}</div>
+      </div>
+      <div class="kpi-icon"><i class="bi bi-bar-chart"></i></div>
+    </div>
+  {% endfor %}
+</section>
+
+<div class="app-card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>{{ title }}</span>
+    <span class="text-muted small">{{ date_from|date_format }} — {{ date_to|date_format }}</span>
+  </div>
+
+  {% if section == 'sales' %}
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead><tr><th>Дата</th><th>Заказ</th><th>Клиент</th><th>Менеджер</th><th>Прицеп</th><th>Сумма</th><th>Документы</th><th>Отгрузка</th></tr></thead>
+      <tbody>
+      {% for order in rows %}
+        <tr>
+          <td>{{ order.documents_issued_at|date_format }}</td>
+          <td><a href="{{ url_for('main.order_detail', order_id=order.id) }}">{{ order.order_number }}</a></td>
+          <td>{{ order.customer.name if order.customer else '—' }}</td>
+          <td>{{ order.assigned_user.full_name or order.assigned_user.username if order.assigned_user else '—' }}</td>
+          <td>{{ order.trailer.vin if order.trailer else '—' }}</td>
+          <td>{{ order.price|money }}</td>
+          <td><span class="badge {{ order.document_status|status_badge_class }}">{{ order.document_status|status_label }}</span></td>
+          <td><span class="badge {{ order.status|status_badge_class }}">{{ order.status|status_label }}</span></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="8" class="text-muted p-4">Нет продаж за выбранный период</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif section == 'finance' %}
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead><tr><th>Дата</th><th>Заказ</th><th>Клиент</th><th>Сумма</th><th>Этап</th><th>Метод</th><th>Статус</th><th>Примечание</th></tr></thead>
+      <tbody>
+      {% for payment in rows %}
+        <tr>
+          <td>{{ (payment.paid_at or payment.created_at)|date_format }}</td>
+          <td><a href="{{ url_for('main.order_detail', order_id=payment.order.id) }}">{{ payment.order.order_number }}</a></td>
+          <td>{{ payment.order.customer.name if payment.order and payment.order.customer else '—' }}</td>
+          <td>{{ payment.amount|money }}</td>
+          <td>{{ payment.stage }}</td>
+          <td>{{ payment.method }}</td>
+          <td><span class="badge {{ payment.status|status_badge_class }}">{{ payment.status|status_label }}</span></td>
+          <td>{{ payment.note or '—' }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="8" class="text-muted p-4">Нет оплат за выбранный период</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif section == 'stock' %}
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead><tr><th>VIN</th><th>Модель</th><th>Склад</th><th>Статус</th><th>Жизненный цикл</th><th>Заказ</th></tr></thead>
+      <tbody>
+      {% for trailer in rows %}
+        <tr>
+          <td>{{ trailer.vin or '—' }}</td>
+          <td>{{ trailer.item.article or trailer.item.name if trailer.item else '—' }}</td>
+          <td>{{ trailer.warehouse.name if trailer.warehouse else '—' }}</td>
+          <td><span class="badge {{ trailer.status|status_badge_class }}">{{ trailer.status|status_label }}</span></td>
+          <td>{{ trailer.lifecycle_status|status_label }}</td>
+          <td>
+            {% set active_order = trailer.orders|selectattr('status', 'ne', 'cancelled')|list|first %}
+            {% if active_order %}<a href="{{ url_for('main.order_detail', order_id=active_order.id) }}">{{ active_order.order_number }}</a>{% else %}—{% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="text-muted p-4">Нет прицепов по фильтрам</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif section == 'production' %}
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead><tr><th>Заявка</th><th>Тип</th><th>Модель</th><th>Количество</th><th>Выпущено</th><th>Осталось</th><th>Склад</th><th>Срок</th><th>Статус</th><th>Комментарий</th></tr></thead>
+      <tbody>
+      {% for line in rows %}
+        <tr>
+          <td>{{ line.production_request.request_number if line.production_request else '—' }}</td>
+          <td>{{ line.supply_need.need_type|status_label if line.supply_need else '—' }}</td>
+          <td>{{ line.item.article or line.item.name if line.item else '—' }}</td>
+          <td>{{ line.quantity }}</td>
+          <td>{{ line.produced_qty or 0 }}</td>
+          <td>{{ [line.quantity - (line.produced_qty or 0), 0]|max }}</td>
+          <td>{{ line.production_request.target_warehouse.name if line.production_request and line.production_request.target_warehouse else '—' }}</td>
+          <td>{{ line.supply_need.required_by|date_format if line.supply_need else '' }}</td>
+          <td><span class="badge {{ line.status|status_badge_class }}">{{ line.status|status_label }}</span></td>
+          <td>{{ line.production_comment or line.note or (line.supply_need.note if line.supply_need else '') or '—' }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="10" class="text-muted p-4">Нет производственных строк</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif section == 'movements' %}
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead><tr><th>Дата</th><th>Партия</th><th>VIN</th><th>Модель</th><th>Откуда</th><th>Куда</th><th>Статус</th><th>Отправка</th><th>Приёмка</th><th>Комментарий</th></tr></thead>
+      <tbody>
+      {% for movement in rows %}
+        <tr>
+          <td>{{ movement.created_at|date_format }}</td>
+          <td>{{ movement.batch_key or '—' }}</td>
+          <td>{{ movement.trailer.vin if movement.trailer else '—' }}</td>
+          <td>{{ movement.trailer.item.article or movement.trailer.item.name if movement.trailer and movement.trailer.item else '—' }}</td>
+          <td>{{ movement.from_warehouse.name if movement.from_warehouse else '—' }}</td>
+          <td>{{ movement.to_warehouse.name if movement.to_warehouse else '—' }}</td>
+          <td><span class="badge {{ movement.status|status_badge_class }}">{{ movement.status|status_label }}</span></td>
+          <td>{{ movement.departure_date|date_format }}</td>
+          <td>{{ movement.received_at|date_format }}</td>
+          <td>{{ movement.note or '—' }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="10" class="text-muted p-4">Нет перемещений за период</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="p-3">
+    {% for group in problem_rows %}
+      <h2 class="h6 mt-3">{{ group['type'] }} <span class="badge text-bg-danger">{{ group['items']|length }}</span></h2>
+      <div class="table-responsive mb-3">
+        <table class="table table-hover align-middle">
+          <thead><tr><th>Объект</th><th>Клиент / VIN</th><th>Склад / маршрут</th><th>Дата / срок</th><th>Статус</th></tr></thead>
+          <tbody>
+          {% for item in group['items'][:20] %}
+            <tr>
+              {% if item.order_number is defined %}
+                <td><a href="{{ url_for('main.order_detail', order_id=item.id) }}">{{ item.order_number }}</a></td>
+                <td>{{ item.customer.name if item.customer else '—' }}</td>
+                <td>{{ item.warehouse.name if item.warehouse else '—' }}</td>
+                <td>{{ (item.documents_issued_at or item.created_at)|date_format }}</td>
+                <td><span class="badge {{ item.status|status_badge_class }}">{{ item.status|status_label }}</span></td>
+              {% elif item.trailer_id is defined %}
+                <td>Перемещение #{{ item.id }}</td>
+                <td>{{ item.trailer.vin if item.trailer else '—' }}</td>
+                <td>{{ item.from_warehouse.name if item.from_warehouse else '—' }} → {{ item.to_warehouse.name if item.to_warehouse else '—' }}</td>
+                <td>{{ item.arrival_date|date_format }}</td>
+                <td><span class="badge {{ item.status|status_badge_class }}">{{ item.status|status_label }}</span></td>
+              {% else %}
+                <td>{{ item.production_request.request_number if item.production_request else 'Производство' }}</td>
+                <td>{{ item.item.article or item.item.name if item.item else '—' }}</td>
+                <td>{{ item.production_request.target_warehouse.name if item.production_request and item.production_request.target_warehouse else '—' }}</td>
+                <td>{{ item.supply_need.required_by|date_format if item.supply_need else '' }}</td>
+                <td><span class="badge {{ item.status|status_badge_class }}">{{ item.status|status_label }}</span></td>
+              {% endif %}
+            </tr>
+          {% else %}
+            <tr><td colspan="5" class="text-muted p-3">Нет объектов</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

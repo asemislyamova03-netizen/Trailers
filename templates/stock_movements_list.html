@@ -1,8 +1,66 @@
 {% extends "base.html" %}
 {% block title %}Перемещения{% endblock %}
+
 {% block content %}
-<div class="d-flex justify-content-between mb-3"><h1 class="h3">Перемещения</h1><a class="btn btn-primary" href="{{ url_for('main.stock_movement_create') }}">Новое перемещение</a></div>
-<table class="table table-sm table-striped"><thead><tr><th>ID</th><th>Тип</th><th>Прицеп</th><th>Заказ</th><th>Со склада</th><th>На склад</th><th>Статус</th><th>Дата прибытия</th><th></th></tr></thead><tbody>
-{% for m in movements %}<tr><td>#{{ m.id }}</td><td>{{ m.movement_type }}</td><td>{{ m.trailer.vin if m.trailer else '' }}</td><td>{{ m.order.order_number if m.order else '' }}</td><td>{{ m.from_warehouse.name if m.from_warehouse else '' }}</td><td>{{ m.to_warehouse.name if m.to_warehouse else '' }}</td><td>{{ m.status }}</td><td>{{ m.arrival_date or '' }}</td><td><a class="btn btn-sm btn-outline-primary" href="{{ url_for('main.stock_movement_edit', movement_id=m.id) }}">Изменить</a></td></tr>{% else %}<tr><td colspan="9" class="text-muted">Перемещений нет</td></tr>{% endfor %}
-</tbody></table>
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+  <h1 class="h3 mb-0">Перемещения</h1>
+  {% if current_user.is_admin or current_user.is_director or current_user.is_logistics %}
+    <div class="d-flex gap-2">
+      <a class="btn btn-soft" href="{{ url_for('main.stock_movement_create') }}">Одно перемещение</a>
+      <a class="btn btn-orange" href="{{ url_for('main.stock_movement_batch_create') }}">Партия перемещения</a>
+    </div>
+  {% endif %}
+</div>
+
+{% if batch_key %}
+  <div class="alert alert-info d-flex justify-content-between align-items-center">
+    <span>Показана партия {{ batch_key }}</span>
+    <a class="btn btn-sm btn-soft" href="{{ url_for('main.stock_movements_list') }}">Показать все</a>
+  </div>
+{% endif %}
+
+<div class="app-card">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Партия</th>
+          <th>Тип</th>
+          <th>Прицеп</th>
+          <th>Заказ</th>
+          <th>Со склада</th>
+          <th>На склад</th>
+          <th>Статус</th>
+          <th>Дата отправки</th>
+          <th>Дата прибытия</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for m in movements %}
+        <tr>
+          <td>#{{ m.id }}</td>
+          <td>{% if m.batch_key %}<a href="{{ url_for('main.stock_movements_list', batch_key=m.batch_key) }}">{{ m.batch_key }}</a>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+          <td>{{ m.movement_type|status_label }}</td>
+          <td class="fw-semibold">{{ m.trailer.vin if m.trailer else '' }}</td>
+          <td>{% if m.order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=m.order.id) }}">{{ m.order.order_number }}</a>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+          <td>{{ m.from_warehouse.name if m.from_warehouse else '' }}</td>
+          <td>{{ m.to_warehouse.name if m.to_warehouse else '' }}</td>
+          <td><span class="badge text-bg-{{ m.status|status_badge_class }}">{{ m.status|status_label }}</span></td>
+          <td>{{ m.departure_date|date_format }}</td>
+          <td>{{ m.arrival_date|date_format }}</td>
+          <td class="text-end">
+            {% if current_user.is_admin or current_user.is_director or current_user.is_logistics %}
+              <a class="btn btn-sm btn-soft" href="{{ url_for('main.stock_movement_edit', movement_id=m.id) }}">Изменить</a>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="11" class="text-muted p-3">Перемещений нет</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
 {% endblock %}

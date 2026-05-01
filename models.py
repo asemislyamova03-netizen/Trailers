@@ -126,6 +126,24 @@ class User(UserMixin, db.Model):
         return f'<User id={self.id} username={self.username!r} role={self.role}>'
 
 
+class IdempotencyKey(db.Model):
+    __tablename__ = 'idempotency_key'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    endpoint = db.Column(db.String(255), nullable=False)
+    form_token = db.Column(db.String(64), nullable=False)
+    object_type = db.Column(db.String(80), nullable=True)
+    object_id = db.Column(db.Integer, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    user = db.relationship('User', backref='idempotency_keys')
+
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'endpoint', 'form_token', name='uq_idempotency_user_endpoint_token'),
+    )
+
+
 
 # ---------- НОМЕНКЛАТУРА (ПРИЦЕПЫ ПО АРТИКУЛАМ + КОМПЛЕКТУЮЩИЕ) ----------
 
@@ -342,6 +360,7 @@ class SalesContract(db.Model):
 
     __table_args__ = (
         db.UniqueConstraint('trailer_id', name='uq_sales_contract_trailer'),
+        db.UniqueConstraint('order_id', name='uq_sales_contract_order'),
     )
     
 class OTTS(db.Model):
@@ -476,6 +495,8 @@ class CustomerOrder(db.Model):
     documents_issued_at = db.Column(db.DateTime, nullable=True)
     is_shipped = db.Column(db.Boolean, nullable=False, default=False)
     shipped_at = db.Column(db.DateTime, nullable=True)
+    planned_ship_date = db.Column(db.Date, nullable=True)
+    planned_ship_comment = db.Column(db.Text, nullable=True)
     cancelled_at = db.Column(db.DateTime, nullable=True)
     cancel_reason = db.Column(db.Text, nullable=True)
 
@@ -649,6 +670,7 @@ class ProducedUnit(db.Model):
     production_request_line_id = db.Column(db.Integer, db.ForeignKey('production_request_line.id'), nullable=False, index=True)
     item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=False, index=True)
     target_warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=True, index=True)
+    order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=True, index=True)
     trailer_id = db.Column(db.Integer, db.ForeignKey('trailer.id'), nullable=True, index=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
     produced_at = db.Column(db.DateTime, nullable=True)
@@ -658,6 +680,7 @@ class ProducedUnit(db.Model):
     production_request_line = db.relationship('ProductionRequestLine', backref=db.backref('produced_units', lazy='dynamic', cascade='all, delete-orphan'))
     item = db.relationship('Item', backref='produced_units')
     target_warehouse = db.relationship('Warehouse', backref='produced_units')
+    order = db.relationship('CustomerOrder', backref='produced_units')
     trailer = db.relationship('Trailer', backref='produced_unit', uselist=False)
 
 
@@ -673,6 +696,7 @@ class StockMovement(db.Model):
 
     movement_type = db.Column(db.String(30), nullable=False, default='WAREHOUSE_TRANSFER')
     status = db.Column(db.String(30), nullable=False, default='DRAFT', index=True)
+    batch_key = db.Column(db.String(50), nullable=True, index=True)
 
     order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=True, index=True)
     trailer_id = db.Column(db.Integer, db.ForeignKey('trailer.id'), nullable=True, index=True)

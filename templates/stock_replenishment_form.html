@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="app-card p-4">
+  <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+    <div>
+      <h1 class="h4 mb-1">{{ title }}</h1>
+      <p class="text-muted mb-0">Создаёт потребность на производство без клиента, для пополнения складского остатка.</p>
+    </div>
+    <a class="btn btn-soft" href="{{ url_for('main.stock_replenishment_list') }}">Список пополнений</a>
+  </div>
+  <form method="post" class="row g-3">
+    {{ form.hidden_tag() }}
+    <div class="col-md-6">
+      {{ form.warehouse_id.label(class="form-label") }}
+      {{ form.warehouse_id(class="form-select") }}
+      {% for error in form.warehouse_id.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+    </div>
+    <div class="col-md-6">
+      {{ form.item_id.label(class="form-label") }}
+      {{ form.item_id(class="form-select") }}
+      {% for error in form.item_id.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+    </div>
+    <div class="col-md-3">
+      {{ form.quantity.label(class="form-label") }}
+      {{ form.quantity(class="form-control") }}
+      {% for error in form.quantity.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+    </div>
+    <div class="col-md-3">
+      {{ form.required_by.label(class="form-label") }}
+      {{ form.required_by(class="form-control") }}
+      {% for error in form.required_by.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+    </div>
+    <div class="col-12">
+      {{ form.comment.label(class="form-label") }}
+      {{ form.comment(class="form-control", rows="4") }}
+    </div>
+    <div class="col-12 d-flex gap-2">
+      {{ form.submit(class="btn btn-orange") }}
+      <a class="btn btn-soft" href="{{ url_for('main.manager_workspace') if current_user.is_manager else url_for('main.stock_replenishment_list') }}">Назад</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

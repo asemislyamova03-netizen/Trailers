@@ -5,7 +5,9 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h1 class="h4 mb-0">Прицепы</h1>
+    {% if current_user.is_admin or current_user.is_logistics %}
     <a href="{{ url_for('main.trailer_create') }}" class="btn btn-primary">Новый прицеп</a>
+    {% endif %}
 </div>
 
 <form method="get" class="row g-2 mb-3">
@@ -69,13 +71,17 @@
                 {% endif %}
             </td>
             <td>
-                <a href="{{ url_for('main.trailer_edit', trailer_id=t.id) }}"
-                   class="btn btn-sm btn-outline-primary">Изменить</a>
-                <a href="{{ url_for('main.trailer_delete', trailer_id=t.id) }}"
-                   class="btn btn-sm btn-outline-danger"
-                   onclick="return confirm('Удалить прицеп?');">
-                    Удалить
-                </a>
+                {% if current_user.is_admin or current_user.is_logistics %}
+                    <a href="{{ url_for('main.trailer_edit', trailer_id=t.id) }}"
+                       class="btn btn-sm btn-outline-primary">Изменить</a>
+                    <a href="{{ url_for('main.trailer_delete', trailer_id=t.id) }}"
+                       class="btn btn-sm btn-outline-danger"
+                       onclick="return confirm('Удалить прицеп?');">
+                        Удалить
+                    </a>
+                {% else %}
+                    <span class="text-muted small">Просмотр</span>
+                {% endif %}
             </td>
         </tr>
         {% endfor %}

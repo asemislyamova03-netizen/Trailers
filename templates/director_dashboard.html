@@ -1,92 +1,313 @@
 {% extends "base.html" %}
-{% block title %}Панель управления{% endblock %}
+{% block title %}Панель директора{% endblock %}
 {% block content %}
-{% set total_stock = namespace(value=0) %}
-{% for row in rows %}{% for w in warehouses %}{% set total_stock.value = total_stock.value + row.warehouses[w.id] %}{% endfor %}{% endfor %}
-{% set sold_count = rows|sum(attribute='sold') %}
-{% set production_count = rows|sum(attribute='in_production') %}
-{% set transit_count = rows|sum(attribute='in_transit') %}
-{% set produced_no_vin = rows|sum(attribute='produced_no_vin') %}
 <section class="hero-dashboard">
   <div>
-    <h1>Панель управления</h1>
-    <p>Контроль продаж, остатков, производства и логистики KEMTON TRAILER по всем складам.</p>
+    <h1>Панель директора</h1>
+    <p>Текущая ситуация по продажам, складам, производству, логистике и зависшим действиям.</p>
   </div>
-  <a href="{{ url_for('main.order_create') }}" class="btn btn-orange"><i class="bi bi-plus-lg me-2"></i>Продажа</a>
+  <div class="d-flex flex-wrap gap-2">
+    <a href="{{ url_for('main.director_report', section='sales') }}" class="btn btn-soft"><i class="bi bi-bar-chart me-1"></i>Отчеты</a>
+    <a href="{{ url_for('main.order_create') }}" class="btn btn-orange"><i class="bi bi-plus-lg me-1"></i>Заказ</a>
+  </div>
 </section>
 
+<div class="app-card p-3 mb-4">
+  <form method="get" class="row g-3 align-items-end">
+    <div class="col-md-2">
+      <label class="form-label">Период</label>
+      <select name="period" class="form-select">
+        <option value="day" {% if period == 'day' %}selected{% endif %}>День</option>
+        <option value="week" {% if period == 'week' %}selected{% endif %}>Неделя</option>
+        <option value="month" {% if period == 'month' %}selected{% endif %}>Месяц</option>
+        <option value="custom" {% if period == 'custom' %}selected{% endif %}>Период</option>
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">С даты</label>
+      <input type="date" name="date_from" value="{{ date_from.isoformat() }}" class="form-control">
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">По дату</label>
+      <input type="date" name="date_to" value="{{ date_to.isoformat() }}" class="form-control">
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Склад / филиал</label>
+      <select name="warehouse_id" class="form-select">
+        <option value="">Все склады</option>
+        {% for warehouse in warehouses %}
+          <option value="{{ warehouse.id }}" {% if warehouse_id == warehouse.id %}selected{% endif %}>{{ warehouse.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Статус склада</label>
+      <select name="status" class="form-select">
+        <option value="all" {% if status_filter == 'all' %}selected{% endif %}>Все</option>
+        <option value="free" {% if status_filter == 'free' %}selected{% endif %}>Свободные</option>
+        <option value="reserved" {% if status_filter == 'reserved' %}selected{% endif %}>Резерв</option>
+        <option value="sold_not_shipped" {% if status_filter == 'sold_not_shipped' %}selected{% endif %}>Продано, не отгружено</option>
+        <option value="in_transit" {% if status_filter == 'in_transit' %}selected{% endif %}>В пути</option>
+        <option value="in_production" {% if status_filter == 'in_production' %}selected{% endif %}>В производстве</option>
+        <option value="produced_no_vin" {% if status_filter == 'produced_no_vin' %}selected{% endif %}>Без VIN</option>
+        <option value="ready_to_send" {% if status_filter == 'ready_to_send' %}selected{% endif %}>Готово к отправке</option>
+      </select>
+    </div>
+    <div class="col-md-1 d-grid">
+      <button class="btn btn-orange" type="submit">Показать</button>
+    </div>
+    <div class="col-12">
+      <label class="form-check">
+        <input class="form-check-input" type="checkbox" name="show_zero" value="1" {% if show_zero %}checked{% endif %}>
+        <span class="form-check-label">Показать нулевые строки номенклатуры</span>
+      </label>
+    </div>
+  </form>
+</div>
+
 <section class="kpi-grid mb-4">
-  <div class="app-card kpi-card"><div><div class="kpi-title">Выручка за месяц</div><div class="kpi-value">{{ month_revenue|money }}</div><div class="kpi-caption">CONFIRMED оплаты</div></div><div class="kpi-icon"><i class="bi bi-cash-coin"></i></div></div>
-  <div class="app-card kpi-card"><div><div class="kpi-title">Количество продаж</div><div class="kpi-value">{{ sold_count }}</div><div class="kpi-caption">прицепов SOLD</div></div><div class="kpi-icon"><i class="bi bi-cart-check"></i></div></div>
-  <div class="app-card kpi-card"><div><div class="kpi-title">Остаток склада</div><div class="kpi-value">{{ total_stock.value }}</div><div class="kpi-caption">IN_STOCK по складам</div></div><div class="kpi-icon"><i class="bi bi-box-seam"></i></div></div>
-  <div class="app-card kpi-card"><div><div class="kpi-title">В производстве</div><div class="kpi-value">{{ production_count }}</div><div class="kpi-caption">активные строки</div></div><div class="kpi-icon"><i class="bi bi-tools"></i></div></div>
-  <div class="app-card kpi-card"><div><div class="kpi-title">В пути</div><div class="kpi-value">{{ transit_count }}</div><div class="kpi-caption">по VIN</div></div><div class="kpi-icon"><i class="bi bi-truck"></i></div></div>
-  <div class="app-card kpi-card"><div><div class="kpi-title">Выпущено без VIN</div><div class="kpi-value">{{ produced_no_vin }}</div><div class="kpi-caption">ждёт логиста</div></div><div class="kpi-icon"><i class="bi bi-upc-scan"></i></div></div>
-  <div class="app-card kpi-card"><div><div class="kpi-title">Оплаты на проверке</div><div class="kpi-value">{{ payment_pending|length }}</div><div class="kpi-caption">PENDING</div></div><div class="kpi-icon"><i class="bi bi-hourglass-split"></i></div></div>
-  <div class="app-card kpi-card"><div><div class="kpi-title">Оплачено, не отгружено</div><div class="kpi-value">{{ paid_not_shipped|length }}</div><div class="kpi-caption">к контролю</div></div><div class="kpi-icon"><i class="bi bi-clipboard-check"></i></div></div>
-  <div class="app-card kpi-card"><div><div class="kpi-title">Заказы без оплаты</div><div class="kpi-value">{{ unpaid_orders|length }}</div><div class="kpi-caption">активные</div></div><div class="kpi-icon"><i class="bi bi-exclamation-circle"></i></div></div>
-  <div class="app-card kpi-card"><div><div class="kpi-title">Просрочено</div><div class="kpi-value">{{ overdue_production|length + overdue_movements|length }}</div><div class="kpi-caption">производство + отправки</div></div><div class="kpi-icon"><i class="bi bi-alarm"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Выручка сегодня</div><div class="kpi-value">{{ revenue_today|money }}</div><div class="kpi-caption">юридическая продажа</div></div><div class="kpi-icon"><i class="bi bi-cash-coin"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Выручка за неделю</div><div class="kpi-value">{{ revenue_week|money }}</div><div class="kpi-caption">{{ sales_week|length }} продаж</div></div><div class="kpi-icon"><i class="bi bi-graph-up"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Выручка за период</div><div class="kpi-value">{{ revenue_period|money }}</div><div class="kpi-caption">{{ sales_period|length }} продаж</div></div><div class="kpi-icon"><i class="bi bi-calendar-check"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Средний чек</div><div class="kpi-value">{{ (revenue_period / (sales_period|length) if sales_period|length else 0)|money }}</div><div class="kpi-caption">по юридическим продажам</div></div><div class="kpi-icon"><i class="bi bi-receipt"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Свободно к продаже</div><div class="kpi-value">{{ free_count }}</div><div class="kpi-caption">IN_STOCK без активного резерва</div></div><div class="kpi-icon"><i class="bi bi-box-seam"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">В резерве</div><div class="kpi-value">{{ reserved_count }}</div><div class="kpi-caption">занято под заказы</div></div><div class="kpi-icon"><i class="bi bi-bookmark-check"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Продано, не отгружено</div><div class="kpi-value">{{ sold_not_shipped_orders|length }}</div><div class="kpi-caption">{{ sold_not_shipped_amount|money }}</div></div><div class="kpi-icon"><i class="bi bi-clipboard-check"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Заказы в работе</div><div class="kpi-value">{{ active_orders|length }}</div><div class="kpi-caption">без завершенных и отгруженных</div></div><div class="kpi-icon"><i class="bi bi-list-task"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Заказано в производство</div><div class="kpi-value">{{ production_ordered }}</div><div class="kpi-caption">активные заявки</div></div><div class="kpi-icon"><i class="bi bi-tools"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Реально в производстве</div><div class="kpi-value">{{ production_left }}</div><div class="kpi-caption">клиенты {{ production_customer_left }} · склад {{ production_stock_left }}</div></div><div class="kpi-icon"><i class="bi bi-hammer"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Выпущено без VIN</div><div class="kpi-value">{{ produced_no_vin_units|length }}</div><div class="kpi-caption">ждёт логиста</div></div><div class="kpi-icon"><i class="bi bi-upc-scan"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Готово с VIN</div><div class="kpi-value">{{ ready_with_vin_units|length }}</div><div class="kpi-caption">на складе выпуска</div></div><div class="kpi-icon"><i class="bi bi-send"></i></div></div>
 </section>
 
 <div class="row g-4 mb-4">
   <div class="col-xl-7">
-    <div class="app-card p-3">
+    <div class="app-card p-3 h-100">
       <div class="d-flex justify-content-between align-items-center mb-3">
-        <h2 class="h5 mb-0">Остатки по складам</h2>
-        <span class="text-muted small">текущий срез</span>
+        <h2 class="h5 mb-0">Складская ситуация</h2>
+        <a class="btn btn-sm btn-soft" href="{{ url_for('main.director_report', section='stock', warehouse_id=warehouse_id or '') }}">Отчет склад</a>
       </div>
       <div class="chart-box"><canvas id="stockChart"></canvas></div>
     </div>
   </div>
   <div class="col-xl-5">
-    <div class="app-card p-3">
+    <div class="app-card p-3 h-100">
       <div class="d-flex justify-content-between align-items-center mb-3">
-        <h2 class="h5 mb-0">Структура статусов</h2>
-        <span class="text-muted small">склад / производство</span>
+        <h2 class="h5 mb-0">Статусы</h2>
+        <span class="text-muted small">текущий срез</span>
       </div>
       <div class="chart-box"><canvas id="statusChart"></canvas></div>
     </div>
   </div>
 </div>
 
-<div class="app-card">
-  <div class="card-header d-flex justify-content-between align-items-center">
-    <span>Остатки и движение</span>
-    <a class="btn btn-sm btn-soft" href="{{ url_for('main.stock_movements_list') }}">Перемещения</a>
+<div class="row g-4 mb-4">
+  <div class="col-xl-5">
+    <div class="app-card h-100">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Требует внимания</span>
+        <a class="btn btn-sm btn-soft" href="{{ url_for('main.director_report', section='problems') }}">Все проблемы</a>
+      </div>
+      <div class="list-group list-group-flush">
+        {% for problem in problem_cards %}
+          {% if problem.count %}
+          <div class="list-group-item d-flex justify-content-between align-items-center">
+            <span>{{ problem.title }}</span>
+            <span class="badge text-bg-danger">{{ problem.count }}</span>
+          </div>
+          {% endif %}
+        {% else %}
+          <div class="list-group-item text-muted">Нет проблемных зон</div>
+        {% endfor %}
+        {% if not problem_cards|selectattr('count')|list %}
+          <div class="list-group-item text-muted">Нет проблемных зон</div>
+        {% endif %}
+      </div>
+    </div>
   </div>
+  <div class="col-xl-7">
+    <div class="app-card h-100">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Продано, но не отгружено</span>
+        <a class="btn btn-sm btn-soft" href="{{ url_for('main.director_report', section='sales') }}">Продажи</a>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover align-middle">
+          <thead><tr><th>Заказ</th><th>Клиент</th><th>Склад</th><th>VIN</th><th>Документы</th><th>Сумма</th></tr></thead>
+          <tbody>
+          {% for order in sold_not_shipped_orders[:8] %}
+            <tr>
+              <td><a href="{{ url_for('main.order_detail', order_id=order.id) }}">{{ order.order_number }}</a></td>
+              <td>{{ order.customer.name if order.customer else '—' }}</td>
+              <td>{{ order.warehouse.name if order.warehouse else '—' }}</td>
+              <td>{{ order.trailer.vin if order.trailer else '—' }}</td>
+              <td>{{ order.documents_issued_at|date_format }}</td>
+              <td>{{ order.price|money }}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="6" class="text-muted p-4">Нет проданных без физической отгрузки</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4 mb-4">
+  <div class="col-xl-6">
+    <div class="app-card h-100">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Активные перемещения</span>
+        <a class="btn btn-sm btn-soft" href="{{ url_for('main.director_report', section='movements') }}">Отчет перемещений</a>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover align-middle">
+          <thead><tr><th>VIN</th><th>Откуда</th><th>Куда</th><th>Ожидается</th><th>Статус</th></tr></thead>
+          <tbody>
+          {% for movement in in_transit_movements[:8] %}
+            <tr>
+              <td>{{ movement.trailer.vin if movement.trailer else '—' }}</td>
+              <td>{{ movement.from_warehouse.name if movement.from_warehouse else '—' }}</td>
+              <td>{{ movement.to_warehouse.name if movement.to_warehouse else '—' }}</td>
+              <td>{{ movement.arrival_date|date_format }}</td>
+              <td><span class="badge {{ movement.status|status_badge_class }}">{{ movement.status|status_label }}</span></td>
+            </tr>
+          {% else %}
+            <tr><td colspan="5" class="text-muted p-4">Нет активных перемещений</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="col-xl-6">
+    <div class="app-card h-100">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Производство и VIN</span>
+        <a class="btn btn-sm btn-soft" href="{{ url_for('main.director_report', section='production') }}">Отчет производства</a>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover align-middle">
+          <thead><tr><th>Состояние</th><th>Модель</th><th>Склад</th><th>Дата</th></tr></thead>
+          <tbody>
+          {% for unit in produced_no_vin_units[:4] %}
+            <tr>
+              <td><span class="badge text-bg-warning">Без VIN</span></td>
+              <td>{{ unit.item.article or unit.item.name if unit.item else '—' }}</td>
+              <td>{{ unit.target_warehouse.name if unit.target_warehouse else '—' }}</td>
+              <td>{{ (unit.produced_at or unit.created_at)|date_format }}</td>
+            </tr>
+          {% endfor %}
+          {% for unit in ready_with_vin_units[:4] %}
+            <tr>
+              <td><span class="badge text-bg-success">Готово с VIN</span></td>
+              <td>{{ unit.trailer.vin if unit.trailer else '—' }}</td>
+              <td>{{ unit.target_warehouse.name if unit.target_warehouse else '—' }}</td>
+              <td>{{ unit.created_at|date_format }}</td>
+            </tr>
+          {% endfor %}
+          {% if not produced_no_vin_units and not ready_with_vin_units %}
+            <tr><td colspan="4" class="text-muted p-4">Нет выпущенных единиц к действию</td></tr>
+          {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="app-card">
+  <div class="card-header d-flex flex-wrap gap-2 justify-content-between align-items-center">
+    <span>Остатки и будущая доступность</span>
+    <div class="d-flex flex-wrap gap-2">
+      <button class="btn btn-sm btn-soft" type="button" data-bs-toggle="collapse" data-bs-target="#directorInventoryCollapse" aria-expanded="false" aria-controls="directorInventoryCollapse">Показать таблицу</button>
+      <a class="btn btn-sm btn-soft" href="{{ url_for('main.director_report', section='stock') }}">Склад</a>
+      <a class="btn btn-sm btn-soft" href="{{ url_for('main.director_report', section='production') }}">Производство</a>
+      <a class="btn btn-sm btn-soft" href="{{ url_for('main.director_report', section='movements') }}">Перемещения</a>
+    </div>
+  </div>
+  <div class="collapse" id="directorInventoryCollapse">
   <div class="table-responsive">
     <table class="table table-hover align-middle">
-      <thead><tr><th>Модель / артикул</th>{% for w in warehouses %}<th>{{ w.name }}</th>{% endfor %}<th>В производстве</th><th>Без VIN</th><th>В пути</th><th>Резерв</th><th>Продано</th></tr></thead>
+      <thead>
+        <tr>
+          <th>Модель / артикул</th>
+          {% for warehouse in warehouses %}
+            {% if not warehouse_id or warehouse.id == warehouse_id %}<th>{{ warehouse.name }}</th>{% endif %}
+          {% endfor %}
+          <th>Резерв</th>
+          <th>Продано, не отгружено</th>
+          <th>В производстве</th>
+          <th>Без VIN</th>
+          <th>Готово с VIN</th>
+          <th>В пути</th>
+        </tr>
+      </thead>
       <tbody>
-      {% for row in rows %}
-        <tr><td class="fw-bold">{{ row.item.article or row.item.name }}</td>{% for w in warehouses %}<td>{{ row.warehouses[w.id] }}</td>{% endfor %}<td>{{ row.in_production }}</td><td>{{ row.produced_no_vin }}</td><td>{{ row.in_transit }}</td><td>{{ row.reserved }}</td><td>{{ row.sold }}</td></tr>
+      {% for row in inventory_rows %}
+        <tr>
+          <td class="fw-bold">
+            {{ row.item.article or row.item.name }}
+            <div class="text-muted small">{{ row.item.name }}</div>
+          </td>
+          {% for warehouse in warehouses %}
+            {% if not warehouse_id or warehouse.id == warehouse_id %}<td>{{ row.warehouses[warehouse.id] }}</td>{% endif %}
+          {% endfor %}
+          <td>{{ row.reserved }}</td>
+          <td>{{ row.sold }}</td>
+          <td>
+            <span class="fw-bold">{{ row.in_production }}</span>
+            <div class="text-muted small">клиенты {{ row.in_production_customer }} · склад {{ row.in_production_stock }}</div>
+          </td>
+          <td>{{ row.produced_no_vin }}</td>
+          <td>{{ row.ready_at_production }}</td>
+          <td>
+            <span class="fw-bold">{{ row.in_transit }}</span>
+            <div class="text-muted small">клиенты {{ row.in_transit_customer }} · склад {{ row.in_transit_stock }}</div>
+          </td>
+        </tr>
       {% else %}
-        <tr><td colspan="{{ warehouses|length + 6 }}" class="text-muted p-4">Нет данных</td></tr>
+        <tr><td colspan="{{ warehouses|length + 7 }}" class="text-muted p-4">Нет ненулевых строк по выбранным фильтрам</td></tr>
       {% endfor %}
       </tbody>
     </table>
+  </div>
   </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-const warehouseLabels = {{ warehouses|map(attribute='name')|list|tojson|safe }};
+const warehouseLabels = [
+  {% for warehouse in warehouses %}
+    {% if not warehouse_id or warehouse.id == warehouse_id %}{{ warehouse.name|tojson }}{{ "," if not loop.last }}{% endif %}
+  {% endfor %}
+];
 const stockValues = [
-  {% for w in warehouses %}
-    {% set ns = namespace(total=0) %}
-    {% for row in rows %}{% set ns.total = ns.total + row.warehouses[w.id] %}{% endfor %}
-    {{ ns.total }}{{ "," if not loop.last }}
+  {% for warehouse in warehouses %}
+    {% if not warehouse_id or warehouse.id == warehouse_id %}
+      {% set ns = namespace(total=0) %}
+      {% for row in inventory_rows %}{% set ns.total = ns.total + row.warehouses[warehouse.id] %}{% endfor %}
+      {{ ns.total }}{{ "," if not loop.last }}
+    {% endif %}
   {% endfor %}
 ];
 new Chart(document.getElementById('stockChart'), {
   type: 'bar',
-  data: { labels: warehouseLabels, datasets: [{ label: 'В наличии', data: stockValues, backgroundColor: '#2563EB', borderRadius: 8 }] },
+  data: { labels: warehouseLabels, datasets: [{ label: 'Свободно к продаже', data: stockValues, backgroundColor: '#2563EB', borderRadius: 8 }] },
   options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, grid: { color: '#E5EAF1' } }, x: { grid: { display: false } } } }
 });
 new Chart(document.getElementById('statusChart'), {
   type: 'doughnut',
-  data: { labels: ['В производстве', 'Без VIN', 'В пути', 'Резерв', 'Продано'], datasets: [{ data: [{{ production_count }}, {{ produced_no_vin }}, {{ transit_count }}, {{ rows|sum(attribute='reserved') }}, {{ sold_count }}], backgroundColor: ['#2563EB', '#F59E0B', '#38BDF8', '#F97316', '#16A34A'], borderWidth: 0 }] },
+  data: {
+    labels: ['Свободно', 'Резерв', 'Продано не отгружено', 'В пути', 'В производстве', 'Без VIN'],
+    datasets: [{
+      data: [{{ free_count }}, {{ reserved_count }}, {{ sold_not_shipped_orders|length }}, {{ in_transit_movements|length }}, {{ production_left }}, {{ produced_no_vin_units|length }}],
+      backgroundColor: ['#2563EB', '#F97316', '#16A34A', '#38BDF8', '#64748B', '#F59E0B'],
+      borderWidth: 0
+    }]
+  },
   options: { responsive: true, maintainAspectRatio: false, cutout: '62%', plugins: { legend: { position: 'right' } } }
 });
 </script>
