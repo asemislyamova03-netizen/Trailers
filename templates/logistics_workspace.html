@@ -135,15 +135,16 @@
               <td>
                 {% if row.vin_to_apply %}
                   <span class="fw-bold">{{ row.vin_to_apply }}</span>
-                  {% if row.vin_conflict_trailer %}<div class="text-danger small">уже есть Trailer #{{ row.vin_conflict_trailer.id }}</div>{% endif %}
                   {% if row.vin_docs_issued %}<div class="text-danger small">Документы уже выданы</div>{% endif %}
+                {% elif row.vin_conflict_trailer %}
+                  <span class="text-muted">VIN уже у Trailer #{{ row.vin_conflict_trailer.id }}</span>
                 {% else %}
                   <span class="text-muted">не зарезервирован</span>
                 {% endif %}
               </td>
               <td class="text-end">
                 {% if row.vin_conflict_trailer %}
-                  <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.trailers_list', vin=row.vin_to_apply) }}">Открыть прицеп</a>
+                  <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.trailers_list', vin=row.vin_conflict_vin) }}">Открыть прицеп</a>
                 {% else %}
                   <a class="btn btn-sm btn-orange" href="{{ url_for('main.logistics_assign_vin', unit_id=row.unit.id) }}">{{ 'Привязать VIN' if row.vin_to_apply else 'Присвоить VIN' }}</a>
                 {% endif %}
