@@ -7314,14 +7314,11 @@ def logistics_assign_vin(unit_id):
         if duplicate:
             return _duplicate_redirect(idem_key, url_for('main.logistics_workspace'))
         if existing_trailer:
-            ok, message = _attach_produced_unit_to_existing_trailer(unit, existing_trailer, order, vin_registry_row, current_user.id)
-            if not ok:
-                form.vin.errors.append(message)
-                return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row)
-            _finish_idempotency(idem_key, 'ProducedUnit', unit.id)
-            db.session.commit()
-            flash(message, 'success')
-            return redirect(url_for('main.logistics_workspace'))
+            form.vin.errors.append(
+                f'VIN уже есть у прицепа Trailer #{existing_trailer.id} на складе. '
+                'Нельзя присвоить этот VIN новой выпущенной единице, иначе получится дубль.'
+            )
+            return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row)
         trailer_status = 'IN_STOCK'
         if order:
             trailer_status = 'SOLD' if order.documents_issued or order.status == 'sold_not_shipped' else 'RESERVED'
