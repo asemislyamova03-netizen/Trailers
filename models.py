@@ -422,6 +422,17 @@ class Lead(db.Model):
     desired_item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=True, index=True)
     desired_model = db.Column(db.String(255), nullable=True)
     desired_specs = db.Column(db.Text, nullable=True)
+    article_snapshot = db.Column(db.String(80), nullable=True, index=True)
+    product_name_snapshot = db.Column(db.String(255), nullable=True)
+    config_snapshot_json = db.Column(db.Text, nullable=True)
+    calculated_price = db.Column(db.Numeric(12, 2), nullable=True)
+    price_breakdown_json = db.Column(db.Text, nullable=True)
+    overall_dimensions_text = db.Column(db.String(80), nullable=True)
+    inner_dimensions_text = db.Column(db.String(80), nullable=True)
+    otss_number = db.Column(db.String(120), nullable=True)
+    otss_type = db.Column(db.String(20), nullable=True)
+    otss_modification = db.Column(db.String(20), nullable=True)
+    vin_modification_code = db.Column(db.String(20), nullable=True, index=True)
 
     warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=True, index=True)
     assigned_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
@@ -479,9 +490,10 @@ class CustomerOrder(db.Model):
 
     lead_id = db.Column(db.Integer, db.ForeignKey('lead.id'), nullable=True, index=True)
     customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'), nullable=False, index=True)
-    item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=False, index=True)
+    item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=True, index=True)
     trailer_id = db.Column(db.Integer, db.ForeignKey('trailer.id'), nullable=True, index=True)
     warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=True, index=True)
+    source_warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=True, index=True)
     assigned_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
 
     quantity = db.Column(db.Integer, nullable=False, default=1)
@@ -499,13 +511,27 @@ class CustomerOrder(db.Model):
     planned_ship_comment = db.Column(db.Text, nullable=True)
     cancelled_at = db.Column(db.DateTime, nullable=True)
     cancel_reason = db.Column(db.Text, nullable=True)
+    article_snapshot = db.Column(db.String(80), nullable=True, index=True)
+    product_name_snapshot = db.Column(db.String(255), nullable=True)
+    config_snapshot_json = db.Column(db.Text, nullable=True)
+    calculated_price = db.Column(db.Numeric(12, 2), nullable=True)
+    price_breakdown_json = db.Column(db.Text, nullable=True)
+    overall_dimensions_text = db.Column(db.String(80), nullable=True)
+    inner_dimensions_text = db.Column(db.String(80), nullable=True)
+    otss_number = db.Column(db.String(120), nullable=True)
+    otss_type = db.Column(db.String(20), nullable=True)
+    otss_modification = db.Column(db.String(20), nullable=True)
+    vin_modification_code = db.Column(db.String(20), nullable=True, index=True)
+    reserved_vin_registry_id = db.Column(db.Integer, db.ForeignKey('vin_registry.id'), nullable=True, index=True)
 
     lead = db.relationship('Lead', backref='orders')
     customer = db.relationship('Customer', backref='orders')
     item = db.relationship('Item', backref='orders')
     trailer = db.relationship('Trailer', backref='orders')
-    warehouse = db.relationship('Warehouse', backref='orders')
+    warehouse = db.relationship('Warehouse', foreign_keys=[warehouse_id], backref='orders')
+    source_warehouse = db.relationship('Warehouse', foreign_keys=[source_warehouse_id])
     assigned_user = db.relationship('User', foreign_keys=[assigned_user_id])
+    reserved_vin_registry = db.relationship('VinRegistry', foreign_keys=[reserved_vin_registry_id], post_update=True)
 
     @property
     def confirmed_paid_amount(self):
@@ -621,10 +647,25 @@ class SupplyNeed(db.Model):
     quantity = db.Column(db.Integer, nullable=False, default=1)
     required_by = db.Column(db.Date, nullable=True)
     note = db.Column(db.Text, nullable=True)
+    article_snapshot = db.Column(db.String(80), nullable=True, index=True)
+    product_name_snapshot = db.Column(db.String(255), nullable=True)
+    config_snapshot_json = db.Column(db.Text, nullable=True)
+    calculated_price = db.Column(db.Numeric(12, 2), nullable=True)
+    price_breakdown_json = db.Column(db.Text, nullable=True)
+    overall_dimensions_text = db.Column(db.String(80), nullable=True)
+    inner_dimensions_text = db.Column(db.String(80), nullable=True)
+    otss_number = db.Column(db.String(120), nullable=True)
+    otss_type = db.Column(db.String(20), nullable=True)
+    otss_modification = db.Column(db.String(20), nullable=True)
+    vin_modification_code = db.Column(db.String(20), nullable=True, index=True)
+    cancelled_at = db.Column(db.DateTime, nullable=True)
+    cancelled_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    cancel_reason = db.Column(db.Text, nullable=True)
 
     order = db.relationship('CustomerOrder', backref=db.backref('supply_needs', lazy='dynamic', cascade='all, delete-orphan'))
     item = db.relationship('Item', backref='supply_needs')
     warehouse = db.relationship('Warehouse', backref='supply_needs')
+    cancelled_by_user = db.relationship('User', foreign_keys=[cancelled_by_user_id])
 
 
 class ProductionRequest(db.Model):
@@ -657,10 +698,25 @@ class ProductionRequestLine(db.Model):
     production_comment = db.Column(db.Text, nullable=True)
     status = db.Column(db.String(30), nullable=False, default='PLANNED', index=True)
     note = db.Column(db.Text, nullable=True)
+    article_snapshot = db.Column(db.String(80), nullable=True, index=True)
+    product_name_snapshot = db.Column(db.String(255), nullable=True)
+    config_snapshot_json = db.Column(db.Text, nullable=True)
+    calculated_price = db.Column(db.Numeric(12, 2), nullable=True)
+    price_breakdown_json = db.Column(db.Text, nullable=True)
+    overall_dimensions_text = db.Column(db.String(80), nullable=True)
+    inner_dimensions_text = db.Column(db.String(80), nullable=True)
+    otss_number = db.Column(db.String(120), nullable=True)
+    otss_type = db.Column(db.String(20), nullable=True)
+    otss_modification = db.Column(db.String(20), nullable=True)
+    vin_modification_code = db.Column(db.String(20), nullable=True, index=True)
+    cancelled_at = db.Column(db.DateTime, nullable=True)
+    cancelled_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    cancel_reason = db.Column(db.Text, nullable=True)
 
     production_request = db.relationship('ProductionRequest', backref=db.backref('lines', lazy='dynamic', cascade='all, delete-orphan'))
     supply_need = db.relationship('SupplyNeed', backref='production_lines')
     item = db.relationship('Item', backref='production_lines')
+    cancelled_by_user = db.relationship('User', foreign_keys=[cancelled_by_user_id])
 
 
 class ProducedUnit(db.Model):
@@ -712,3 +768,456 @@ class StockMovement(db.Model):
     item = db.relationship('Item', backref='movements')
     from_warehouse = db.relationship('Warehouse', foreign_keys=[from_warehouse_id], backref='out_movements')
     to_warehouse = db.relationship('Warehouse', foreign_keys=[to_warehouse_id], backref='in_movements')
+
+
+class VinRegistry(db.Model):
+    __tablename__ = 'vin_registry'
+
+    id = db.Column(db.Integer, primary_key=True)
+    vin_full = db.Column(db.String(50), nullable=True, unique=True, index=True)
+    prefix = db.Column(db.String(10), nullable=False, default='MX4')
+    vin_modification_code = db.Column(db.String(20), nullable=True, index=True)
+    year_code = db.Column(db.String(1), nullable=True, index=True)
+    serial7 = db.Column(db.String(7), nullable=False, unique=True, index=True)
+    status = db.Column(db.String(30), nullable=False, default='free', index=True)
+
+    customer_order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=True, index=True)
+    supply_need_id = db.Column(db.Integer, db.ForeignKey('supply_need.id'), nullable=True, index=True)
+    trailer_id = db.Column(db.Integer, db.ForeignKey('trailer.id'), nullable=True, index=True)
+    sales_contract_id = db.Column(db.Integer, db.ForeignKey('sales_contract.id'), nullable=True, index=True)
+    docs_issued_order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=True, index=True)
+
+    reserved_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    assigned_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    confirmed_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    void_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+
+    reserved_at = db.Column(db.DateTime, nullable=True)
+    assigned_at = db.Column(db.DateTime, nullable=True)
+    confirmed_at = db.Column(db.DateTime, nullable=True)
+    docs_issued_at = db.Column(db.DateTime, nullable=True)
+    void_at = db.Column(db.DateTime, nullable=True)
+
+    source = db.Column(db.String(30), nullable=True)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    customer_order = db.relationship('CustomerOrder', foreign_keys=[customer_order_id], backref='vin_registry_rows')
+    docs_issued_order = db.relationship('CustomerOrder', foreign_keys=[docs_issued_order_id])
+    supply_need = db.relationship('SupplyNeed', foreign_keys=[supply_need_id], backref='vin_registry_rows')
+    trailer = db.relationship('Trailer', foreign_keys=[trailer_id], backref='vin_registry_rows')
+    sales_contract = db.relationship('SalesContract', foreign_keys=[sales_contract_id], backref='vin_registry_rows')
+    reserved_by_user = db.relationship('User', foreign_keys=[reserved_by_user_id])
+    assigned_by_user = db.relationship('User', foreign_keys=[assigned_by_user_id])
+    confirmed_by_user = db.relationship('User', foreign_keys=[confirmed_by_user_id])
+    void_by_user = db.relationship('User', foreign_keys=[void_by_user_id])
+
+
+class VinRegistryEvent(db.Model):
+    __tablename__ = 'vin_registry_event'
+
+    id = db.Column(db.Integer, primary_key=True)
+    vin_registry_id = db.Column(db.Integer, db.ForeignKey('vin_registry.id'), nullable=False, index=True)
+    event_type = db.Column(db.String(40), nullable=False, index=True)
+    old_status = db.Column(db.String(30), nullable=True)
+    new_status = db.Column(db.String(30), nullable=True)
+    customer_order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=True, index=True)
+    sales_contract_id = db.Column(db.Integer, db.ForeignKey('sales_contract.id'), nullable=True, index=True)
+    trailer_id = db.Column(db.Integer, db.ForeignKey('trailer.id'), nullable=True, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    vin_registry = db.relationship('VinRegistry', backref=db.backref('events', lazy='dynamic', cascade='all, delete-orphan'))
+    customer_order = db.relationship('CustomerOrder', foreign_keys=[customer_order_id])
+    sales_contract = db.relationship('SalesContract', foreign_keys=[sales_contract_id])
+    trailer = db.relationship('Trailer', foreign_keys=[trailer_id])
+    user = db.relationship('User', foreign_keys=[user_id])
+
+
+# ---------- СПРАВОЧНИКИ И МАТРИЦЫ КОНФИГУРАТОРА ПРИЦЕПОВ ----------
+
+class TrailerProductGroup(db.Model):
+    __tablename__ = 'trailer_product_group'
+
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(20), nullable=False, unique=True, index=True)
+    name = db.Column(db.String(120), nullable=False)
+    name_prefix = db.Column(db.String(160), nullable=False)
+    otss_number = db.Column(db.String(120), nullable=True)
+    otss_type = db.Column(db.String(20), nullable=True, index=True)
+    otts_valid_from = db.Column(db.Date, nullable=True, index=True)
+    otts_valid_to = db.Column(db.Date, nullable=True, index=True)
+    vehicle_category = db.Column(db.String(20), nullable=True)
+    axle_count = db.Column(db.Integer, nullable=True)
+    wheel_count = db.Column(db.Integer, nullable=True)
+    max_mass_kg = db.Column(db.Integer, nullable=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TrailerBodySize(db.Model):
+    __tablename__ = 'trailer_body_size'
+
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(20), nullable=False, unique=True, index=True)
+    name = db.Column(db.String(120), nullable=False)
+    length_mm = db.Column(db.Integer, nullable=False)
+    width_mm = db.Column(db.Integer, nullable=False)
+    article_part = db.Column(db.String(20), nullable=False)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TrailerBoardHeight(db.Model):
+    __tablename__ = 'trailer_board_height'
+
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(20), nullable=False, unique=True, index=True)
+    name = db.Column(db.String(120), nullable=False)
+    height_mm = db.Column(db.Integer, nullable=False, default=0)
+    article_part = db.Column(db.String(20), nullable=False)
+    is_no_board = db.Column(db.Boolean, nullable=False, default=False)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TrailerWheelOption(db.Model):
+    __tablename__ = 'trailer_wheel_option'
+
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(20), nullable=False, unique=True, index=True)
+    name = db.Column(db.String(120), nullable=False)
+    wheel_size = db.Column(db.String(40), nullable=False)
+    article_part = db.Column(db.String(20), nullable=False)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TrailerHubOption(db.Model):
+    __tablename__ = 'trailer_hub_option'
+
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(20), nullable=False, unique=True, index=True)
+    name = db.Column(db.String(120), nullable=False)
+    for_wheel_size = db.Column(db.String(60), nullable=False)
+    article_part = db.Column(db.String(20), nullable=False)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TrailerSupportWheelOption(db.Model):
+    __tablename__ = 'trailer_support_wheel_option'
+
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(20), nullable=False, unique=True, index=True)
+    name = db.Column(db.String(120), nullable=False)
+    article_part = db.Column(db.String(20), nullable=True)
+    is_default = db.Column(db.Boolean, nullable=False, default=False)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TrailerTentOption(db.Model):
+    __tablename__ = 'trailer_tent_option'
+
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(20), nullable=False, unique=True, index=True)
+    name = db.Column(db.String(120), nullable=False)
+    height_mm = db.Column(db.Integer, nullable=False, default=0)
+    article_part = db.Column(db.String(20), nullable=True)
+    is_no_tent = db.Column(db.Boolean, nullable=False, default=False)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TrailerBodyExecution(db.Model):
+    __tablename__ = 'trailer_body_execution'
+
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(30), nullable=False, unique=True, index=True)
+    name = db.Column(db.String(120), nullable=False)
+    name_for_title = db.Column(db.String(120), nullable=False)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TrailerSpecialOption(db.Model):
+    __tablename__ = 'trailer_special_option'
+
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(30), nullable=False, unique=True, index=True)
+    name = db.Column(db.String(120), nullable=False)
+    option_type = db.Column(db.String(40), nullable=False, index=True)
+    article_part = db.Column(db.String(40), nullable=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TrailerAllowedOption(db.Model):
+    __tablename__ = 'trailer_allowed_option'
+
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('trailer_product_group.id'), nullable=False, index=True)
+    option_type = db.Column(db.String(40), nullable=False, index=True)
+    option_id = db.Column(db.Integer, nullable=False, index=True)
+    is_allowed = db.Column(db.Boolean, nullable=False, default=True)
+    is_default = db.Column(db.Boolean, nullable=False, default=False)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    group = db.relationship('TrailerProductGroup', backref='allowed_options')
+
+    __table_args__ = (
+        db.UniqueConstraint('group_id', 'option_type', 'option_id', name='uq_trailer_allowed_option'),
+    )
+
+
+class TrailerPlatformPriceMatrix(db.Model):
+    __tablename__ = 'trailer_platform_price_matrix'
+
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('trailer_product_group.id'), nullable=False, index=True)
+    body_size_id = db.Column(db.Integer, db.ForeignKey('trailer_body_size.id'), nullable=False, index=True)
+    price = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    cost_price = db.Column(db.Numeric(12, 2), nullable=True)
+    currency = db.Column(db.String(10), nullable=False, default='KZT')
+    valid_from = db.Column(db.Date, nullable=True, index=True)
+    valid_to = db.Column(db.Date, nullable=True, index=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    group = db.relationship('TrailerProductGroup')
+    body_size = db.relationship('TrailerBodySize')
+
+    __table_args__ = (
+        db.UniqueConstraint('group_id', 'body_size_id', 'valid_from', name='uq_trailer_platform_price'),
+    )
+
+
+class TrailerBoardPriceMatrix(db.Model):
+    __tablename__ = 'trailer_board_price_matrix'
+
+    id = db.Column(db.Integer, primary_key=True)
+    body_size_id = db.Column(db.Integer, db.ForeignKey('trailer_body_size.id'), nullable=False, index=True)
+    board_height_id = db.Column(db.Integer, db.ForeignKey('trailer_board_height.id'), nullable=False, index=True)
+    price = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    cost_price = db.Column(db.Numeric(12, 2), nullable=True)
+    currency = db.Column(db.String(10), nullable=False, default='KZT')
+    valid_from = db.Column(db.Date, nullable=True, index=True)
+    valid_to = db.Column(db.Date, nullable=True, index=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    body_size = db.relationship('TrailerBodySize')
+    board_height = db.relationship('TrailerBoardHeight')
+
+    __table_args__ = (
+        db.UniqueConstraint('body_size_id', 'board_height_id', 'valid_from', name='uq_trailer_board_price'),
+    )
+
+
+class TrailerTentPriceMatrix(db.Model):
+    __tablename__ = 'trailer_tent_price_matrix'
+
+    id = db.Column(db.Integer, primary_key=True)
+    body_size_id = db.Column(db.Integer, db.ForeignKey('trailer_body_size.id'), nullable=False, index=True)
+    tent_option_id = db.Column(db.Integer, db.ForeignKey('trailer_tent_option.id'), nullable=False, index=True)
+    price = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    cost_price = db.Column(db.Numeric(12, 2), nullable=True)
+    currency = db.Column(db.String(10), nullable=False, default='KZT')
+    valid_from = db.Column(db.Date, nullable=True, index=True)
+    valid_to = db.Column(db.Date, nullable=True, index=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    body_size = db.relationship('TrailerBodySize')
+    tent_option = db.relationship('TrailerTentOption')
+
+    __table_args__ = (
+        db.UniqueConstraint('body_size_id', 'tent_option_id', 'valid_from', name='uq_trailer_tent_price'),
+    )
+
+
+class TrailerWheelPriceMatrix(db.Model):
+    __tablename__ = 'trailer_wheel_price_matrix'
+
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('trailer_product_group.id'), nullable=False, index=True)
+    wheel_option_id = db.Column(db.Integer, db.ForeignKey('trailer_wheel_option.id'), nullable=False, index=True)
+    price = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    cost_price = db.Column(db.Numeric(12, 2), nullable=True)
+    currency = db.Column(db.String(10), nullable=False, default='KZT')
+    valid_from = db.Column(db.Date, nullable=True, index=True)
+    valid_to = db.Column(db.Date, nullable=True, index=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    group = db.relationship('TrailerProductGroup')
+    wheel_option = db.relationship('TrailerWheelOption')
+
+    __table_args__ = (
+        db.UniqueConstraint('group_id', 'wheel_option_id', 'valid_from', name='uq_trailer_wheel_price'),
+    )
+
+
+class TrailerHubPriceMatrix(db.Model):
+    __tablename__ = 'trailer_hub_price_matrix'
+
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('trailer_product_group.id'), nullable=False, index=True)
+    hub_option_id = db.Column(db.Integer, db.ForeignKey('trailer_hub_option.id'), nullable=False, index=True)
+    price = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    cost_price = db.Column(db.Numeric(12, 2), nullable=True)
+    currency = db.Column(db.String(10), nullable=False, default='KZT')
+    valid_from = db.Column(db.Date, nullable=True, index=True)
+    valid_to = db.Column(db.Date, nullable=True, index=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    group = db.relationship('TrailerProductGroup')
+    hub_option = db.relationship('TrailerHubOption')
+
+    __table_args__ = (
+        db.UniqueConstraint('group_id', 'hub_option_id', 'valid_from', name='uq_trailer_hub_price'),
+    )
+
+
+class TrailerSupportWheelPriceMatrix(db.Model):
+    __tablename__ = 'trailer_support_wheel_price_matrix'
+
+    id = db.Column(db.Integer, primary_key=True)
+    support_wheel_option_id = db.Column(db.Integer, db.ForeignKey('trailer_support_wheel_option.id'), nullable=False, index=True)
+    price = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    cost_price = db.Column(db.Numeric(12, 2), nullable=True)
+    currency = db.Column(db.String(10), nullable=False, default='KZT')
+    valid_from = db.Column(db.Date, nullable=True, index=True)
+    valid_to = db.Column(db.Date, nullable=True, index=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    support_wheel_option = db.relationship('TrailerSupportWheelOption')
+
+    __table_args__ = (
+        db.UniqueConstraint('support_wheel_option_id', 'valid_from', name='uq_trailer_support_wheel_price'),
+    )
+
+
+class TrailerSpecialOptionPriceMatrix(db.Model):
+    __tablename__ = 'trailer_special_option_price_matrix'
+
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('trailer_product_group.id'), nullable=False, index=True)
+    special_option_id = db.Column(db.Integer, db.ForeignKey('trailer_special_option.id'), nullable=False, index=True)
+    price = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    cost_price = db.Column(db.Numeric(12, 2), nullable=True)
+    currency = db.Column(db.String(10), nullable=False, default='KZT')
+    valid_from = db.Column(db.Date, nullable=True, index=True)
+    valid_to = db.Column(db.Date, nullable=True, index=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    group = db.relationship('TrailerProductGroup')
+    special_option = db.relationship('TrailerSpecialOption')
+
+    __table_args__ = (
+        db.UniqueConstraint('group_id', 'special_option_id', 'valid_from', name='uq_trailer_special_option_price'),
+    )
+
+
+class TrailerDimensionMatrix(db.Model):
+    __tablename__ = 'trailer_dimension_matrix'
+
+    id = db.Column(db.Integer, primary_key=True)
+    body_size_id = db.Column(db.Integer, db.ForeignKey('trailer_body_size.id'), nullable=False, index=True)
+    board_height_id = db.Column(db.Integer, db.ForeignKey('trailer_board_height.id'), nullable=False, index=True)
+    overall_length_mm = db.Column(db.Integer, nullable=False)
+    overall_width_mm = db.Column(db.Integer, nullable=False)
+    overall_height_mm = db.Column(db.Integer, nullable=False)
+    inner_length_mm = db.Column(db.Integer, nullable=False)
+    inner_width_mm = db.Column(db.Integer, nullable=False)
+    inner_height_mm = db.Column(db.Integer, nullable=False)
+    overall_dimensions_text = db.Column(db.String(80), nullable=False)
+    inner_dimensions_text = db.Column(db.String(80), nullable=False)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    body_size = db.relationship('TrailerBodySize')
+    board_height = db.relationship('TrailerBoardHeight')
+
+    __table_args__ = (
+        db.UniqueConstraint('body_size_id', 'board_height_id', name='uq_trailer_dimension'),
+    )
+
+
+class TrailerOtssModificationMatrix(db.Model):
+    __tablename__ = 'trailer_otss_modification_matrix'
+
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('trailer_product_group.id'), nullable=False, index=True)
+    body_execution_id = db.Column(db.Integer, db.ForeignKey('trailer_body_execution.id'), nullable=False, index=True)
+    board_height_id = db.Column(db.Integer, db.ForeignKey('trailer_board_height.id'), nullable=True, index=True)
+    special_option_id = db.Column(db.Integer, db.ForeignKey('trailer_special_option.id'), nullable=True, index=True)
+    otss_number = db.Column(db.String(120), nullable=True)
+    otss_type = db.Column(db.String(20), nullable=False, index=True)
+    otss_modification = db.Column(db.String(20), nullable=False)
+    vin_modification_code = db.Column(db.String(20), nullable=False)
+    otts_valid_from = db.Column(db.Date, nullable=True, index=True)
+    otts_valid_to = db.Column(db.Date, nullable=True, index=True)
+    description = db.Column(db.String(255), nullable=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    group = db.relationship('TrailerProductGroup')
+    body_execution = db.relationship('TrailerBodyExecution')
+    board_height = db.relationship('TrailerBoardHeight')
+    special_option = db.relationship('TrailerSpecialOption')

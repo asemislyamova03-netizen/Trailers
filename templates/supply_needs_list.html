@@ -11,7 +11,7 @@
 <div class="app-card">
   <div class="table-responsive">
     <table class="table table-hover align-middle">
-      <thead><tr><th>ID</th><th>Тип</th><th>Модель</th><th>Склад</th><th>Заказ</th><th>Кол-во</th><th>Приоритет</th><th>Статус</th><th></th></tr></thead>
+      <thead><tr><th>ID</th><th>Тип</th><th>Модель</th><th>Склад</th><th>Заказ</th><th>VIN к нанесению</th><th>Кол-во</th><th>Приоритет</th><th>Статус</th><th></th></tr></thead>
       <tbody>
       {% for n in needs %}
         <tr>
@@ -20,6 +20,17 @@
           <td>{{ n.item.article if n.item else '' }} {{ n.item.name if n.item else '' }}</td>
           <td>{{ n.warehouse.name if n.warehouse else '' }}</td>
           <td>{{ n.order.order_number if n.order else 'на склад' }}</td>
+          <td>
+            {% set vin_state = namespace(found=false) %}
+            {% for vin in n.vin_registry_rows %}
+              {% if vin.status in ['reserved', 'assigned', 'confirmed'] %}
+                {% set vin_state.found = true %}
+                <div class="fw-semibold">{{ vin.vin_full or vin.serial7 }}</div>
+                {% if vin.docs_issued_at %}<div class="small text-muted">документы выданы</div>{% endif %}
+              {% endif %}
+            {% endfor %}
+            {% if not vin_state.found %}<span class="text-muted">VIN не зарезервирован</span>{% endif %}
+          </td>
           <td>{{ n.quantity }}</td>
           <td>{{ n.priority }}</td>
           <td><span class="badge text-bg-{{ n.status|status_badge_class }}">{{ n.status|status_label }}</span></td>
@@ -32,13 +43,21 @@
               </form>
               <form method="post" action="{{ url_for('main.supply_need_cancel', need_id=n.id) }}" class="d-inline">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="cancel_reason" value="Отмена из списка потребностей">
                 <button class="btn btn-sm btn-outline-dark">Отменить</button>
+              </form>
+            {% endif %}
+            {% if n.need_type == 'CUSTOMER_ORDER' and n.order %}
+              <form method="post" action="{{ url_for('main.supply_need_release_order_reserve', need_id=n.id) }}" class="d-inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="reason" value="Снятие резерва из списка потребностей">
+                <button class="btn btn-sm btn-outline-warning">Снять резерв</button>
               </form>
             {% endif %}
           </td>
         </tr>
       {% else %}
-        <tr><td colspan="9" class="text-muted p-3">Потребностей нет</td></tr>
+        <tr><td colspan="10" class="text-muted p-3">Потребностей нет</td></tr>
       {% endfor %}
       </tbody>
     </table>

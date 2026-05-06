@@ -80,6 +80,7 @@
             {% if need.status == 'NEW' and (current_user.is_admin or current_user.is_director or current_user.is_manager) %}
               <form method="post" action="{{ url_for('main.supply_need_cancel', need_id=need.id) }}" class="d-inline">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="cancel_reason" value="Отмена из списка пополнения склада">
                 <button class="btn btn-sm btn-outline-dark">Отменить</button>
               </form>
             {% endif %}

@@ -14,6 +14,7 @@ def build_contract_pdf_bytes(ctx) -> bytes:
     contract = ctx.get("contract")
     customer = ctx.get("customer")
     trailer = ctx.get("trailer")
+    effective_vin = ctx.get("effective_vin") or (getattr(trailer, 'vin', '') if trailer else '')
     item = ctx.get("item")
 
     buf = BytesIO()
@@ -33,7 +34,7 @@ def build_contract_pdf_bytes(ctx) -> bytes:
     c.drawString(50, y, f"Покупатель: {getattr(customer, 'name', '') if customer else ''}")
     y -= 18
 
-    c.drawString(50, y, f"Прицеп VIN: {getattr(trailer, 'vin', '') if trailer else ''}")
+    c.drawString(50, y, f"Прицеп VIN: {effective_vin}")
     y -= 18
 
     c.drawString(50, y, f"Артикул: {getattr(item, 'article', '') if item else ''}")

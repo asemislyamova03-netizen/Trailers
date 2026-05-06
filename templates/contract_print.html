@@ -50,7 +50,7 @@
   {% set seller_email = 'qazpricep@mail.ru' %}
   {% set director_fio = 'Юзликаев Рамис Ильдарович' %}
 
-  {% set vin = trailer.vin if trailer else '' %}
+  {% set vin = effective_vin or (trailer.vin if trailer else '') %}
   {% set item_name = item.name if item else 'Прицеп к легковому автомобилю' %}
 
   {# оси: из Item, если там нет — из OTTS #}

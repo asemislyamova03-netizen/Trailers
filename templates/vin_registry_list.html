@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Реестр VIN{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+  <div>
+    <h1 class="h3 mb-1">Реестр VIN</h1>
+    <div class="text-muted">Свободные serial7, резервы под заказы, назначенные и подтверждённые VIN.</div>
+  </div>
+</div>
+
+<div class="app-card p-3 mb-3">
+  <form method="get" class="row g-2 align-items-end">
+    <div class="col-md-2"><label class="form-label">Статус</label><select name="status" class="form-select"><option value="">Все</option>{% for s in ['free','reserved','assigned','confirmed','void'] %}<option value="{{ s }}" {% if filters.status == s %}selected{% endif %}>{{ s|status_label }}</option>{% endfor %}</select></div>
+    <div class="col-md-2"><label class="form-label">Год</label><input name="year" value="{{ filters.year }}" class="form-control"></div>
+    <div class="col-md-2"><label class="form-label">Модификация</label><input name="modification" value="{{ filters.modification }}" class="form-control"></div>
+    <div class="col-md-2"><label class="form-label">serial7</label><input name="serial7" value="{{ filters.serial7 }}" class="form-control"></div>
+    <div class="col-md-2"><label class="form-label">Документы</label><select name="docs" class="form-select"><option value="">Все</option><option value="issued" {% if filters.docs == 'issued' %}selected{% endif %}>выданы</option><option value="not_issued" {% if filters.docs == 'not_issued' %}selected{% endif %}>не выданы</option></select></div>
+    <div class="col-md-2"><label class="form-label">Заказ / клиент / VIN</label><input name="q" value="{{ filters.q }}" class="form-control"></div>
+    <div class="col-md-1"><button class="btn btn-soft w-100">Найти</button></div>
+  </form>
+</div>
+
+<div class="app-card p-3 mb-3">
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="row g-2">
+      <div class="col-md-9">
+        <label class="form-label">Добавить VIN или serial7</label>
+        <textarea name="vin_input" class="form-control" rows="3" placeholder="0002632 или MX4000002T0002632. Можно несколько строк."></textarea>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Источник</label>
+        <input name="source" class="form-control" value="manual">
+        <button class="btn btn-orange mt-2 w-100">Загрузить</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<div class="app-card p-3">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle">
+      <thead><tr><th>VIN</th><th>serial7</th><th>Модификация</th><th>Год</th><th>Статус</th><th>Документы</th><th>Заказ</th><th>Договор</th><th>Клиент</th><th>Прицеп</th><th>Кто резервировал</th><th>Дата</th><th>Комментарий</th><th></th></tr></thead>
+      <tbody>
+      {% for row in rows %}
+        <tr>
+          <td class="fw-semibold">{{ row.vin_full or '—' }}</td>
+          <td>{{ row.serial7 }}</td>
+          <td>{{ row.vin_modification_code or '' }}</td>
+          <td>{{ row.year_code or '' }}</td>
+          <td><span class="badge text-bg-{{ row.status|status_badge_class }}">{{ row.status|status_label }}</span></td>
+          <td>{% if row.docs_issued_at %}<span class="badge text-bg-success">выданы</span><div class="small text-muted">{{ row.docs_issued_at|date_format }}</div>{% else %}<span class="text-muted">нет</span>{% endif %}</td>
+          <td>{% if row.customer_order %}<a href="{{ url_for('main.order_detail', order_id=row.customer_order.id) }}">{{ row.customer_order.order_number }}</a>{% endif %}</td>
+          <td>{% if row.sales_contract %}<div class="fw-semibold">№ {{ row.sales_contract.contract_number or row.sales_contract.id }}</div>{% if row.sales_contract.contract_date %}<div class="small text-muted">{{ row.sales_contract.contract_date|date_format }}</div>{% endif %}{% endif %}</td>
+          <td>{% if row.customer_order and row.customer_order.customer %}{{ row.customer_order.customer.name }}{% elif row.sales_contract and row.sales_contract.customer %}{{ row.sales_contract.customer.name }}{% endif %}</td>
+          <td>{{ row.trailer.vin if row.trailer else '' }}</td>
+          <td>{{ row.reserved_by_user.full_name if row.reserved_by_user else '' }}</td>
+          <td>{{ row.reserved_at|date_format if row.reserved_at else '' }}</td>
+          <td>{{ row.comment or '' }}</td>
+          <td class="text-end"><a class="btn btn-sm btn-soft" href="{{ url_for('main.vin_registry_detail', vin_id=row.id) }}">Открыть</a></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="13" class="text-muted">VIN не найдены.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

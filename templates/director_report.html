@@ -107,7 +107,7 @@
           <td><a href="{{ url_for('main.order_detail', order_id=order.id) }}">{{ order.order_number }}</a></td>
           <td>{{ order.customer.name if order.customer else '—' }}</td>
           <td>{{ order.assigned_user.full_name or order.assigned_user.username if order.assigned_user else '—' }}</td>
-          <td>{{ order.trailer.vin if order.trailer else '—' }}</td>
+          <td>{{ get_order_effective_vin(order) or '—' }}</td>
           <td>{{ order.price|money }}</td>
           <td><span class="badge {{ order.document_status|status_badge_class }}">{{ order.document_status|status_label }}</span></td>
           <td><span class="badge {{ order.status|status_badge_class }}">{{ order.status|status_label }}</span></td>
@@ -221,24 +221,30 @@
           <tbody>
           {% for item in group['items'][:20] %}
             <tr>
-              {% if item.order_number is defined %}
+              {% if item.vin_full is defined %}
+                <td>VIN {{ item.vin_full or item.serial7 }}</td>
+                <td>{% if item.customer_order %}<a href="{{ url_for('main.order_detail', order_id=item.customer_order.id) }}">{{ item.customer_order.order_number }}</a>{% else %}&mdash;{% endif %}</td>
+                <td>{{ item.trailer.warehouse.name if item.trailer and item.trailer.warehouse else '&mdash;' }}</td>
+                <td>{{ (item.reserved_at or item.assigned_at or item.docs_issued_at or item.created_at)|date_format }}</td>
+                <td><span class="badge text-bg-{{ item.status|status_badge_class }}">{{ item.status|status_label }}</span></td>
+              {% elif item.order_number is defined %}
                 <td><a href="{{ url_for('main.order_detail', order_id=item.id) }}">{{ item.order_number }}</a></td>
                 <td>{{ item.customer.name if item.customer else '—' }}</td>
                 <td>{{ item.warehouse.name if item.warehouse else '—' }}</td>
                 <td>{{ (item.documents_issued_at or item.created_at)|date_format }}</td>
-                <td><span class="badge {{ item.status|status_badge_class }}">{{ item.status|status_label }}</span></td>
+                <td><span class="badge text-bg-{{ item.status|status_badge_class }}">{{ item.status|status_label }}</span></td>
               {% elif item.trailer_id is defined %}
                 <td>Перемещение #{{ item.id }}</td>
                 <td>{{ item.trailer.vin if item.trailer else '—' }}</td>
                 <td>{{ item.from_warehouse.name if item.from_warehouse else '—' }} → {{ item.to_warehouse.name if item.to_warehouse else '—' }}</td>
                 <td>{{ item.arrival_date|date_format }}</td>
-                <td><span class="badge {{ item.status|status_badge_class }}">{{ item.status|status_label }}</span></td>
+                <td><span class="badge text-bg-{{ item.status|status_badge_class }}">{{ item.status|status_label }}</span></td>
               {% else %}
                 <td>{{ item.production_request.request_number if item.production_request else 'Производство' }}</td>
                 <td>{{ item.item.article or item.item.name if item.item else '—' }}</td>
                 <td>{{ item.production_request.target_warehouse.name if item.production_request and item.production_request.target_warehouse else '—' }}</td>
                 <td>{{ item.supply_need.required_by|date_format if item.supply_need else '' }}</td>
-                <td><span class="badge {{ item.status|status_badge_class }}">{{ item.status|status_label }}</span></td>
+                <td><span class="badge text-bg-{{ item.status|status_badge_class }}">{{ item.status|status_label }}</span></td>
               {% endif %}
             </tr>
           {% else %}

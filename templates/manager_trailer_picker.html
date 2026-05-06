@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% block title %}Подбор прицепа{% endblock %}
+
+{% macro config_hidden(config) -%}
+  <input type="hidden" name="group_code" value="{{ config.group_code }}">
+  <input type="hidden" name="body_execution_code" value="{{ config.body_execution_code }}">
+  <input type="hidden" name="body_size_code" value="{{ config.body_size_code }}">
+  <input type="hidden" name="board_height_code" value="{{ config.board_height_code }}">
+  <input type="hidden" name="wheel_code" value="{{ config.wheel_code }}">
+  <input type="hidden" name="hub_code" value="{{ config.hub_code }}">
+  <input type="hidden" name="support_wheel_code" value="{{ config.support_wheel_code }}">
+  <input type="hidden" name="tent_code" value="{{ config.tent_code }}">
+  {% for code in config.special_options %}
+    <input type="hidden" name="special_options" value="{{ code }}">
+  {% endfor %}
+{%- endmacro %}
+
+{% macro stock_table(title, rows, config) -%}
+<div class="app-card p-3">
+  <h2 class="h5 mb-3">{{ title }}</h2>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle">
+      <thead><tr><th>Склад</th><th>VIN</th><th>Артикул</th><th>Наименование</th><th>Статус</th><th class="text-end">Цена</th><th></th></tr></thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td>{{ row.warehouse }}</td>
+          <td class="fw-semibold">{{ row.vin }}</td>
+          <td>{{ row.article }}</td>
+          <td>{{ row.name }}</td>
+          <td><span class="badge text-bg-{{ row.status|status_badge_class }}">{{ row.status|status_label }}</span></td>
+          <td class="text-end">{{ row.price|money }}</td>
+          <td class="text-end">
+            <form method="post" class="d-inline picker-action-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              {{ config_hidden(config) }}
+              <input type="hidden" name="action" value="stock_order">
+              <input type="hidden" name="trailer_id" value="{{ row.id }}">
+              <input type="hidden" name="customer_id" value="">
+              <input type="hidden" name="warehouse_id" value="">
+              <button class="btn btn-sm btn-orange">Оформить</button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="text-muted">Нет свободных прицепов.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{%- endmacro %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+  <div>
+    <h1 class="h3 mb-1">Подбор прицепа</h1>
+    <div class="text-muted">Рабочее место менеджера: конфигурация, цена, наличие и заказ.</div>
+  </div>
+  <a class="btn btn-soft" href="{{ url_for('main.orders_list') }}">Заказы</a>
+</div>
+
+<div class="app-card p-3 mb-3">
+  <div class="row g-3">
+    <div class="col-md-6">
+      <label class="form-label" for="pickerCustomer">Клиент</label>
+      <select class="form-select" id="pickerCustomer">
+        <option value="">— выберите клиента —</option>
+        {% for customer in customer_options %}
+          <option value="{{ customer.id }}">{{ customer.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-6">
+      <label class="form-label" for="pickerWarehouse">Склад продажи / назначения</label>
+      <select class="form-select" id="pickerWarehouse">
+        <option value="">— не выбран —</option>
+        {% for warehouse in warehouses %}
+          <option value="{{ warehouse.id }}" {% if current_user.warehouse_id == warehouse.id %}selected{% endif %}>{{ warehouse.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+</div>
+
+<form method="get" class="app-card p-3 mb-3">
+  <div class="row g-3">
+    <div class="col-md-3"><label class="form-label">Группа</label><select class="form-select" name="group_code">{% for item in config_options.groups %}<option value="{{ item.code }}" {% if config.group_code == item.code %}selected{% endif %}>{{ item.code }} - {{ item.name }}</option>{% endfor %}</select></div>
+    <div class="col-md-3"><label class="form-label">Тип кузова</label><select class="form-select" name="body_execution_code">{% for item in config_options.executions %}<option value="{{ item.code }}" {% if config.body_execution_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+    <div class="col-md-3"><label class="form-label">Размер кузова</label><select class="form-select" name="body_size_code">{% for item in config_options.body_sizes %}<option value="{{ item.code }}" {% if config.body_size_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+    <div class="col-md-3"><label class="form-label">Высота борта</label><select class="form-select" name="board_height_code">{% for item in config_options.board_heights %}<option value="{{ item.code }}" {% if config.board_height_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+    <div class="col-md-3"><label class="form-label">Колёса</label><select class="form-select" name="wheel_code"><option value="">—</option>{% for item in config_options.wheels %}<option value="{{ item.code }}" {% if config.wheel_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+    <div class="col-md-3"><label class="form-label">Ступица</label><select class="form-select" name="hub_code"><option value="">—</option>{% for item in config_options.hubs %}<option value="{{ item.code }}" {% if config.hub_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+    <div class="col-md-3"><label class="form-label">Опорное колесо</label><select class="form-select" name="support_wheel_code"><option value="">—</option>{% for item in config_options.support_wheels %}<option value="{{ item.code }}" {% if config.support_wheel_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+    <div class="col-md-3"><label class="form-label">Тент</label><select class="form-select" name="tent_code"><option value="">—</option>{% for item in config_options.tents %}<option value="{{ item.code }}" {% if config.tent_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+    <div class="col-12"><button class="btn btn-primary">Рассчитать</button></div>
+  </div>
+</form>
+
+<div class="row g-3 mb-3">
+  <div class="col-lg-7">
+    <div class="app-card p-3 h-100">
+      <div class="small text-muted">Артикул</div>
+      <div class="h3">{{ result.article }}</div>
+      <div class="small text-muted mt-2">Наименование</div>
+      <div class="fw-semibold">{{ result.name }}</div>
+      <div class="row g-3 mt-1">
+        <div class="col-md-4"><div class="small text-muted">Цена</div><div class="h5">{{ result.price.total_price|money }}</div></div>
+        <div class="col-md-4"><div class="small text-muted">Габариты</div><div>{{ result.dimensions.overall_dimensions_text if result.dimensions else '—' }}</div></div>
+        <div class="col-md-4"><div class="small text-muted">Внутренние размеры</div><div>{{ result.dimensions.inner_dimensions_text if result.dimensions else '—' }}</div></div>
+        <div class="col-md-4"><div class="small text-muted">ОТТС</div><div>{{ result.otss.otss_number if not result.otss.error else '—' }}</div></div>
+        <div class="col-md-4"><div class="small text-muted">Тип / модификация</div><div>{{ result.otss.otss_type if not result.otss.error else '' }} {{ result.otss.otss_modification if not result.otss.error else '' }}</div></div>
+        <div class="col-md-4"><div class="small text-muted">VIN-модификация</div><div class="fw-bold">{{ result.otss.vin_modification_code if not result.otss.error else '—' }}</div></div>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="app-card p-3 h-100">
+      <h2 class="h5">Расшифровка цены</h2>
+      <table class="table table-sm mb-0">
+        <tbody>
+          {% for item in result.price.price_breakdown %}
+            <tr><td>{{ item.name }}</td><td class="text-end">{{ item.amount|money }}</td></tr>
+          {% else %}
+            <tr><td class="text-muted">Цена не рассчитана.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="d-flex gap-2 flex-wrap mb-3">
+  <form method="post" class="picker-action-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {{ config_hidden(config) }}
+    <input type="hidden" name="action" value="production_order">
+    <input type="hidden" name="customer_id" value="">
+    <input type="hidden" name="warehouse_id" value="">
+    <button class="btn btn-orange">Заказать в производство под клиента</button>
+  </form>
+  <form method="post" class="picker-action-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {{ config_hidden(config) }}
+    <input type="hidden" name="action" value="stock_replenishment">
+    <input type="hidden" name="warehouse_id" value="">
+    <button class="btn btn-soft">Заказать на склад</button>
+  </form>
+</div>
+
+<div class="row g-3">
+  <div class="col-12">{{ stock_table('Точное наличие', inventory.exact, config) }}</div>
+  <div class="col-12">{{ stock_table('Аналоги по кузову и борту', inventory.body_match, config) }}</div>
+  <div class="col-12">{{ stock_table('Похожие по размеру кузова', inventory.size_match, config) }}</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const customer = document.querySelector('#pickerCustomer');
+  const warehouse = document.querySelector('#pickerWarehouse');
+  function syncForms() {
+    document.querySelectorAll('.picker-action-form').forEach((form) => {
+      const customerInput = form.querySelector('input[name="customer_id"]');
+      const warehouseInput = form.querySelector('input[name="warehouse_id"]');
+      if (customerInput) customerInput.value = customer ? customer.value : '';
+      if (warehouseInput) warehouseInput.value = warehouse ? warehouse.value : '';
+    });
+  }
+  if (customer) customer.addEventListener('change', syncForms);
+  if (warehouse) warehouse.addEventListener('change', syncForms);
+  syncForms();
+})();
+</script>
+{% endblock %}

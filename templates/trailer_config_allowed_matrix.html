@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+
+{% block title %}Допустимость параметров{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h1 class="h4 mb-1">Допустимость параметров</h1>
+        <div class="text-muted small">Настройка разрешённых параметров по группе без ввода технических ID.</div>
+    </div>
+    <a href="{{ url_for('main.manager_trailer_picker') }}" class="btn btn-outline-primary">
+        <i class="bi bi-ui-checks-grid me-1"></i>Подбор прицепа
+    </a>
+</div>
+
+<div class="row g-3">
+    <div class="col-lg-3">
+        <div class="list-group">
+            {% for item in sections %}
+                <a class="list-group-item list-group-item-action {{ 'active' if item.key == active_section else '' }}"
+                   href="{{ url_for('main.trailer_config_allowed_matrix') if item.key == 'allowed-matrix' else url_for('main.trailer_config_catalog_section', section=item.key) }}">
+                    {{ loop.index }}. {{ item.title }}
+                </a>
+            {% endfor %}
+        </div>
+    </div>
+    <div class="col-lg-9">
+        <form method="get" class="card p-3 mb-3">
+            <label class="form-label">Группа</label>
+            <div class="d-flex gap-2">
+                <select class="form-select" name="group_code">
+                    {% for group in groups %}
+                        <option value="{{ group.code }}" {% if selected_group and selected_group.code == group.code %}selected{% endif %}>
+                            {{ group.code }} — {{ group.name }}
+                        </option>
+                    {% endfor %}
+                </select>
+                <button class="btn btn-outline-primary" type="submit">Показать</button>
+            </div>
+        </form>
+
+        {% if selected_group %}
+        <form method="post" class="card p-3">
+            {{ form.hidden_tag() }}
+            <input type="hidden" name="group_code" value="{{ selected_group.code }}">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <div>
+                    <h2 class="h5 mb-1">{{ selected_group.code }} — {{ selected_group.name }}</h2>
+                    <div class="text-muted small">Отметьте параметры, которые можно выбирать для этой группы.</div>
+                </div>
+                <button class="btn btn-primary" type="submit">Сохранить</button>
+            </div>
+
+            <div class="row g-3">
+                {% for block in blocks %}
+                    <div class="col-md-6">
+                        <div class="border rounded-3 p-3 h-100 bg-white">
+                            <h3 class="h6 mb-3">{{ block.title }}</h3>
+                            <div class="vstack gap-2">
+                                {% for option in block.options %}
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox"
+                                               name="{{ block.option_type }}[]"
+                                               value="{{ option.id }}"
+                                               id="{{ block.option_type }}-{{ option.id }}"
+                                               {% if option.id in block.allowed_ids %}checked{% endif %}>
+                                        <label class="form-check-label" for="{{ block.option_type }}-{{ option.id }}">
+                                            <span class="fw-semibold">{{ option.code }}</span>
+                                            {% if option.name is defined %}— {{ option.name }}{% endif %}
+                                        </label>
+                                    </div>
+                                {% else %}
+                                    <div class="text-muted small">Нет активных параметров.</div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                {% endfor %}
+            </div>
+
+            <div class="mt-3">
+                <button class="btn btn-primary" type="submit">Сохранить</button>
+            </div>
+        </form>
+        {% else %}
+            <div class="alert alert-warning">Сначала создайте хотя бы одну группу прицепов.</div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -26,6 +26,56 @@
 </div>
 
 <div class="app-card mb-3">
+  <div class="card-header">Документы выданы, прицеп не привязан</div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead><tr><th>Заказ</th><th>Клиент</th><th>VIN</th><th>Статус VIN</th><th>Дата документов</th><th>Заявка / производство</th></tr></thead>
+      <tbody>
+      {% for row in docs_issued_without_trailer_rows %}
+        <tr>
+          <td>{% if row.order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=row.order.id) }}">{{ row.order.order_number }}</a>{% else %}<span class="text-muted">нет заказа</span>{% endif %}</td>
+          <td>{{ row.order.customer.name if row.order and row.order.customer else '—' }}</td>
+          <td class="fw-bold">{{ row.vin.vin_full }}</td>
+          <td><span class="badge text-bg-{{ row.vin.status|status_badge_class }}">{{ row.vin.status|status_label }}</span></td>
+          <td>{{ row.vin.docs_issued_at|date_format }}</td>
+          <td>{% if row.need %}SupplyNeed #{{ row.need.id }} &middot; {{ row.need.status|status_label }}{% else %}<span class="text-muted">нет активной заявки</span>{% endif %}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="text-muted p-3">Нет заказов с документами без привязанного Trailer</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="app-card mb-3">
+  <div class="card-header">VIN назначен, не подтверждён</div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead><tr><th>VIN</th><th>Заказ</th><th>Прицеп</th><th>Назначен</th><th></th></tr></thead>
+      <tbody>
+      {% for row in assigned_not_confirmed_vins %}
+        <tr>
+          <td class="fw-bold">{{ row.vin_full }}</td>
+          <td>{% if row.customer_order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=row.customer_order.id) }}">{{ row.customer_order.order_number }}</a>{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+          <td>{% if row.trailer %}Trailer #{{ row.trailer.id }}{% else %}<span class="text-muted">не привязан</span>{% endif %}</td>
+          <td>{{ row.assigned_at|date_format }}</td>
+          <td class="text-end">
+            <form method="post" action="{{ url_for('main.vin_registry_confirm', vin_id=row.id) }}" class="d-inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-sm btn-orange">Подтвердить нанесение VIN</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="text-muted p-3">Нет назначенных VIN без подтверждения</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="app-card mb-3">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span>Нужно запустить в производство</span>
     <span class="text-muted small">потребность → производство</span>
@@ -68,7 +118,7 @@
         <tr>
           <td>{{ line.production_request.request_number }}</td>
           <td><span class="badge text-bg-{{ line.supply_need.need_type|status_badge_class if line.supply_need else 'secondary' }}">{{ line.supply_need.need_type|status_label if line.supply_need else 'Без потребности' }}</span></td>
-          <td class="fw-bold">{{ line.item.article if line.item else '' }} {{ line.item.name if line.item else '' }}</td>
+          <td class="fw-bold">{{ line.article_snapshot or (line.item.article if line.item else '') }} {{ line.product_name_snapshot or (line.item.name if line.item else '') }}</td>
           <td>{{ line.production_request.target_warehouse.name if line.production_request.target_warehouse else '' }}</td>
           <td>{{ line.produced_qty or 0 }}</td>
           <td>{{ line.quantity - (line.produced_qty or 0) }}</td>
@@ -88,7 +138,7 @@
       <div class="card-header">Выпущено без VIN</div>
       <div class="table-responsive">
         <table class="table table-hover align-middle">
-          <thead><tr><th>Ед.</th><th>Тип</th><th>Модель</th><th>Склад назначения</th><th>Заказ</th><th></th></tr></thead>
+          <thead><tr><th>Ед.</th><th>Тип</th><th>Модель</th><th>Склад назначения</th><th>Заказ</th><th>VIN к нанесению</th><th></th></tr></thead>
           <tbody>
           {% for row in produced_unit_rows %}
             <tr>
@@ -97,10 +147,11 @@
               <td>{{ row.unit.item.article if row.unit.item else '' }} {{ row.unit.item.name if row.unit.item else '' }}</td>
               <td>{{ row.target_warehouse.name if row.target_warehouse else '' }}</td>
               <td>{% if row.order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=row.order.id) }}">{{ row.order.order_number }}</a>{% else %}<span class="text-muted">на склад</span>{% endif %}</td>
-              <td class="text-end"><a class="btn btn-sm btn-orange" href="{{ url_for('main.logistics_assign_vin', unit_id=row.unit.id) }}">Присвоить VIN</a></td>
+              <td>{% if row.vin_to_apply %}<span class="fw-bold">{{ row.vin_to_apply }}</span>{% if row.vin_docs_issued %}<div class="text-danger small">Документы уже выданы</div>{% endif %}{% else %}<span class="text-muted">не зарезервирован</span>{% endif %}</td>
+              <td class="text-end"><a class="btn btn-sm btn-orange" href="{{ url_for('main.logistics_assign_vin', unit_id=row.unit.id) }}">{{ 'Привязать VIN' if row.vin_to_apply else 'Присвоить VIN' }}</a></td>
             </tr>
           {% else %}
-            <tr><td colspan="6" class="text-muted p-3">Нет единиц без VIN</td></tr>
+            <tr><td colspan="7" class="text-muted p-3">Нет единиц без VIN</td></tr>
           {% endfor %}
           </tbody>
         </table>
@@ -117,7 +168,6 @@
           {{ send_form.hidden_tag() }}
           <div class="col-md-6">{{ send_form.trailer_id.label(class="form-label") }}{{ send_form.trailer_id(class="form-select") }}</div>
           <div class="col-md-6">{{ send_form.to_warehouse_id.label(class="form-label") }}{{ send_form.to_warehouse_id(class="form-select") }}</div>
-          <div class="col-md-6">{{ send_form.order_id.label(class="form-label") }}{{ send_form.order_id(class="form-select") }}</div>
           <div class="col-md-3">{{ send_form.departure_date.label(class="form-label") }}{{ send_form.departure_date(class="form-control") }}</div>
           <div class="col-md-3">{{ send_form.arrival_date.label(class="form-label") }}{{ send_form.arrival_date(class="form-control") }}</div>
           <div class="col-12">{{ send_form.note.label(class="form-label") }}{{ send_form.note(class="form-control") }}</div>

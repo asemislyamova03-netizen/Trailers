@@ -13,15 +13,52 @@
   </div>
   <form method="post" class="row g-3">
     {{ form.hidden_tag() }}
+    {% set item_source = request.form.get('item_source') or 'existing' %}
     <div class="col-md-6">
       {{ form.warehouse_id.label(class="form-label") }}
       {{ form.warehouse_id(class="form-select") }}
       {% for error in form.warehouse_id.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
     </div>
     <div class="col-md-6">
+      <label class="form-label" for="stockItemSource">Как выбрать номенклатуру</label>
+      <select class="form-select" name="item_source" id="stockItemSource">
+        <option value="existing" {% if item_source != 'config' %}selected{% endif %}>Выбрать существующую</option>
+        <option value="config" {% if item_source == 'config' %}selected{% endif %}>Собрать через конфигуратор</option>
+      </select>
+    </div>
+    <div class="col-md-6" id="stockExistingItemBlock">
       {{ form.item_id.label(class="form-label") }}
       {{ form.item_id(class="form-select") }}
       {% for error in form.item_id.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+    </div>
+    <div class="col-12 d-none" id="stockConfigBlock">
+      <div class="app-card p-3">
+        <h2 class="h5 mb-3">Конфигуратор</h2>
+        {% set cfg = request.form %}
+        <div class="row g-3">
+          <div class="col-md-3"><label class="form-label">Группа</label><select class="form-select" name="group_code" data-config-field>{% for item in config_options.groups %}<option value="{{ item.code }}" {% if (cfg.get('group_code') or '002') == item.code %}selected{% endif %}>{{ item.code }} - {{ item.name }}</option>{% endfor %}</select></div>
+          <div class="col-md-3"><label class="form-label">Тип кузова</label><select class="form-select" name="body_execution_code" data-config-field>{% for item in config_options.executions %}<option value="{{ item.code }}" {% if (cfg.get('body_execution_code') or 'BOARD') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+          <div class="col-md-3"><label class="form-label">Размер кузова</label><select class="form-select" name="body_size_code" data-config-field><option value="">—</option>{% for item in config_options.body_sizes %}<option value="{{ item.code }}" {% if cfg.get('body_size_code') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+          <div class="col-md-3"><label class="form-label">Высота борта</label><select class="form-select" name="board_height_code" data-config-field><option value="">—</option>{% for item in config_options.board_heights %}<option value="{{ item.code }}" {% if cfg.get('board_height_code') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+          <div class="col-md-3"><label class="form-label">Колёса</label><select class="form-select" name="wheel_code" data-config-field><option value="">—</option>{% for item in config_options.wheels %}<option value="{{ item.code }}" {% if cfg.get('wheel_code') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+          <div class="col-md-3"><label class="form-label">Ступица</label><select class="form-select" name="hub_code" data-config-field><option value="">—</option>{% for item in config_options.hubs %}<option value="{{ item.code }}" {% if cfg.get('hub_code') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+          <div class="col-md-3"><label class="form-label">Опорное колесо</label><select class="form-select" name="support_wheel_code" data-config-field><option value="">—</option>{% for item in config_options.support_wheels %}<option value="{{ item.code }}" {% if cfg.get('support_wheel_code') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+          <div class="col-md-3"><label class="form-label">Тент</label><select class="form-select" name="tent_code" data-config-field><option value="">—</option>{% for item in config_options.tents %}<option value="{{ item.code }}" {% if cfg.get('tent_code') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+        <div class="col-12">
+          <label class="form-label">Спец. параметры</label>
+          <div class="row g-2">
+            {% for item in config_options.specials %}
+            <div class="col-md-4">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="special_options" value="{{ item.code }}" id="stockSpecial{{ item.id }}" data-config-field {% if item.code in cfg.getlist('special_options') %}checked{% endif %}>
+                <label class="form-check-label" for="stockSpecial{{ item.id }}">{{ item.code }} — {{ item.name }}</label>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        </div>
+      </div>
     </div>
     <div class="col-md-3">
       {{ form.quantity.label(class="form-label") }}
@@ -43,4 +80,20 @@
     </div>
   </form>
 </div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const source = document.querySelector('#stockItemSource');
+  const existing = document.querySelector('#stockExistingItemBlock');
+  const config = document.querySelector('#stockConfigBlock');
+  function sync() {
+    const isConfig = source.value === 'config';
+    existing.classList.toggle('d-none', isConfig);
+    config.classList.toggle('d-none', !isConfig);
+  }
+  source.addEventListener('change', sync);
+  sync();
+})();
+</script>
 {% endblock %}

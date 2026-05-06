@@ -16,6 +16,7 @@
 {% if active_tab == 'done_today' %}
 <div class="row g-3">
 {% for unit in today_units %}
+  {% set vin_row = production_vin_row_for_unit(unit) %}
   <div class="col-12 col-md-6 col-xl-4">
     <div class="app-card h-100">
       <div class="card-body">
@@ -28,7 +29,8 @@
           <dt class="col-5">Тип</dt><dd class="col-7"><span class="badge text-bg-{{ unit.production_request_line.supply_need.need_type|status_badge_class if unit.production_request_line and unit.production_request_line.supply_need else 'secondary' }}">{{ unit.production_request_line.supply_need.need_type|status_label if unit.production_request_line and unit.production_request_line.supply_need else 'Без потребности' }}</span></dd>
           <dt class="col-5">Склад</dt><dd class="col-7">{{ unit.target_warehouse.name if unit.target_warehouse else '' }}</dd>
           <dt class="col-5">Дата выпуска</dt><dd class="col-7">{{ unit.produced_at|date_format }}</dd>
-          <dt class="col-5">VIN</dt><dd class="col-7">{{ unit.trailer.vin if unit.trailer else 'ждёт логиста' }}</dd>
+          <dt class="col-5">VIN</dt><dd class="col-7">{{ unit.trailer.vin if unit.trailer else (vin_row.vin_full if vin_row else 'ждёт логиста') }}</dd>
+          {% if vin_row and vin_row.docs_issued_at %}<dt class="col-5">Важно</dt><dd class="col-7 text-danger">Документы уже выданы. Нанести именно этот VIN.</dd>{% endif %}
         </dl>
       </div>
     </div>
@@ -40,22 +42,29 @@
 {% else %}
 <div class="row g-3">
 {% for line in lines %}
+  {% set vin_row = production_vin_row_for_line(line) %}
+  {% set config_parts = production_config_summary(line) %}
   <div class="col-12 col-md-6 col-xl-4">
     <div class="app-card h-100">
       <div class="card-body">
         <div class="d-flex justify-content-between gap-2">
-          <h2 class="h6 mb-1">{{ line.item.article or line.item.name }}</h2>
+          <h2 class="h6 mb-1">{{ line.article_snapshot or (line.item.article if line.item else '') or '—' }}</h2>
           <span class="badge text-bg-{{ line.status|status_badge_class }}">{{ line.status|status_label }}</span>
         </div>
         <div class="small text-muted mb-2">{{ line.production_request.request_number }}</div>
         <dl class="row small mb-2">
-          <dt class="col-5">Модель</dt><dd class="col-7">{{ line.item.name }}</dd>
+          <dt class="col-5">Модель</dt><dd class="col-7">{{ line.product_name_snapshot or (line.item.name if line.item else '—') }}</dd>
           <dt class="col-5">Тип</dt><dd class="col-7"><span class="badge text-bg-{{ line.supply_need.need_type|status_badge_class if line.supply_need else 'secondary' }}">{{ line.supply_need.need_type|status_label if line.supply_need else 'Без потребности' }}</span></dd>
-          <dt class="col-5">Кузов</dt><dd class="col-7">{{ line.item.size_body or '' }}</dd>
+          <dt class="col-5">Кузов</dt><dd class="col-7">{{ line.inner_dimensions_text or line.overall_dimensions_text or (line.item.size_body if line.item else '') }}</dd>
           <dt class="col-5">Склад</dt><dd class="col-7">{{ line.production_request.target_warehouse.name if line.production_request.target_warehouse else '' }}</dd>
           <dt class="col-5">Срок</dt><dd class="col-7">{{ line.supply_need.required_by|date_format if line.supply_need else '' }}</dd>
           <dt class="col-5">Выпущено</dt><dd class="col-7">{{ line.produced_qty or 0 }} из {{ line.quantity }}</dd>
+          <dt class="col-5">VIN к нанесению</dt><dd class="col-7">{% if vin_row %}<span class="fw-bold">{{ vin_row.vin_full }}</span>{% else %}<span class="text-muted">не зарезервирован</span>{% endif %}</dd>
         </dl>
+        {% if config_parts %}
+          <div class="small mb-2">{% for part in config_parts %}<span class="badge text-bg-light me-1 mb-1">{{ part }}</span>{% endfor %}</div>
+        {% endif %}
+        {% if vin_row and vin_row.docs_issued_at %}<div class="alert alert-danger py-2 small">Документы уже выданы. Нанести именно этот VIN.</div>{% endif %}
         <div class="production-notes small mb-2">
           {% if line.production_request.note %}<div><strong>Заявка:</strong> {{ line.production_request.note }}</div>{% endif %}
           {% if line.note %}<div><strong>Позиция:</strong> {{ line.note }}</div>{% endif %}

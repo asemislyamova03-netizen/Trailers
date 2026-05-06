@@ -450,7 +450,7 @@ class CustomerOrderForm(IdempotentFlaskForm):
     customer_search = StringField('Поиск клиента', validators=[Optional(), Length(max=255)])
     customer_id = SelectField('Клиент', coerce=int, validators=[DataRequired()])
     item_search = StringField('Поиск модели', validators=[Optional(), Length(max=255)])
-    item_id = SelectField('Модель', coerce=int, validators=[DataRequired()])
+    item_id = SelectField('Модель', coerce=int, validators=[Optional()])
     trailer_id = SelectField('Конкретный прицеп', coerce=int, validators=[Optional()])
     warehouse_id = SelectField('Склад продажи', coerce=int, validators=[Optional()])
     assigned_user_id = SelectField('Ответственный', coerce=int, validators=[Optional()])
@@ -482,11 +482,9 @@ class CustomerOrderForm(IdempotentFlaskForm):
     fulfillment_source = SelectField(
         'Источник обеспечения',
         choices=[
-            ('', '—'),
+            ('later', 'Подобрать позже'),
             ('stock', 'Из наличия'),
-            ('other_warehouse', 'С другого склада'),
-            ('production', 'Под производство'),
-            ('transit', 'Будущее поступление / в пути'),
+            ('production', 'Заказать в производство'),
         ],
         validators=[Optional()]
     )
@@ -584,7 +582,7 @@ class SupplyNeedForm(IdempotentFlaskForm):
 
 class StockReplenishmentForm(IdempotentFlaskForm):
     warehouse_id = SelectField('Склад назначения', coerce=int, validators=[DataRequired()])
-    item_id = SelectField('Номенклатура', coerce=int, validators=[DataRequired()])
+    item_id = SelectField('Номенклатура', coerce=int, validators=[Optional()])
     quantity = IntegerField('Количество', validators=[DataRequired(), NumberRange(min=1)], default=1)
     required_by = DateField('Желаемый срок', format='%Y-%m-%d', validators=[Optional()])
     comment = TextAreaField('Комментарий', validators=[Optional()])

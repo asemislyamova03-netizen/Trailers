@@ -22,7 +22,7 @@
   <div class="app-card kpi-card"><div><div class="kpi-title">Сумма заказа</div><div class="kpi-value">{{ order.price|money }}</div><div class="kpi-caption">план сделки</div></div><div class="kpi-icon"><i class="bi bi-receipt"></i></div></div>
   <div class="app-card kpi-card"><div><div class="kpi-title">Оплачено</div><div class="kpi-value">{{ order.confirmed_paid_amount|money }}</div><div class="kpi-caption">{{ order.payment_percent }}%</div></div><div class="kpi-icon"><i class="bi bi-cash-coin"></i></div></div>
   <div class="app-card kpi-card"><div><div class="kpi-title">Остаток</div><div class="kpi-value">{{ order.remaining_amount|money }}</div><div class="kpi-caption">{{ order.payment_status|status_label }}</div></div><div class="kpi-icon"><i class="bi bi-hourglass-split"></i></div></div>
-  <div class="app-card kpi-card"><div><div class="kpi-title">Прицеп</div><div class="kpi-value">{{ order.trailer.vin if order.trailer else 'VIN нет' }}</div><div class="kpi-caption">{{ order.trailer.status|status_label if order.trailer else order.fulfillment_source|status_label }}</div></div><div class="kpi-icon"><i class="bi bi-truck"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Прицеп</div><div class="kpi-value">{{ get_order_effective_vin(order) or 'VIN нет' }}</div><div class="kpi-caption">{{ order.trailer.status|status_label if order.trailer else order.fulfillment_source|status_label }}</div></div><div class="kpi-icon"><i class="bi bi-truck"></i></div></div>
   <div class="app-card kpi-card"><div><div class="kpi-title">Документы</div><div class="kpi-value">{{ order.document_status|status_label }}</div><div class="kpi-caption">{{ order.documents_issued_at|date_format if order.documents_issued_at else 'не выданы' }}</div></div><div class="kpi-icon"><i class="bi bi-file-earmark-check"></i></div></div>
 </div>
 
@@ -56,8 +56,10 @@
             <dt class="col-5">Модель</dt><dd class="col-7">{{ order.item.article if order.item else '' }} {{ order.item.name if order.item else '' }}</dd>
             <dt class="col-5">Кузов</dt><dd class="col-7">{{ order.item.size_body if order.item else '' }}</dd>
             <dt class="col-5">Исполнение</dt><dd class="col-7">{{ order.fulfillment_source|status_label }}</dd>
-            <dt class="col-5">Склад</dt><dd class="col-7">{{ order.warehouse.name if order.warehouse else '' }}</dd>
-            <dt class="col-5">VIN</dt><dd class="col-7">{{ order.trailer.vin if order.trailer else 'не выбран' }}</dd>
+            <dt class="col-5">Склад продажи</dt><dd class="col-7">{{ order.warehouse.name if order.warehouse else '' }}</dd>
+            <dt class="col-5">Факт. склад</dt><dd class="col-7">{{ order.source_warehouse.name if order.source_warehouse else (order.trailer.warehouse.name if order.trailer and order.trailer.warehouse else '') }}</dd>
+            <dt class="col-5">VIN</dt><dd class="col-7">{{ get_order_effective_vin(order) or 'не выбран' }}</dd>
+            <dt class="col-5">VIN-модификация</dt><dd class="col-7">{{ order.vin_modification_code or '' }}</dd>
             <dt class="col-5">План выдачи</dt><dd class="col-7">{{ order.planned_ship_date|date_format if order.planned_ship_date else 'не задан' }}</dd>
           </dl>
         </div>
@@ -74,6 +76,47 @@
           </form>
           {% endif %}
         </div>
+      </div>
+    </div>
+
+    <div class="app-card p-4 mt-4">
+      <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+        <div>
+          <h2 class="h5 mb-3">VIN и документы</h2>
+          <dl class="row small mb-0">
+            <dt class="col-md-3">Эффективный VIN</dt><dd class="col-md-9">{{ get_order_effective_vin(order) or 'VIN не зарезервирован' }}</dd>
+            <dt class="col-md-3">Статус VIN</dt><dd class="col-md-9">{% if order_vin_row %}<span class="badge text-bg-{{ order_vin_row.status|status_badge_class }}">{{ order_vin_row.status|status_label }}</span>{% elif order.trailer and order.trailer.vin %}<span class="badge text-bg-success">физический VIN</span>{% else %}<span class="text-muted">нет</span>{% endif %}</dd>
+            <dt class="col-md-3">Документы по VIN</dt><dd class="col-md-9">{% if order_vin_row and order_vin_row.docs_issued_at %}<span class="badge text-bg-success">выданы</span> {{ order_vin_row.docs_issued_at|date_format }}{% elif order.documents_issued %}<span class="badge text-bg-success">выданы</span>{% else %}<span class="text-muted">не выданы</span>{% endif %}</dd>
+            <dt class="col-md-3">Физический прицеп</dt><dd class="col-md-9">{% if order_vin_row and order_vin_row.trailer %}{{ order_vin_row.trailer.vin or ('Trailer #' ~ order_vin_row.trailer.id) }}{% elif order.trailer %}{{ order.trailer.vin or ('Trailer #' ~ order.trailer.id) }}{% else %}<span class="text-muted">не привязан</span>{% endif %}</dd>
+            {% if order_vin_row %}
+            <dt class="col-md-3">Резерв</dt><dd class="col-md-9">{{ order_vin_row.reserved_by_user.full_name if order_vin_row.reserved_by_user else '' }} {{ order_vin_row.reserved_at|date_format if order_vin_row.reserved_at else '' }}</dd>
+            {% endif %}
+          </dl>
+          {% if order_vin_row and order_vin_row.docs_issued_at and not order_vin_row.trailer_id %}
+            <div class="alert alert-warning mt-3 mb-0">Документы выданы по VIN, но физический прицеп ещё не привязан. Производство должно нанести именно этот VIN.</div>
+          {% elif order_vin_row and order_vin_row.status == 'reserved' and not order_vin_row.trailer_id %}
+            <div class="alert alert-warning mt-3 mb-0">VIN зарезервирован под заказ, но ещё не подтверждён производством.</div>
+          {% endif %}
+        </div>
+        {% if can_manage and order.status != 'cancelled' and not order.is_shipped %}
+        <div class="d-flex flex-column gap-2" style="min-width: 220px;">
+          {% if not get_order_effective_vin(order) and order.vin_modification_code %}
+          <form method="post" action="{{ url_for('main.order_reserve_vin', order_id=order.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label class="form-label small">Год выпуска</label>
+            <input name="year_code" class="form-control mb-2" value="T" maxlength="1">
+            <button class="btn btn-soft w-100">Зарезервировать VIN</button>
+          </form>
+          {% endif %}
+          {% if order_vin_row and order_vin_row.status == 'reserved' and not order_vin_row.docs_issued_at and not order_vin_row.trailer_id %}
+          <form method="post" action="{{ url_for('main.order_cancel_vin_reservation', order_id=order.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input name="comment" class="form-control mb-2" placeholder="Причина отмены">
+            <button class="btn btn-outline-danger w-100">Отменить резерв VIN</button>
+          </form>
+          {% endif %}
+        </div>
+        {% endif %}
       </div>
     </div>
 
@@ -265,8 +308,8 @@
             <form method="post" action="{{ url_for('main.order_mark_invoice_sent', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-soft">Счёт отправлен</button></form>
             <form method="post" action="{{ url_for('main.order_mark_contract_ready', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-soft">Договор готов</button></form>
             <form method="post" action="{{ url_for('main.order_mark_documents_ready', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-soft">Документы готовы</button></form>
-            <form method="post" action="{{ url_for('main.order_issue_documents', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-orange" {% if not order_contract or order.remaining_amount > 0 or not order.trailer_id %}disabled{% endif %}>Документы выданы</button></form>
-            {% if order.trailer_id and not order_contract %}<form method="post" action="{{ url_for('main.order_contract_create', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-outline-primary">Создать договор</button></form>{% endif %}
+            <form method="post" action="{{ url_for('main.order_issue_documents', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-orange" {% if not order_contract or order.remaining_amount > 0 or not get_order_effective_vin(order) %}disabled{% endif %}>Документы выданы</button></form>
+            {% if get_order_effective_vin(order) and not order_contract %}<form method="post" action="{{ url_for('main.order_contract_create', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-outline-primary">Создать договор</button></form>{% endif %}
           </div>
           {% if not order_contract %}<div class="text-muted small mt-2">Для выдачи документов сначала создайте договор.</div>{% endif %}
           {% else %}

@@ -5,103 +5,149 @@
 
 <form method="post" class="row g-3" id="orderForm">
   {{ form.hidden_tag() }}
-
   <input type="hidden" name="status" value="{{ form.status.data or 'waiting_payment' }}">
+  <input type="hidden" name="item_source" id="orderItemSource" value="existing">
+  {{ form.item_id(class="d-none", id="order_item_id") }}
+  {{ form.trailer_id(class="d-none", id="order_trailer_id") }}
 
-  {% for field in form if field.name not in ['csrf_token', 'form_token', 'submit', 'customer_id', 'item_id', 'trailer_id', 'status', 'documents_issued', 'is_shipped'] %}
-    <div class="{% if field.name in ['note', 'manager_comment', 'planned_ship_comment'] %}col-12{% else %}col-md-6{% endif %}">
-      {{ field.label(class="form-label") }}
-      {% if field.name == 'customer_search' %}
-        <div class="input-group">
-          {{ field(class="form-control", list="customerOptions", autocomplete="off", placeholder="ФИО, название, телефон или ИИН/БИН") }}
-          <a class="btn btn-soft" href="{% if form.order_id %}{{ url_for('main.customer_create', return_to='order_edit', order_id=form.order_id) }}{% else %}{{ url_for('main.customer_create', return_to='order_create') }}{% endif %}">Создать</a>
-          <a class="btn btn-outline-secondary disabled" id="editCustomerLink" href="#">Редактировать</a>
+  <div class="col-lg-6">
+    <div class="app-card p-3 h-100">
+      <h2 class="h5 mb-3">Заказ</h2>
+      <div class="row g-3">
+        <div class="col-md-6">
+          {{ form.order_number.label(class="form-label") }}
+          {{ form.order_number(class="form-control") }}
         </div>
-        <datalist id="customerOptions">
-          {% for customer in customer_options %}
-            <option value="{{ customer.label }}" data-id="{{ customer.id }}"></option>
-          {% endfor %}
-        </datalist>
-        {{ form.customer_id(class="form-select d-none", id="order_customer_id") }}
-        <div class="form-text">Выберите клиента из подсказки или создайте нового.</div>
-        {% for error in form.customer_id.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
-      {% elif field.name == 'item_search' %}
-        {{ field(class="form-control", list="orderItemOptions", autocomplete="off", placeholder="Начните вводить артикул, размер или название") }}
-        <datalist id="orderItemOptions">
-          {% for item in item_options %}
-            <option value="{{ item.label }}" data-id="{{ item.id }}"></option>
-          {% endfor %}
-        </datalist>
-        {{ form.item_id(class="form-select d-none", id="order_item_id") }}
-        <div class="form-text">Введите часть артикула или названия, затем выберите модель из подсказки.</div>
-        {% for error in form.item_id.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
-      {% elif field.type == 'BooleanField' %}
-        <div class="form-check">{{ field(class="form-check-input") }}</div>
-      {% elif field.type == 'SelectField' %}
-        {{ field(class="form-select") }}
-      {% else %}
-        {{ field(class="form-control") }}
-      {% endif %}
-      {% for error in field.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
-    </div>
-  {% endfor %}
-
-  <div class="col-12">
-    <div class="app-card p-3">
-      <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-2">
-        <div>
-          <label class="form-label mb-1" for="order_trailer_id">Конкретный прицеп / VIN</label>
-          <div class="form-text">Список ниже фильтруется по выбранной модели, складу продажи и источнику обеспечения.</div>
+        <div class="col-md-6">
+          {{ form.lead_id.label(class="form-label") }}
+          {{ form.lead_id(class="form-select") }}
         </div>
-        <span class="badge text-bg-secondary" id="trailerCountBadge">0 VIN</span>
+        <div class="col-12">
+          {{ form.customer_search.label(class="form-label") }}
+          <div class="input-group">
+            {{ form.customer_search(class="form-control", list="customerOptions", autocomplete="off", placeholder="ФИО, название, телефон или ИИН/БИН") }}
+            <a class="btn btn-soft" href="{% if form.order_id %}{{ url_for('main.customer_create', return_to='order_edit', order_id=form.order_id) }}{% else %}{{ url_for('main.customer_create', return_to='order_create') }}{% endif %}">Создать</a>
+            <a class="btn btn-outline-secondary disabled" id="editCustomerLink" href="#">Редактировать</a>
+          </div>
+          <datalist id="customerOptions">
+            {% for customer in customer_options %}
+              <option value="{{ customer.label }}" data-id="{{ customer.id }}"></option>
+            {% endfor %}
+          </datalist>
+          {{ form.customer_id(class="d-none", id="order_customer_id") }}
+          {% for error in form.customer_id.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+        </div>
+        <div class="col-md-6">
+          {{ form.warehouse_id.label(class="form-label") }}
+          {{ form.warehouse_id(class="form-select") }}
+        </div>
+        <div class="col-md-6">
+          {{ form.fulfillment_source.label(class="form-label") }}
+          {{ form.fulfillment_source(class="form-select") }}
+        </div>
+        <div class="col-md-4">
+          {{ form.quantity.label(class="form-label") }}
+          {{ form.quantity(class="form-control") }}
+        </div>
+        <div class="col-md-4">
+          {{ form.price.label(class="form-label") }}
+          {{ form.price(class="form-control") }}
+        </div>
+        <div class="col-md-4">
+          {{ form.prepayment_percent.label(class="form-label") }}
+          {{ form.prepayment_percent(class="form-control") }}
+        </div>
+        <div class="col-md-6">
+          {{ form.expected_date.label(class="form-label") }}
+          {{ form.expected_date(class="form-control") }}
+        </div>
+        <div class="col-md-6">
+          {{ form.planned_ship_date.label(class="form-label") }}
+          {{ form.planned_ship_date(class="form-control") }}
+        </div>
+        <div class="col-12">
+          {{ form.assigned_user_id.label(class="form-label") }}
+          {{ form.assigned_user_id(class="form-select") }}
+        </div>
+        <div class="col-12">
+          {{ form.note.label(class="form-label") }}
+          {{ form.note(class="form-control", rows="3") }}
+        </div>
+        <div class="col-12">
+          {{ form.manager_comment.label(class="form-label") }}
+          {{ form.manager_comment(class="form-control", rows="3") }}
+        </div>
       </div>
-      <select name="trailer_id" id="order_trailer_id" class="form-select">
-        <option value="0">— подобрать позже / под заказ —</option>
-        {% for trailer in trailer_options %}
-          <option value="{{ trailer.id }}" data-item-id="{{ trailer.item_id }}" data-warehouse-id="{{ trailer.warehouse_id }}" {% if form.trailer_id.data == trailer.id %}selected{% endif %}>
-            {{ trailer.label }}
-          </option>
-        {% endfor %}
-      </select>
-      {% for error in form.trailer_id.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
     </div>
   </div>
 
-  <div class="col-12">
-    <div class="app-card p-3" id="availabilityCard">
-      <h2 class="h6 mb-3">Доступность по выбранной модели и складу</h2>
-      <div class="row g-3">
-        <div class="col-lg-3"><div class="small text-muted">Свободно сейчас</div><div class="h4 mb-0" data-availability-summary="stock">{{ availability.stock|length if availability else 0 }}</div></div>
-        <div class="col-lg-3"><div class="small text-muted">Заказано на склад</div><div class="h4 mb-0" data-availability-summary="ordered">{{ availability.stock_needs|length if availability else 0 }}</div></div>
-        <div class="col-lg-3"><div class="small text-muted">В производстве</div><div class="h4 mb-0" data-availability-summary="production">{{ availability.production_lines|length if availability else 0 }}</div></div>
-        <div class="col-lg-3"><div class="small text-muted">В пути</div><div class="h4 mb-0" data-availability-summary="inbound">{{ availability.inbound_movements|length if availability else 0 }}</div></div>
+  <div class="col-lg-6">
+    <div class="app-card p-3 h-100" id="laterPanel">
+      <h2 class="h5 mb-2">Подобрать позже</h2>
+      <p class="text-muted mb-0">Заказ сохранится без модели, VIN и заявки в производство.</p>
+    </div>
+
+    <div class="app-card p-3 h-100 d-none" id="stockPanel">
+      <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-3">
+        <div>
+          <h2 class="h5 mb-1">Свободные прицепы</h2>
+          <div class="text-muted small">Выберите конкретный VIN. Менеджер может выбрать прицеп с любого склада.</div>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" value="1" id="showAllWarehouses" checked>
+          <label class="form-check-label" for="showAllWarehouses">Показать все склады</label>
+        </div>
       </div>
-      <div class="table-responsive mt-3">
-        <table class="table table-sm align-middle">
-          <thead><tr><th>Источник</th><th>Количество / VIN</th><th>Срок</th><th>Статус</th></tr></thead>
-          <tbody id="availabilityRows">
-            {% if availability %}
-            {% for need in availability.stock_needs %}
-              <tr><td>Заказано на склад</td><td>{{ need.quantity }} шт.</td><td>{{ need.required_by|date_format }}</td><td><span class="badge text-bg-{{ need.status|status_badge_class }}">{{ need.status|status_label }}</span></td></tr>
-            {% endfor %}
-            {% for line in availability.production_lines %}
-              <tr><td>В производстве</td><td>{{ line.quantity - (line.produced_qty or 0) }} шт.</td><td>{{ line.supply_need.required_by|date_format if line.supply_need else '' }}</td><td><span class="badge text-bg-{{ line.status|status_badge_class }}">{{ line.status|status_label }}</span></td></tr>
-            {% endfor %}
-            {% for unit in availability.produced_units %}
-              <tr><td>Выпущено без VIN</td><td>#{{ unit.id }}</td><td>{{ unit.produced_at|date_format }}</td><td><span class="badge text-bg-warning">{{ unit.status|status_label }}</span></td></tr>
-            {% endfor %}
-            {% for movement in availability.inbound_movements %}
-              <tr><td>В пути</td><td>{{ movement.trailer.vin if movement.trailer else '' }}</td><td>{{ movement.arrival_date|date_format }}</td><td><span class="badge text-bg-primary">{{ movement.status|status_label }}</span></td></tr>
-            {% endfor %}
-            {% if not availability.stock_needs and not availability.production_lines and not availability.produced_units and not availability.inbound_movements %}
-              <tr><td colspan="4" class="text-muted">Будущих поступлений по выбранной модели нет.</td></tr>
-            {% endif %}
+      <div class="table-responsive">
+        <table class="table table-sm align-middle" id="orderTrailerTable">
+          <thead><tr><th>Склад</th><th>VIN</th><th>Артикул</th><th>Наименование</th><th>Статус</th><th class="text-end">Цена</th><th></th></tr></thead>
+          <tbody>
+            {% for trailer in trailer_options %}
+            <tr data-trailer-row data-id="{{ trailer.id }}" data-warehouse-id="{{ trailer.warehouse_id }}" data-price="{{ trailer.price }}">
+              <td>{{ trailer.warehouse }}</td>
+              <td class="fw-semibold">{{ trailer.vin }}</td>
+              <td>{{ trailer.article }}</td>
+              <td>{{ trailer.name }}</td>
+              <td><span class="badge text-bg-{{ trailer.status|status_badge_class }}">{{ trailer.status|status_label }}</span></td>
+              <td class="text-end">{{ trailer.price|money }}</td>
+              <td class="text-end"><button type="button" class="btn btn-sm btn-soft" data-select-trailer="{{ trailer.id }}" data-item-id="{{ trailer.item_id }}">Выбрать</button></td>
+            </tr>
             {% else %}
-              <tr><td colspan="4" class="text-muted">Выберите модель и склад, чтобы увидеть доступность.</td></tr>
-            {% endif %}
+            <tr><td colspan="7" class="text-muted">Свободных прицепов нет.</td></tr>
+            {% endfor %}
           </tbody>
         </table>
       </div>
+      {% for error in form.trailer_id.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+    </div>
+
+    <div class="app-card p-3 h-100 d-none" id="productionPanel">
+      <h2 class="h5 mb-3">Конфигуратор</h2>
+      {% set cfg = request.form %}
+      <div class="row g-3">
+        <div class="col-md-6"><label class="form-label">Группа</label><select class="form-select" name="group_code" data-config-field>{% for item in config_options.groups %}<option value="{{ item.code }}" {% if (cfg.get('group_code') or '002') == item.code %}selected{% endif %}>{{ item.code }} - {{ item.name }}</option>{% endfor %}</select></div>
+        <div class="col-md-6"><label class="form-label">Тип кузова</label><select class="form-select" name="body_execution_code" data-config-field>{% for item in config_options.executions %}<option value="{{ item.code }}" {% if (cfg.get('body_execution_code') or 'BOARD') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+        <div class="col-md-6"><label class="form-label">Размер кузова</label><select class="form-select" name="body_size_code" data-config-field><option value="">—</option>{% for item in config_options.body_sizes %}<option value="{{ item.code }}" {% if cfg.get('body_size_code') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+        <div class="col-md-6"><label class="form-label">Высота борта</label><select class="form-select" name="board_height_code" data-config-field><option value="">—</option>{% for item in config_options.board_heights %}<option value="{{ item.code }}" {% if cfg.get('board_height_code') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+        <div class="col-md-6"><label class="form-label">Колёса</label><select class="form-select" name="wheel_code" data-config-field><option value="">—</option>{% for item in config_options.wheels %}<option value="{{ item.code }}" {% if cfg.get('wheel_code') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+        <div class="col-md-6"><label class="form-label">Ступица</label><select class="form-select" name="hub_code" data-config-field><option value="">—</option>{% for item in config_options.hubs %}<option value="{{ item.code }}" {% if cfg.get('hub_code') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+        <div class="col-md-6"><label class="form-label">Опорное колесо</label><select class="form-select" name="support_wheel_code" data-config-field><option value="">—</option>{% for item in config_options.support_wheels %}<option value="{{ item.code }}" {% if cfg.get('support_wheel_code') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+        <div class="col-md-6"><label class="form-label">Тент</label><select class="form-select" name="tent_code" data-config-field><option value="">—</option>{% for item in config_options.tents %}<option value="{{ item.code }}" {% if cfg.get('tent_code') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+        <div class="col-12">
+          <label class="form-label">Спец. параметры</label>
+          <div class="row g-2">
+            {% for item in config_options.specials %}
+            <div class="col-md-4">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="special_options" value="{{ item.code }}" id="orderSpecial{{ item.id }}" data-config-field {% if item.code in cfg.getlist('special_options') %}checked{% endif %}>
+                <label class="form-check-label" for="orderSpecial{{ item.id }}">{{ item.code }} - {{ item.name }}</label>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      <div class="mt-3" id="configPreview"></div>
     </div>
   </div>
 
@@ -115,32 +161,30 @@
 {% block scripts %}
 <script>
 (function () {
-  const itemInput = document.querySelector('#item_search');
-  const itemSelect = document.querySelector('#order_item_id');
   const customerInput = document.querySelector('#customer_search');
   const customerSelect = document.querySelector('#order_customer_id');
   const editCustomerLink = document.querySelector('#editCustomerLink');
-  const warehouseSelect = document.querySelector('#warehouse_id');
-  const sourceSelect = document.querySelector('#fulfillment_source');
-  const trailerSelect = document.querySelector('#order_trailer_id');
-  const trailerCountBadge = document.querySelector('#trailerCountBadge');
-  const itemOptions = Array.from(document.querySelectorAll('#orderItemOptions option'));
   const customerOptionsList = document.querySelector('#customerOptions');
   let customerOptions = Array.from(document.querySelectorAll('#customerOptions option'));
+  const sourceSelect = document.querySelector('#fulfillment_source');
+  const warehouseSelect = document.querySelector('#warehouse_id');
+  const itemSource = document.querySelector('#orderItemSource');
+  const itemSelect = document.querySelector('#order_item_id');
+  const trailerSelect = document.querySelector('#order_trailer_id');
+  const laterPanel = document.querySelector('#laterPanel');
+  const stockPanel = document.querySelector('#stockPanel');
+  const productionPanel = document.querySelector('#productionPanel');
+  const showAll = document.querySelector('#showAllWarehouses');
+  const preview = document.querySelector('#configPreview');
 
   function syncCustomerId() {
-    if (!customerInput || !customerSelect) return;
     const match = customerOptions.find((option) => option.value === customerInput.value);
     customerSelect.value = match ? match.dataset.id : '0';
     if (editCustomerLink) {
       if (match) {
         const params = new URLSearchParams();
-        {% if form.order_id %}
-        params.set('return_to', 'order_edit');
-        params.set('order_id', '{{ form.order_id }}');
-        {% else %}
-        params.set('return_to', 'order_create');
-        {% endif %}
+        params.set('return_to', {% if form.order_id %}'order_edit'{% else %}'order_create'{% endif %});
+        {% if form.order_id %}params.set('order_id', '{{ form.order_id }}');{% endif %}
         editCustomerLink.href = `/customers/${match.dataset.id}/edit?${params.toString()}`;
         editCustomerLink.classList.remove('disabled');
       } else {
@@ -150,95 +194,119 @@
     }
   }
 
-  let customerSearchTimer = null;
+  let customerTimer = null;
   function refreshCustomerOptions() {
-    if (!customerInput || !customerOptionsList) return;
     const query = customerInput.value.trim();
     if (query.length < 2) {
       syncCustomerId();
       return;
     }
-    window.clearTimeout(customerSearchTimer);
-    customerSearchTimer = window.setTimeout(async () => {
+    clearTimeout(customerTimer);
+    customerTimer = setTimeout(async () => {
       const response = await fetch(`{{ url_for('main.api_customers_search') }}?q=${encodeURIComponent(query)}`);
       if (!response.ok) return;
       const data = await response.json();
-      customerOptionsList.innerHTML = (data.customers || []).map((customer) =>
-        `<option value="${customer.label}" data-id="${customer.id}"></option>`
-      ).join('');
+      customerOptionsList.innerHTML = (data.customers || []).map((customer) => `<option value="${customer.label}" data-id="${customer.id}"></option>`).join('');
       customerOptions = Array.from(document.querySelectorAll('#customerOptions option'));
       syncCustomerId();
     }, 180);
   }
 
-  function syncItemId() {
-    if (!itemInput || !itemSelect) return;
-    const match = itemOptions.find((option) => option.value === itemInput.value);
-    itemSelect.value = match ? match.dataset.id : '0';
+  function setMode() {
+    const mode = sourceSelect.value || 'later';
+    laterPanel.classList.toggle('d-none', mode !== 'later');
+    stockPanel.classList.toggle('d-none', mode !== 'stock');
+    productionPanel.classList.toggle('d-none', mode !== 'production');
+    itemSource.value = mode === 'production' ? 'config' : 'existing';
+    if (mode !== 'stock') {
+      trailerSelect.value = '0';
+    }
+    filterTrailers();
+    const selectedRow = trailerSelect.value !== '0' ? document.querySelector(`[data-trailer-row][data-id="${trailerSelect.value}"]`) : null;
+    if (mode === 'stock' && selectedRow && selectedRow.classList.contains('d-none') && showAll) {
+      showAll.checked = true;
+      filterTrailers();
+    }
+    if (mode === 'production') refreshConfigPreview();
   }
 
   function filterTrailers() {
-    if (!trailerSelect) return;
-    const itemId = itemSelect ? itemSelect.value : '0';
-    const warehouseId = warehouseSelect ? warehouseSelect.value : '0';
-    const source = sourceSelect ? sourceSelect.value : '';
-    let visibleCount = 0;
-
-    Array.from(trailerSelect.options).forEach((option) => {
-      if (!option.value || option.value === '0') {
-        option.hidden = false;
-        return;
+    const mode = sourceSelect.value || 'later';
+    const warehouseId = warehouseSelect.value || '0';
+    const all = showAll && showAll.checked;
+    document.querySelectorAll('[data-trailer-row]').forEach((row) => {
+      let visible = mode === 'stock';
+      if (visible && warehouseId !== '0' && !all) {
+        visible = row.dataset.warehouseId === warehouseId;
       }
-      const sameItem = !itemId || itemId === '0' || option.dataset.itemId === itemId;
-      let sameWarehouse = true;
-      if (warehouseId && warehouseId !== '0') {
-        sameWarehouse = source === 'other_warehouse'
-          ? option.dataset.warehouseId !== warehouseId
-          : option.dataset.warehouseId === warehouseId;
-      }
-      const visible = sameItem && sameWarehouse && source !== 'production';
-      option.hidden = !visible;
-      if (visible) visibleCount += 1;
-      if (option.selected && !visible) trailerSelect.value = '0';
+      row.classList.toggle('d-none', !visible);
+      if (!visible && trailerSelect.value === row.dataset.id) trailerSelect.value = '0';
     });
-    if (trailerCountBadge) trailerCountBadge.textContent = visibleCount + ' VIN';
   }
 
-  async function refreshAvailability() {
-    const itemId = itemSelect ? itemSelect.value : '0';
-    const warehouseId = warehouseSelect ? warehouseSelect.value : '0';
-    const rowsBody = document.querySelector('#availabilityRows');
-    if (!rowsBody) return;
-    if (!itemId || itemId === '0' || !warehouseId || warehouseId === '0') {
-      rowsBody.innerHTML = '<tr><td colspan="4" class="text-muted">Выберите модель и склад, чтобы увидеть доступность.</td></tr>';
-      document.querySelectorAll('[data-availability-summary]').forEach((node) => { node.textContent = '0'; });
-      return;
-    }
-    const response = await fetch(`{{ url_for('main.api_order_availability') }}?item_id=${encodeURIComponent(itemId)}&warehouse_id=${encodeURIComponent(warehouseId)}`);
+  document.querySelectorAll('[data-select-trailer]').forEach((button) => {
+    button.addEventListener('click', () => {
+      trailerSelect.value = button.dataset.selectTrailer;
+      itemSelect.value = button.dataset.itemId || '0';
+      document.querySelectorAll('[data-trailer-row]').forEach((row) => row.classList.remove('table-primary'));
+      button.closest('tr').classList.add('table-primary');
+    });
+  });
+
+  function configParams() {
+    const params = new URLSearchParams();
+    document.querySelectorAll('[data-config-field]').forEach((field) => {
+      if (field.type === 'checkbox') {
+        if (field.checked) params.append(field.name, field.value || '');
+      } else {
+        params.set(field.name, field.value || '');
+      }
+    });
+    return params;
+  }
+
+  function money(value) {
+    return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(Number(value || 0)) + ' ₸';
+  }
+  function trailerRowsHtml(title, rows) {
+    const body = (rows || []).slice(0, 8).map((row) => `<tr><td>${row.warehouse || '—'}</td><td class="fw-semibold">${row.vin || '—'}</td><td>${row.article || '—'}</td><td>${row.name || '—'}</td><td class="text-end">${money(row.price)}</td></tr>`).join('');
+    return `<div class="mt-3"><div class="fw-semibold small mb-1">${title}</div><div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>Склад</th><th>VIN</th><th>Артикул</th><th>Наименование</th><th class="text-end">Цена</th></tr></thead><tbody>${body || '<tr><td colspan="5" class="text-muted">Нет свободных прицепов</td></tr>'}</tbody></table></div></div>`;
+  }
+
+  async function refreshConfigPreview() {
+    if ((sourceSelect.value || '') !== 'production') return;
+    const response = await fetch(`{{ url_for('main.api_trailer_config_preview') }}?${configParams().toString()}`);
     if (!response.ok) return;
     const data = await response.json();
-    const summary = data.summary || {};
-    Object.entries(summary).forEach(([key, value]) => {
-      const node = document.querySelector(`[data-availability-summary="${key}"]`);
-      if (node) node.textContent = value;
-    });
-    if (!data.rows || !data.rows.length) {
-      rowsBody.innerHTML = '<tr><td colspan="4" class="text-muted">Будущих поступлений по выбранной модели нет.</td></tr>';
-      return;
-    }
-    rowsBody.innerHTML = data.rows.map((row) => (
-      `<tr><td>${row.source || ''}</td><td>${row.value || ''}</td><td>${row.date || ''}</td><td>${row.status || ''}</td></tr>`
-    )).join('');
+    const result = data.result || {};
+    const exact = (result.inventory && result.inventory.exact) || [];
+    const body = (result.inventory && result.inventory.body_match) || [];
+    const size = (result.inventory && result.inventory.size_match) || [];
+    preview.innerHTML = `
+      <div class="border rounded p-3 mt-3">
+        <div class="small text-muted">Артикул</div><div class="h5">${result.article || '—'}</div>
+        <div class="small text-muted">Наименование</div><div>${result.name || '—'}</div>
+        <div class="row g-2 mt-2">
+          <div class="col-md-6"><div class="small text-muted">Цена</div><div class="fw-bold">${money(result.price)}</div></div>
+          <div class="col-md-6"><div class="small text-muted">VIN-модификация</div><div class="fw-bold">${result.vin_modification_code || '—'}</div></div>
+          <div class="col-md-6"><div class="small text-muted">Габариты</div><div>${result.overall_dimensions_text || '—'}</div></div>
+          <div class="col-md-6"><div class="small text-muted">Внутренние размеры</div><div>${result.inner_dimensions_text || '—'}</div></div>
+          <div class="col-md-12"><div class="small text-muted">ОТТС</div><div>${result.otss_number || '—'} ${result.otss_type || ''} ${result.otss_modification || ''}</div></div>
+        </div>
+        <div class="mt-3 small"><strong>Точное наличие:</strong> ${exact.length || 0} VIN. <strong>Аналоги по кузову:</strong> ${body.length || 0}. <strong>Похожие по размеру:</strong> ${size.length || 0}.</div>
+        ${trailerRowsHtml('Точное наличие', exact)}
+        ${trailerRowsHtml('Аналоги по кузову и борту', body)}
+        ${trailerRowsHtml('Похожие по размеру кузова', size)}
+      </div>`;
   }
 
-  if (customerInput) customerInput.addEventListener('input', () => { refreshCustomerOptions(); syncCustomerId(); });
-  if (itemInput) itemInput.addEventListener('input', () => { syncItemId(); filterTrailers(); refreshAvailability(); });
-  if (warehouseSelect) warehouseSelect.addEventListener('change', () => { filterTrailers(); refreshAvailability(); });
-  if (sourceSelect) sourceSelect.addEventListener('change', filterTrailers);
+  customerInput.addEventListener('input', () => { refreshCustomerOptions(); syncCustomerId(); });
+  sourceSelect.addEventListener('change', setMode);
+  warehouseSelect.addEventListener('change', filterTrailers);
+  if (showAll) showAll.addEventListener('change', filterTrailers);
+  document.querySelectorAll('[data-config-field]').forEach((field) => field.addEventListener('change', refreshConfigPreview));
   syncCustomerId();
-  syncItemId();
-  filterTrailers();
-  refreshAvailability();
+  setMode();
 })();
 </script>
 {% endblock %}

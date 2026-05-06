@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+
+{% block title %}Справочники конфигуратора прицепов{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h1 class="h4 mb-1">Справочники конфигуратора прицепов</h1>
+        <div class="text-muted small">Справочники и матрицы для сборки артикула, цены, габаритов и ОТТС/VIN.</div>
+    </div>
+    <div class="d-flex gap-2">
+        <a href="{{ url_for('main.manager_trailer_picker') }}" class="btn btn-outline-primary">
+            <i class="bi bi-ui-checks-grid me-1"></i>Подбор прицепа
+        </a>
+        <a href="{{ url_for('main.trailer_config_catalog_create', section=active_section) }}" class="btn btn-primary">
+            <i class="bi bi-plus-lg me-1"></i>Добавить
+        </a>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-lg-3">
+        <div class="list-group">
+            {% for item in sections %}
+                <a class="list-group-item list-group-item-action {{ 'active' if item.key == active_section else '' }}"
+                   href="{{ url_for('main.trailer_config_catalog_section', section=item.key) }}">
+                    {{ loop.index }}. {{ item.title }}
+                </a>
+            {% endfor %}
+        </div>
+    </div>
+    <div class="col-lg-9">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>{{ section.title }}</span>
+                <span class="badge bg-secondary">{{ rows|length }}</span>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-sm table-striped align-middle mb-0">
+                    <thead>
+                    <tr>
+                        <th>ID</th>
+                        {% for field in section.fields %}
+                            <th>{{ field_labels.get(field, field) }}</th>
+                        {% endfor %}
+                        <th></th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for row in rows %}
+                        <tr>
+                            <td>{{ row.id }}</td>
+                            {% for field in section.fields %}
+                                <td>{{ value_getter(row, field) }}</td>
+                            {% endfor %}
+                            <td class="text-end text-nowrap">
+                                <a href="{{ url_for('main.trailer_config_catalog_edit', section=active_section, row_id=row.id) }}"
+                                   class="btn btn-sm btn-outline-primary">
+                                    <i class="bi bi-pencil"></i>
+                                </a>
+                                {% if row.is_active is defined %}
+                                <form class="d-inline" method="post"
+                                      action="{{ url_for('main.trailer_config_catalog_toggle', section=active_section, row_id=row.id) }}">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button class="btn btn-sm btn-outline-secondary" type="submit">
+                                        {% if row.is_active %}<i class="bi bi-eye-slash"></i>{% else %}<i class="bi bi-eye"></i>{% endif %}
+                                    </button>
+                                </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% else %}
+                        <tr>
+                            <td colspan="{{ section.fields|length + 2 }}" class="text-muted text-center py-4">Записей пока нет.</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

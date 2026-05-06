@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+
+{% block title %}Подбор прицепа{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h1 class="h4 mb-1">Подбор прицепа</h1>
+        <div class="text-muted small">Рабочий подбор комплектации, цены, ОТТС и VIN-модификации.</div>
+    </div>
+    <a href="{{ url_for('main.trailer_config_catalog') }}" class="btn btn-outline-secondary">Справочники</a>
+</div>
+
+<form method="get" class="card p-3 mb-3">
+    <div class="row">
+        <div class="col-md-3 mb-3">
+            <label class="form-label">Группа</label>
+            <select class="form-select" name="group_code">
+                {% for item in groups %}
+                    <option value="{{ item.code }}" {% if config.group_code == item.code %}selected{% endif %}>{{ item.code }} - {{ item.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-3 mb-3">
+            <label class="form-label">Размер кузова</label>
+            <select class="form-select" name="body_size_code">
+                {% for item in body_sizes %}
+                    <option value="{{ item.code }}" {% if config.body_size_code == item.code %}selected{% endif %}>{{ item.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-3 mb-3">
+            <label class="form-label">Высота борта</label>
+            <select class="form-select" name="board_height_code">
+                {% for item in board_heights %}
+                    <option value="{{ item.code }}" {% if config.board_height_code == item.code %}selected{% endif %}>{{ item.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-3 mb-3">
+            <label class="form-label">Тип кузова</label>
+            <select class="form-select" name="body_execution_code">
+                {% for item in executions %}
+                    <option value="{{ item.code }}" {% if config.body_execution_code == item.code %}selected{% endif %}>{{ item.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-3 mb-3">
+            <label class="form-label">Колёса</label>
+            <select class="form-select" name="wheel_code">
+                <option value="">— не выбрано —</option>
+                {% for item in wheels %}
+                    <option value="{{ item.code }}" {% if config.wheel_code == item.code %}selected{% endif %}>{{ item.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-3 mb-3">
+            <label class="form-label">Ступица</label>
+            <select class="form-select" name="hub_code">
+                <option value="">— не выбрано —</option>
+                {% for item in hubs %}
+                    <option value="{{ item.code }}" {% if config.hub_code == item.code %}selected{% endif %}>{{ item.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-3 mb-3">
+            <label class="form-label">Опорное колесо</label>
+            <select class="form-select" name="support_wheel_code">
+                {% for item in support_wheels %}
+                    <option value="{{ item.code }}" {% if config.support_wheel_code == item.code %}selected{% endif %}>{{ item.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-3 mb-3">
+            <label class="form-label">Тент</label>
+            <select class="form-select" name="tent_code">
+                {% for item in tents %}
+                    <option value="{{ item.code }}" {% if config.tent_code == item.code %}selected{% endif %}>{{ item.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label">Спец. параметры</label>
+        <div class="d-flex flex-wrap gap-3">
+            {% for item in specials %}
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="special_options" value="{{ item.code }}" id="special-{{ item.code }}"
+                           {% if item.code in config.special_options %}checked{% endif %}>
+                    <label class="form-check-label" for="special-{{ item.code }}">{{ item.name }}</label>
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div>
+        <button type="submit" class="btn btn-primary">Рассчитать</button>
+    </div>
+</form>
+
+{% if option_warnings %}
+    <div class="alert alert-warning">
+        {% for warning in option_warnings %}
+            <div>{{ warning }}</div>
+        {% endfor %}
+    </div>
+{% endif %}
+
+<div class="row g-3">
+    <div class="col-lg-6">
+        <div class="card p-3 mb-3">
+            <h2 class="h6 text-muted mb-2">Артикул</h2>
+            <div class="fs-4 fw-bold">{{ result.article }}</div>
+        </div>
+
+        <div class="card p-3 mb-3">
+            <h2 class="h6 text-muted mb-2">Наименование</h2>
+            <div>{{ result.name }}</div>
+        </div>
+
+        <div class="card p-3 mb-3">
+            <h2 class="h6 text-muted mb-2">Габариты</h2>
+            <div><span class="text-muted">Габариты:</span> {{ result.dimensions.overall_dimensions_text if result.dimensions else '' }}</div>
+            <div><span class="text-muted">Внутренние размеры:</span> {{ result.dimensions.inner_dimensions_text if result.dimensions else '' }}</div>
+        </div>
+
+        <div class="card p-3">
+            <h2 class="h6 text-muted mb-2">ОТТС / VIN</h2>
+            <dl class="row mb-0">
+                <dt class="col-sm-5">ОТТС</dt>
+                <dd class="col-sm-7">{{ result.otss.otss_number if not result.otss.error else '' }}</dd>
+                <dt class="col-sm-5">Тип ОТТС</dt>
+                <dd class="col-sm-7">{{ result.otss.otss_type if not result.otss.error else '' }}</dd>
+                <dt class="col-sm-5">Модификация ОТТС</dt>
+                <dd class="col-sm-7">{{ result.otss.otss_modification if not result.otss.error else '' }}</dd>
+                <dt class="col-sm-5">VIN-модификация</dt>
+                <dd class="col-sm-7">{{ result.otss.vin_modification_code if not result.otss.error else '' }}</dd>
+                <dt class="col-sm-5">Срок действия ОТТС</dt>
+                <dd class="col-sm-7">
+                    {% if result.otss.otts_valid_from is defined and result.otss.otts_valid_from and result.otss.otts_valid_to %}
+                        {{ result.otss.otts_valid_from|date_format }} — {{ result.otss.otts_valid_to|date_format }}
+                    {% endif %}
+                </dd>
+            </dl>
+        </div>
+    </div>
+    <div class="col-lg-6">
+        <div class="card p-3 mb-3">
+            <h2 class="h6 text-muted mb-2">Проверки</h2>
+            {% if result.errors %}
+                <div class="alert alert-danger">
+                    {% for error in result.errors %}
+                        <div>{{ error }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+            {% if result.warnings %}
+                <div class="alert alert-warning">
+                    {% for warning in result.warnings %}
+                        <div>{{ warning }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+            {% if not result.errors and not result.warnings and not result.price.missing_components %}
+                <div class="alert alert-success mb-0">Конфигурация заполнена без ошибок.</div>
+            {% endif %}
+        </div>
+
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>Цена</span>
+                <span class="fs-5 fw-bold">Итого: {{ result.price.total_price|money }}</span>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-sm mb-0">
+                    <thead><tr><th>Наименование</th><th class="text-end">Сумма</th></tr></thead>
+                    <tbody>
+                    {% for item in result.price.price_breakdown %}
+                        <tr>
+                            <td>{{ item.name }}</td>
+                            <td class="text-end">{{ item.amount|money }}</td>
+                        </tr>
+                    {% endfor %}
+                    {% for missing in result.price.missing_components %}
+                        <tr class="table-warning">
+                            <td colspan="2">{{ missing }}</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

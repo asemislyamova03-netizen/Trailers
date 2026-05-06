@@ -2,10 +2,21 @@
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
 <h1 class="h3 mb-3">{{ title }}</h1>
-<form method="post" class="row g-3">
+<form method="post" class="row g-3" id="leadForm">
   {{ form.hidden_tag() }}
+  {% set item_source = request.form.get('item_source') or item_source_initial or 'config' %}
+  <div class="col-12">
+    <div class="app-card p-3">
+      <label class="form-label" for="leadItemSource">Что интересует клиента</label>
+      <select class="form-select" name="item_source" id="leadItemSource">
+        <option value="config" {% if item_source == 'config' %}selected{% endif %}>Подобрать через конфигуратор</option>
+        <option value="existing" {% if item_source == 'existing' %}selected{% endif %}>Выбрать существующую модель</option>
+        <option value="unknown" {% if item_source == 'unknown' %}selected{% endif %}>Пока неизвестно</option>
+      </select>
+    </div>
+  </div>
   {% for field in form if field.name not in ['csrf_token', 'form_token', 'submit', 'desired_item_id'] %}
-    <div class="{% if field.name in ['text', 'comment', 'desired_specs'] %}col-12{% else %}col-md-6{% endif %}">
+    <div class="{% if field.name in ['text', 'comment', 'desired_specs'] %}col-12{% else %}col-md-6{% endif %}" {% if field.name == 'desired_item_search' %}id="leadExistingItemBlock"{% endif %}>
       {{ field.label(class="form-label") }}
       {% if field.name == 'desired_item_search' %}
         {{ field(class="form-control", list="leadItemOptions", autocomplete="off", placeholder="Начните вводить артикул, размер или название") }}
@@ -25,6 +36,36 @@
       {% for error in field.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
     </div>
   {% endfor %}
+  <div class="col-12 d-none" id="leadConfigBlock">
+    <div class="app-card p-3">
+      <h2 class="h5 mb-3">Конфигуратор</h2>
+      {% set cfg = request.form %}
+      <div class="row g-3">
+        <div class="col-md-3"><label class="form-label">Группа</label><select class="form-select" name="group_code" data-config-field>{% for item in config_options.groups %}<option value="{{ item.code }}" {% if (cfg.get('group_code') or '002') == item.code %}selected{% endif %}>{{ item.code }} - {{ item.name }}</option>{% endfor %}</select></div>
+        <div class="col-md-3"><label class="form-label">Тип кузова</label><select class="form-select" name="body_execution_code" data-config-field>{% for item in config_options.executions %}<option value="{{ item.code }}" {% if (cfg.get('body_execution_code') or 'BOARD') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+        <div class="col-md-3"><label class="form-label">Размер кузова</label><select class="form-select" name="body_size_code" data-config-field><option value="">—</option>{% for item in config_options.body_sizes %}<option value="{{ item.code }}" {% if cfg.get('body_size_code') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+        <div class="col-md-3"><label class="form-label">Высота борта</label><select class="form-select" name="board_height_code" data-config-field><option value="">—</option>{% for item in config_options.board_heights %}<option value="{{ item.code }}" {% if cfg.get('board_height_code') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+        <div class="col-md-3"><label class="form-label">Колёса</label><select class="form-select" name="wheel_code" data-config-field><option value="">—</option>{% for item in config_options.wheels %}<option value="{{ item.code }}" {% if cfg.get('wheel_code') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+        <div class="col-md-3"><label class="form-label">Ступица</label><select class="form-select" name="hub_code" data-config-field><option value="">—</option>{% for item in config_options.hubs %}<option value="{{ item.code }}" {% if cfg.get('hub_code') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+        <div class="col-md-3"><label class="form-label">Опорное колесо</label><select class="form-select" name="support_wheel_code" data-config-field><option value="">—</option>{% for item in config_options.support_wheels %}<option value="{{ item.code }}" {% if cfg.get('support_wheel_code') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+        <div class="col-md-3"><label class="form-label">Тент</label><select class="form-select" name="tent_code" data-config-field><option value="">—</option>{% for item in config_options.tents %}<option value="{{ item.code }}" {% if cfg.get('tent_code') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+        <div class="col-12">
+          <label class="form-label">Спец. параметры</label>
+          <div class="row g-2">
+            {% for item in config_options.specials %}
+            <div class="col-md-4">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="special_options" value="{{ item.code }}" id="leadSpecial{{ item.id }}" data-config-field {% if item.code in cfg.getlist('special_options') %}checked{% endif %}>
+                <label class="form-check-label" for="leadSpecial{{ item.id }}">{{ item.code }} — {{ item.name }}</label>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      <div class="mt-3" id="leadConfigPreview"></div>
+    </div>
+  </div>
   <div class="col-12">
     {{ form.submit(class="btn btn-primary") }}
     <a class="btn btn-outline-secondary" href="{{ url_for('main.leads_list') }}">Назад</a>
@@ -38,11 +79,68 @@
   const itemInput = document.querySelector('#desired_item_search');
   const itemSelect = document.querySelector('#lead_desired_item_id');
   const options = Array.from(document.querySelectorAll('#leadItemOptions option'));
-  if (!itemInput || !itemSelect) return;
-  itemInput.addEventListener('input', () => {
+  const sourceSelect = document.querySelector('#leadItemSource');
+  const existingBlock = document.querySelector('#leadExistingItemBlock');
+  const configBlock = document.querySelector('#leadConfigBlock');
+  const preview = document.querySelector('#leadConfigPreview');
+
+  function syncItem() {
     const match = options.find((option) => option.value === itemInput.value);
     itemSelect.value = match ? match.dataset.id : '0';
-  });
+  }
+  function money(value) {
+    return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(Number(value || 0)) + ' ₸';
+  }
+  function trailerRowsHtml(title, rows) {
+    const body = (rows || []).slice(0, 8).map((row) => `<tr><td>${row.warehouse || '—'}</td><td class="fw-semibold">${row.vin || '—'}</td><td>${row.article || '—'}</td><td>${row.name || '—'}</td><td class="text-end">${money(row.price)}</td></tr>`).join('');
+    return `<div class="mt-3"><div class="fw-semibold small mb-1">${title}</div><div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>Склад</th><th>VIN</th><th>Артикул</th><th>Наименование</th><th class="text-end">Цена</th></tr></thead><tbody>${body || '<tr><td colspan="5" class="text-muted">Нет свободных прицепов</td></tr>'}</tbody></table></div></div>`;
+  }
+  function configParams() {
+    const params = new URLSearchParams();
+    document.querySelectorAll('[data-config-field]').forEach((field) => {
+      if (field.type === 'checkbox') {
+        if (field.checked) params.append(field.name, field.value || '');
+      } else {
+        params.set(field.name, field.value || '');
+      }
+    });
+    return params;
+  }
+  async function refreshConfigPreview() {
+    if (sourceSelect.value !== 'config') return;
+    const response = await fetch(`{{ url_for('main.api_trailer_config_preview') }}?${configParams().toString()}`);
+    if (!response.ok) return;
+    const data = await response.json();
+    const result = data.result || {};
+    const exact = (result.inventory && result.inventory.exact) || [];
+    const body = (result.inventory && result.inventory.body_match) || [];
+    const size = (result.inventory && result.inventory.size_match) || [];
+    preview.innerHTML = `<div class="border rounded p-3">
+      <div class="small text-muted">Артикул</div><div class="h5">${result.article || '—'}</div>
+      <div class="small text-muted">Наименование</div><div>${result.name || '—'}</div>
+      <div class="row g-2 mt-2">
+        <div class="col-md-3"><div class="small text-muted">Цена</div><div class="fw-bold">${money(result.price)}</div></div>
+        <div class="col-md-3"><div class="small text-muted">VIN-модификация</div><div>${result.vin_modification_code || '—'}</div></div>
+        <div class="col-md-3"><div class="small text-muted">Габариты</div><div>${result.overall_dimensions_text || '—'}</div></div>
+        <div class="col-md-3"><div class="small text-muted">ОТТС</div><div>${result.otss_number || '—'}</div></div>
+      </div>
+      <div class="mt-3 small"><strong>Точное наличие:</strong> ${exact.length || 0}. <strong>Аналоги по кузову:</strong> ${body.length || 0}. <strong>Похожие по размеру:</strong> ${size.length || 0}.</div>
+      ${trailerRowsHtml('Точное наличие', exact)}
+      ${trailerRowsHtml('Аналоги по кузову и борту', body)}
+      ${trailerRowsHtml('Похожие по размеру кузова', size)}
+    </div>`;
+  }
+  function setSource() {
+    const isConfig = sourceSelect.value === 'config';
+    existingBlock.classList.toggle('d-none', isConfig || sourceSelect.value === 'unknown');
+    configBlock.classList.toggle('d-none', !isConfig);
+    if (isConfig) refreshConfigPreview();
+  }
+  if (itemInput && itemSelect) itemInput.addEventListener('input', syncItem);
+  sourceSelect.addEventListener('change', setSource);
+  document.querySelectorAll('[data-config-field]').forEach((field) => field.addEventListener('change', refreshConfigPreview));
+  syncItem();
+  setSource();
 })();
 </script>
 {% endblock %}

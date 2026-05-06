@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}VIN {{ row.vin_full or row.serial7 }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+  <div>
+    <h1 class="h3 mb-1">{{ row.vin_full or row.serial7 }}</h1>
+    <div class="text-muted">Карточка VIN / serial7</div>
+  </div>
+  <a class="btn btn-soft" href="{{ url_for('main.vin_registry_list') }}">К реестру</a>
+</div>
+
+{% if row.docs_issued_at and not row.trailer_id %}
+<div class="alert alert-warning">
+  Документы выданы по VIN, но физический прицеп ещё не привязан. Производство должно нанести именно этот VIN.
+</div>
+{% endif %}
+
+<div class="row g-3 mb-3">
+  <div class="col-lg-6">
+    <div class="app-card p-3 h-100">
+      <h2 class="h5">Данные VIN</h2>
+      <dl class="row mb-0">
+        <dt class="col-5">VIN</dt><dd class="col-7">{{ row.vin_full or 'не сформирован' }}</dd>
+        <dt class="col-5">serial7</dt><dd class="col-7">{{ row.serial7 }}</dd>
+        <dt class="col-5">Статус</dt><dd class="col-7"><span class="badge text-bg-{{ row.status|status_badge_class }}">{{ row.status|status_label }}</span></dd>
+        <dt class="col-5">Модификация</dt><dd class="col-7">{{ row.vin_modification_code or '' }}</dd>
+        <dt class="col-5">Год</dt><dd class="col-7">{{ row.year_code or '' }}</dd>
+        <dt class="col-5">Документы</dt><dd class="col-7">{% if row.docs_issued_at %}<span class="badge text-bg-success">выданы</span> {{ row.docs_issued_at|date_format }}{% else %}<span class="text-muted">не выданы</span>{% endif %}</dd>
+        <dt class="col-5">Источник</dt><dd class="col-7">{{ row.source or '' }}</dd>
+        <dt class="col-5">Комментарий</dt><dd class="col-7">{{ row.comment or '' }}</dd>
+      </dl>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="app-card p-3 h-100">
+      <h2 class="h5">Связи</h2>
+      <dl class="row mb-0">
+        <dt class="col-5">Заказ</dt><dd class="col-7">{% if row.customer_order %}<a href="{{ url_for('main.order_detail', order_id=row.customer_order.id) }}">{{ row.customer_order.order_number }}</a>{% else %}<span class="text-muted">нет</span>{% endif %}</dd>
+        <dt class="col-5">Договор</dt><dd class="col-7">{% if row.sales_contract %}<div class="fw-semibold">№ {{ row.sales_contract.contract_number or row.sales_contract.id }}</div>{% if row.sales_contract.contract_date %}<div class="small text-muted">{{ row.sales_contract.contract_date|date_format }}</div>{% endif %}{% else %}<span class="text-muted">нет</span>{% endif %}</dd>
+        <dt class="col-5">Документы по заказу</dt><dd class="col-7">{% if row.docs_issued_order %}<a href="{{ url_for('main.order_detail', order_id=row.docs_issued_order.id) }}">{{ row.docs_issued_order.order_number }}</a>{% else %}<span class="text-muted">нет</span>{% endif %}</dd>
+        <dt class="col-5">Клиент</dt><dd class="col-7">{% if row.customer_order and row.customer_order.customer %}{{ row.customer_order.customer.name }}{% elif row.sales_contract and row.sales_contract.customer %}{{ row.sales_contract.customer.name }}{% endif %}</dd>
+        <dt class="col-5">Заявка</dt><dd class="col-7">{{ row.supply_need_id or '' }}</dd>
+        <dt class="col-5">Прицеп</dt><dd class="col-7">{{ row.trailer.vin if row.trailer else '' }}</dd>
+        <dt class="col-5">Резерв</dt><dd class="col-7">{{ row.reserved_by_user.full_name if row.reserved_by_user else '' }} {{ row.reserved_at|date_format if row.reserved_at else '' }}</dd>
+      </dl>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3 mb-3">
+  {% if row.status == 'free' %}
+  <div class="col-lg-4">
+    <div class="app-card p-3 h-100">
+      <h3 class="h6">Зарезервировать под заказ</h3>
+      <form method="post" action="{{ url_for('main.vin_registry_reserve', vin_id=row.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label class="form-label">Заказ</label>
+        <select name="customer_order_id" class="form-select mb-2">{% for order in orders %}<option value="{{ order.id }}">{{ order.order_number }} — {{ order.customer.name if order.customer else '' }}</option>{% endfor %}</select>
+        <label class="form-label">Код года</label>
+        <input name="year_code" class="form-control mb-2" value="{{ row.year_code or 'T' }}" maxlength="1">
+        <label class="form-label">Комментарий</label>
+        <input name="comment" class="form-control mb-2">
+        <button class="btn btn-orange">Зарезервировать</button>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+  {% if row.status == 'reserved' and not row.docs_issued_at and not row.trailer_id %}
+  <div class="col-lg-4">
+    <div class="app-card p-3 h-100">
+      <h3 class="h6">Отменить резерв</h3>
+      <form method="post" action="{{ url_for('main.vin_registry_cancel_reservation', vin_id=row.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input name="comment" class="form-control mb-2" placeholder="Причина">
+        <button class="btn btn-outline-danger">Отменить резерв</button>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+  {% if row.status in ['free', 'reserved'] and row.vin_full %}
+  <div class="col-lg-4">
+    <div class="app-card p-3 h-100">
+      <h3 class="h6">Привязать к прицепу</h3>
+      <form method="post" action="{{ url_for('main.vin_registry_assign', vin_id=row.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <select name="trailer_id" class="form-select mb-2">{% for trailer in trailers %}<option value="{{ trailer.id }}">{{ trailer.vin }} — {{ trailer.item.article if trailer.item else '' }} — {{ trailer.warehouse.name if trailer.warehouse else '' }}</option>{% endfor %}</select>
+        <input name="comment" class="form-control mb-2" placeholder="Комментарий">
+        <button class="btn btn-soft">Привязать</button>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+  {% if row.status == 'assigned' %}
+  <div class="col-lg-4">
+    <div class="app-card p-3 h-100">
+      <h3 class="h6">Подтвердить нанесение</h3>
+      <form method="post" action="{{ url_for('main.vin_registry_confirm', vin_id=row.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input name="comment" class="form-control mb-2" placeholder="Комментарий">
+        <button class="btn btn-orange">Подтвердить</button>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+  {% if not row.docs_issued_at and row.status not in ['assigned', 'confirmed', 'void'] %}
+  <div class="col-lg-4">
+    <div class="app-card p-3 h-100">
+      <h3 class="h6">Аннулировать</h3>
+      <form method="post" action="{{ url_for('main.vin_registry_void', vin_id=row.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input name="comment" class="form-control mb-2" placeholder="Причина" required>
+        <button class="btn btn-outline-danger">Аннулировать</button>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<div class="app-card p-3">
+  <h2 class="h5">История</h2>
+  <table class="table table-sm">
+    <thead><tr><th>Дата</th><th>Событие</th><th>Статус</th><th>Пользователь</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      {% for event in events %}
+      <tr><td>{{ event.created_at|date_format }}</td><td>{{ event.event_type|status_label }}</td><td>{{ event.old_status or '' }} → {{ event.new_status or '' }}</td><td>{{ event.user.full_name if event.user else '' }}</td><td>{{ event.comment or '' }}</td></tr>
+      {% else %}
+      <tr><td colspan="5" class="text-muted">Истории пока нет.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
