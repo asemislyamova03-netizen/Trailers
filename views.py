@@ -3782,6 +3782,55 @@ def _cancel_supply_need_and_production_lines(need: SupplyNeed, reason: str, user
         if production_request and all((line.status or '').upper() == 'CANCELLED' for line in production_request.lines):
             production_request.status = 'CANCELLED'
 
+def _attach_produced_unit_to_existing_trailer(unit: ProducedUnit, trailer: Trailer, order: CustomerOrder | None, vin_registry_row: VinRegistry | None, user_id: int | None = None) -> tuple[bool, str]:
+    if not trailer.vin:
+        return False, 'У существующего прицепа нет VIN.'
+    if trailer.item_id != unit.item_id:
+        return False, 'Существующий прицеп с этим VIN не соответствует модели выпуска.'
+    linked_unit = getattr(trailer, 'produced_unit', None)
+    if linked_unit and linked_unit.id != unit.id:
+        return False, f'Этот VIN уже связан с выпуском ProducedUnit #{linked_unit.id}.'
+    if order:
+        if order.trailer_id and order.trailer_id != trailer.id:
+            return False, 'У заказа уже закреплён другой прицеп.'
+        other_order = _active_order_for_trailer(trailer.id, exclude_order_id=order.id)
+        if other_order:
+            return False, f'Этот VIN уже закреплён за заказом {other_order.order_number}.'
+    else:
+        other_order = _active_order_for_trailer(trailer.id)
+        if other_order:
+            return False, f'Этот VIN уже закреплён за заказом {other_order.order_number}.'
+
+    unit.status = 'vin_assigned'
+    unit.trailer_id = trailer.id
+    if order:
+        unit.order_id = order.id
+        if not order.trailer_id:
+            order.trailer_id = trailer.id
+        if order.status != 'cancelled':
+            _refresh_order_status(order)
+        add_order_event(
+            order,
+            'trailer_assigned',
+            new_value=trailer.vin,
+            comment=f'Выпуск производства #{unit.id} связан с уже существующим Trailer #{trailer.id}. Дубликат прицепа не создавался.',
+        )
+
+    if vin_registry_row:
+        old_vin_status = vin_registry_row.status
+        vin_registry_row.trailer_id = trailer.id
+        vin_registry_row.status = 'assigned' if vin_registry_row.status != 'confirmed' else vin_registry_row.status
+        vin_registry_row.assigned_by_user_id = user_id
+        vin_registry_row.assigned_at = vin_registry_row.assigned_at or datetime.utcnow()
+        if order and not vin_registry_row.customer_order_id:
+            vin_registry_row.customer_order_id = order.id
+        line = unit.production_request_line
+        if line and line.supply_need and not vin_registry_row.supply_need_id:
+            vin_registry_row.supply_need_id = line.supply_need.id
+        _add_vin_event(vin_registry_row, 'assigned', old_vin_status, vin_registry_row.status, comment='VIN связан с выпуском производства через существующий Trailer')
+
+    return True, 'Выпуск производства связан с уже существующим прицепом. Новый Trailer не создавался.'
+
 def get_or_create_configured_item(config_result: dict) -> Item:
     article = (config_result.get('article') or '').strip()
     if not article:
@@ -5086,7 +5135,7 @@ def supply_need_cleanup_production(need_id):
 @login_required
 def supply_need_release_order_reserve(need_id):
     need = SupplyNeed.query.get_or_404(need_id)
-    if not (current_user.is_admin or current_user.is_director or current_user.is_manager):
+    if not (current_user.is_admin or current_user.is_director or current_user.is_manager or current_user.is_logistics):
         abort(403)
     reason = (request.form.get('reason') or '').strip()
     if not reason:
@@ -5100,6 +5149,21 @@ def supply_need_release_order_reserve(need_id):
     if order.documents_issued or order.is_shipped or order.trailer_id:
         flash('Нельзя снять резерв: по заказу уже есть документы / прицеп / отгрузка.', 'danger')
         return redirect(request.referrer or url_for('main.stock_replenishment_list'))
+    if active_vin and (order.status or '').lower() in ('cancelled', 'canceled') and active_vin.status == 'reserved' and not active_vin.docs_issued_at and not active_vin.trailer_id:
+        old_vin_status = active_vin.status
+        active_vin.customer_order_id = None
+        active_vin.supply_need_id = None
+        active_vin.reserved_by_user_id = None
+        active_vin.reserved_at = None
+        active_vin.status = 'free'
+        active_vin.vin_full = None
+        active_vin.vin_modification_code = None
+        active_vin.year_code = None
+        if order.reserved_vin_registry_id == active_vin.id:
+            order.reserved_vin_registry_id = None
+        _add_vin_event(active_vin, 'reservation_cancelled', old_vin_status, active_vin.status, comment=f'Резерв VIN отменён при снятии резерва производства. Причина: {reason}')
+        add_order_event(order, 'trailer_reserved', old_value=active_vin.serial7, new_value='VIN reserve cancelled', comment=f'Резерв VIN отменён при снятии резерва производства. Причина: {reason}')
+        active_vin = None
     if active_vin:
         if active_vin.docs_issued_at:
             flash('По заказу уже выданы документы по VIN. Требуется отдельная процедура отмены документов.', 'danger')
@@ -7091,17 +7155,20 @@ def logistics_assign_vin(unit_id):
             flash('Производственный склад не найден. В справочнике складов отметьте нужный склад как производственный.', 'danger')
             return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row)
         vin = reserved_vin_row.vin_full if reserved_vin_row else (form.vin.data or '').strip().upper()
-        if Trailer.query.filter_by(vin=vin).first():
-            form.vin.errors.append('Такой VIN уже существует.')
-            return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row)
+        line = unit.production_request_line
+        order = unit.order if unit.order_id else None
+        if not order and line and line.supply_need:
+            order = line.supply_need.order
+        existing_trailer = Trailer.query.filter_by(vin=vin).first()
         vin_registry_row = reserved_vin_row
+        parsed = None
         if not vin_registry_row:
             parsed, error = _parse_vin_full(vin)
             if error:
                 form.vin.errors.append(error)
                 return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row)
             vin_registry_row = VinRegistry.query.filter(or_(VinRegistry.vin_full == vin, VinRegistry.serial7 == parsed['serial7'])).first()
-            if vin_registry_row and vin_registry_row.status not in ('free', 'reserved'):
+            if vin_registry_row and not existing_trailer and vin_registry_row.status not in ('free', 'reserved'):
                 form.vin.errors.append('Этот VIN уже занят в реестре.')
                 return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row)
             if not vin_registry_row:
@@ -7117,10 +7184,15 @@ def logistics_assign_vin(unit_id):
         idem_key, duplicate = _reserve_idempotency_key()
         if duplicate:
             return _duplicate_redirect(idem_key, url_for('main.logistics_workspace'))
-        line = unit.production_request_line
-        order = unit.order if unit.order_id else None
-        if not order and line and line.supply_need:
-            order = line.supply_need.order
+        if existing_trailer:
+            ok, message = _attach_produced_unit_to_existing_trailer(unit, existing_trailer, order, vin_registry_row, current_user.id)
+            if not ok:
+                form.vin.errors.append(message)
+                return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row)
+            _finish_idempotency(idem_key, 'ProducedUnit', unit.id)
+            db.session.commit()
+            flash(message, 'success')
+            return redirect(url_for('main.logistics_workspace'))
         trailer_status = 'IN_STOCK'
         if order:
             trailer_status = 'SOLD' if order.documents_issued or order.status == 'sold_not_shipped' else 'RESERVED'
