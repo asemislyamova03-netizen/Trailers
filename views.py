@@ -3896,9 +3896,14 @@ def _attach_produced_unit_to_existing_trailer(unit: ProducedUnit, trailer: Trail
         return False, 'У существующего прицепа нет VIN.'
     if trailer.item_id != unit.item_id:
         return False, 'Существующий прицеп с этим VIN не соответствует модели выпуска.'
-    linked_unit = getattr(trailer, 'produced_unit', None)
-    if linked_unit and linked_unit.id != unit.id:
-        return False, f'Этот VIN уже связан с выпуском ProducedUnit #{linked_unit.id}.'
+    linked_units = getattr(trailer, 'produced_unit', None)
+    if linked_units is None:
+        linked_units = []
+    elif isinstance(linked_units, ProducedUnit):
+        linked_units = [linked_units]
+    for linked_unit in linked_units:
+        if linked_unit.id != unit.id:
+            return False, f'Этот VIN уже связан с выпуском ProducedUnit #{linked_unit.id}.'
     if order:
         if order.trailer_id and order.trailer_id != trailer.id:
             return False, 'У заказа уже закреплён другой прицеп.'
