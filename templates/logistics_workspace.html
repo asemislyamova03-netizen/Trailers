@@ -143,6 +143,7 @@
                 {% endif %}
               </td>
               <td class="text-end">
+                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.produced_unit_change_item', unit_id=row.unit.id) }}">Комплектация</a>
                 {% if row.vin_conflict_trailer %}
                   <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.trailers_list', vin=row.vin_conflict_vin) }}">Открыть прицеп</a>
                 {% else %}
@@ -196,6 +197,7 @@
           <td>{% if row.order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=row.order.id) }}">{{ row.order.order_number }}</a>{% else %}<span class="text-muted">на склад</span>{% endif %}</td>
           <td><span class="badge text-bg-{{ (row.trailer.lifecycle_status or row.trailer.status)|status_badge_class }}">{{ (row.trailer.lifecycle_status or row.trailer.status)|status_label }}</span></td>
           <td class="text-end">
+            <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.trailer_change_item', trailer_id=row.trailer.id) }}">Комплектация</a>
             {% if production_warehouse and row.target_warehouse and row.target_warehouse.id != production_warehouse.id %}
               <form method="post" action="{{ url_for('main.logistics_send_trailer') }}" class="d-inline">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

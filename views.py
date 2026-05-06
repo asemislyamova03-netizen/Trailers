@@ -26,7 +26,7 @@ from forms import (
     TrailerCreateForm, WarehouseForm, ItemForm,
     CustomerForm, SalesContractForm, LoginForm, UserForm, OTTSForm, LeadForm, CustomerOrderForm, OrderPaymentForm,
     SupplyNeedForm, ProductionRequestForm, ProductionRequestLineForm, StockMovementForm, StockMovementBatchForm,
-    AssignVinForm, SendTrailerForm, StockReplenishmentForm
+    AssignVinForm, SendTrailerForm, StockReplenishmentForm, TrailerItemChangeForm
 )
 from collections import defaultdict
 import sqlalchemy as sa
@@ -370,6 +370,13 @@ def _trailer_production_context(trailer: Trailer):
 
 def _trailer_is_customer_shipped(trailer: Trailer | None) -> bool:
     return bool(trailer and (trailer.lifecycle_status or '').lower() == 'customer_shipped')
+
+
+def _order_is_shipped(order: CustomerOrder | None) -> bool:
+    return bool(order and (
+        getattr(order, 'is_shipped', False)
+        or (order.status or '').lower() in ('shipped', 'done', 'customer_shipped')
+    ))
 
 
 def _trailer_available_for_sale(trailer: Trailer, exclude_order_id: int | None = None) -> bool:
@@ -784,6 +791,64 @@ def _find_item_for_form(form: TrailerCreateForm):
         return None, 'Не удалось подобрать модель по указанным характеристикам. Проверьте матрицу.'
 
     return item, None
+
+
+def _fill_trailer_item_change_form_choices(form: TrailerItemChangeForm) -> None:
+    items = Item.query.filter_by(item_type='TRAILER', is_active=True).all()
+    size_body_values = sorted({i.size_body for i in items if i.size_body})
+    axle_values = sorted({i.axle_count for i in items if i.axle_count is not None})
+    wheel_values = sorted({i.wheel_radius for i in items if i.wheel_radius})
+    board_values = sorted({i.board_height_mm for i in items if i.board_height_mm is not None})
+    tent_heights = sorted({i.tent_hight_mm for i in items if i.tent_hight_mm is not None})
+
+    form.size_body.choices = [(v, v) for v in size_body_values]
+    form.axle_count.choices = [(v, str(v)) for v in axle_values]
+    form.wheel_radius.choices = [(v, v) for v in wheel_values]
+    form.board_height_mm.choices = [(str(v), str(v)) for v in board_values]
+    form.tent_height_mm.choices = [(0, 'Нет тента')] + [(int(v), f'{v} мм') for v in tent_heights]
+
+
+def _prefill_trailer_item_change_form(form: TrailerItemChangeForm, item: Item | None) -> None:
+    if not item:
+        return
+    form.size_body.data = item.size_body
+    form.axle_count.data = item.axle_count
+    form.wheel_radius.data = item.wheel_radius
+    form.board_height_mm.data = str(item.board_height_mm) if item.board_height_mm is not None else ''
+    form.tent_height_mm.data = item.tent_hight_mm if item.has_tent else 0
+    form.has_jockey_wheel.data = 1 if item.has_jockey_wheel else 0
+
+
+def _item_base_matches_locked_item(item: Item, locked_item: Item | None) -> bool:
+    if not locked_item:
+        return True
+    return item.size_body == locked_item.size_body and item.axle_count == locked_item.axle_count
+
+
+def _can_change_trailer_item(trailer: Trailer) -> tuple[bool, str]:
+    if _trailer_is_customer_shipped(trailer):
+        return False, 'Комплектацию нельзя менять: прицеп уже отгружен клиенту.'
+    if _active_movement_for_trailer(trailer.id):
+        return False, 'Комплектацию нельзя менять: по прицепу есть активное перемещение.'
+    orders = CustomerOrder.query.filter_by(trailer_id=trailer.id).all()
+    if any(order.documents_issued or _order_is_shipped(order) for order in orders):
+        return False, 'Комплектацию нельзя менять: по связанному заказу уже выданы документы или выполнена отгрузка.'
+    if SalesContract.query.filter_by(trailer_id=trailer.id).first():
+        return False, 'Комплектацию нельзя менять: по прицепу уже есть договор.'
+    if VinRegistry.query.filter(VinRegistry.trailer_id == trailer.id, VinRegistry.docs_issued_at.isnot(None)).first():
+        return False, 'Комплектацию нельзя менять: по VIN уже выданы документы.'
+    return True, ''
+
+
+def _can_change_produced_unit_item(unit: ProducedUnit) -> tuple[bool, str]:
+    if unit.status != 'produced_no_vin' or unit.trailer_id:
+        return False, 'Комплектацию можно менять только у выпущенной единицы без VIN.'
+    order = unit.order if unit.order_id else None
+    if not order and unit.production_request_line and unit.production_request_line.supply_need:
+        order = unit.production_request_line.supply_need.order
+    if order and (order.documents_issued or _order_is_shipped(order)):
+        return False, 'Комплектацию нельзя менять: по заказу уже выданы документы или выполнена отгрузка.'
+    return True, ''
 
 
 @main_bp.route('/workspace')
@@ -1325,6 +1390,76 @@ def trailer_edit(trailer_id):
         return redirect(url_for('main.trailers_list'))
 
     return render_template('trailer_form.html', form=form, title='Редактирование прицепа')
+
+
+@main_bp.route('/trailers/<int:trailer_id>/change-item', methods=['GET', 'POST'])
+@role_required('logistics', 'director')
+def trailer_change_item(trailer_id):
+    trailer = Trailer.query.get_or_404(trailer_id)
+    ok, message = _can_change_trailer_item(trailer)
+    if not ok:
+        flash(message, 'danger')
+        return redirect(url_for('main.trailers_list', vin=trailer.vin or ''))
+
+    form = TrailerItemChangeForm()
+    _fill_trailer_item_change_form_choices(form)
+    if request.method == 'GET':
+        _prefill_trailer_item_change_form(form, trailer.item)
+
+    if form.validate_on_submit():
+        item, error = _find_item_for_form(form)
+        if error:
+            flash(error, 'danger')
+            return render_template(
+                'trailer_item_form.html',
+                form=form,
+                title='Изменить комплектацию прицепа',
+                current_item=trailer.item,
+                target_label=f'Trailer #{trailer.id} {trailer.vin or ""}',
+                back_url=url_for('main.trailers_list', vin=trailer.vin or ''),
+                locked_base=True,
+            )
+        if not _item_base_matches_locked_item(item, trailer.item):
+            flash('Нельзя менять размер рамы / кузова и количество осей. Выберите комплектацию с тем же размером и осями.', 'danger')
+            return render_template(
+                'trailer_item_form.html',
+                form=form,
+                title='Изменить комплектацию прицепа',
+                current_item=trailer.item,
+                target_label=f'Trailer #{trailer.id} {trailer.vin or ""}',
+                back_url=url_for('main.trailers_list', vin=trailer.vin or ''),
+                locked_base=True,
+            )
+        old_item = trailer.item
+        old_label = old_item.article if old_item else trailer.item_id
+        trailer.item_id = item.id
+        for unit in ProducedUnit.query.filter_by(trailer_id=trailer.id).all():
+            unit.item_id = item.id
+        for reservation in Reservation.query.filter_by(trailer_id=trailer.id, status='ACTIVE').all():
+            reservation.item_id = item.id
+        for order in CustomerOrder.query.filter_by(trailer_id=trailer.id).all():
+            if not order.documents_issued and not _order_is_shipped(order):
+                order.item_id = item.id
+                add_order_event(
+                    order,
+                    'comment_added',
+                    old_value=str(old_label or ''),
+                    new_value=item.article or str(item.id),
+                    comment='Изменена комплектация закреплённого прицепа',
+                )
+        db.session.commit()
+        flash('Комплектация прицепа обновлена.', 'success')
+        return redirect(url_for('main.trailers_list', vin=trailer.vin or ''))
+
+    return render_template(
+        'trailer_item_form.html',
+        form=form,
+        title='Изменить комплектацию прицепа',
+        current_item=trailer.item,
+        target_label=f'Trailer #{trailer.id} {trailer.vin or ""}',
+        back_url=url_for('main.trailers_list', vin=trailer.vin or ''),
+        locked_base=True,
+    )
 
 
 @main_bp.route('/trailers/<int:trailer_id>/delete')
@@ -7370,6 +7505,76 @@ def logistics_assign_vin(unit_id):
         flash('VIN присвоен. Прицеп создан на производственном складе.', 'success')
         return redirect(url_for('main.logistics_workspace'))
     return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row)
+
+
+@main_bp.route('/logistics/produced-units/<int:unit_id>/change-item', methods=['GET', 'POST'])
+@role_required('logistics', 'director')
+def produced_unit_change_item(unit_id):
+    unit = ProducedUnit.query.get_or_404(unit_id)
+    ok, message = _can_change_produced_unit_item(unit)
+    if not ok:
+        flash(message, 'danger')
+        return redirect(url_for('main.logistics_workspace'))
+
+    form = TrailerItemChangeForm()
+    _fill_trailer_item_change_form_choices(form)
+    if request.method == 'GET':
+        _prefill_trailer_item_change_form(form, unit.item)
+
+    if form.validate_on_submit():
+        item, error = _find_item_for_form(form)
+        if error:
+            flash(error, 'danger')
+            return render_template(
+                'trailer_item_form.html',
+                form=form,
+                title='Изменить комплектацию выпущенной единицы',
+                current_item=unit.item,
+                target_label=f'Выпущенная единица #{unit.id}',
+                back_url=url_for('main.logistics_workspace'),
+                locked_base=True,
+            )
+        if not _item_base_matches_locked_item(item, unit.item):
+            flash('Нельзя менять размер рамы / кузова и количество осей. Выберите комплектацию с тем же размером и осями.', 'danger')
+            return render_template(
+                'trailer_item_form.html',
+                form=form,
+                title='Изменить комплектацию выпущенной единицы',
+                current_item=unit.item,
+                target_label=f'Выпущенная единица #{unit.id}',
+                back_url=url_for('main.logistics_workspace'),
+                locked_base=True,
+            )
+        old_item = unit.item
+        old_label = old_item.article if old_item else unit.item_id
+        unit.item_id = item.id
+
+        order = unit.order if unit.order_id else None
+        if not order and unit.production_request_line and unit.production_request_line.supply_need:
+            order = unit.production_request_line.supply_need.order
+        if order and not order.documents_issued and not _order_is_shipped(order):
+            order.item_id = item.id
+            add_order_event(
+                order,
+                'comment_added',
+                old_value=str(old_label or ''),
+                new_value=item.article or str(item.id),
+                comment='Изменена комплектация выпущенной единицы без VIN',
+            )
+
+        db.session.commit()
+        flash('Комплектация выпущенной единицы обновлена.', 'success')
+        return redirect(url_for('main.logistics_workspace'))
+
+    return render_template(
+        'trailer_item_form.html',
+        form=form,
+        title='Изменить комплектацию выпущенной единицы',
+        current_item=unit.item,
+        target_label=f'Выпущенная единица #{unit.id}',
+        back_url=url_for('main.logistics_workspace'),
+        locked_base=True,
+    )
 
 
 @main_bp.route('/logistics/send-trailer', methods=['POST'])

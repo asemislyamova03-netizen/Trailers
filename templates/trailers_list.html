@@ -71,6 +71,10 @@
                 {% endif %}
             </td>
             <td>
+                {% if current_user.is_admin or current_user.role in ['logistics', 'director'] %}
+                    <a href="{{ url_for('main.trailer_change_item', trailer_id=t.id) }}"
+                       class="btn btn-sm btn-outline-secondary">Комплектация</a>
+                {% endif %}
                 {% if current_user.is_admin %}
                     <a href="{{ url_for('main.trailer_edit', trailer_id=t.id) }}"
                        class="btn btn-sm btn-outline-primary">Изменить</a>
@@ -79,7 +83,7 @@
                        onclick="return confirm('Удалить прицеп?');">
                         Удалить
                     </a>
-                {% else %}
+                {% elif current_user.role not in ['logistics', 'director'] %}
                     <span class="text-muted small">Просмотр</span>
                 {% endif %}
             </td>

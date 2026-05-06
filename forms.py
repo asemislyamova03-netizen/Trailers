@@ -199,6 +199,21 @@ class TrailerCreateForm(IdempotentFlaskForm):
 
     submit = SubmitField('Сохранить')
 
+
+class TrailerItemChangeForm(IdempotentFlaskForm):
+    size_body = SelectField('Размер кузова', choices=[], validators=[DataRequired()])
+    axle_count = SelectField('Количество осей', choices=[], coerce=int, validators=[DataRequired()])
+    wheel_radius = SelectField('Размер колеса', choices=[], validators=[DataRequired()])
+    board_height_mm = SelectField('Высота борта, мм', choices=[], validators=[DataRequired()])
+    tent_height_mm = SelectField('Высота тента', choices=[], coerce=int, validators=[Optional()])
+    has_jockey_wheel = SelectField(
+        'Подкатное колесо',
+        choices=[(1, 'Есть'), (0, 'Нет')],
+        coerce=int,
+        validators=[DataRequired()]
+    )
+    submit = SubmitField('Сохранить комплектацию')
+
 # -------- Клиенты --------
 
 class CustomerForm(IdempotentFlaskForm):

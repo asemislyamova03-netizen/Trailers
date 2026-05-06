@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="compact-page-header">
+  <div>
+    <h1>{{ title }}</h1>
+    <div class="text-muted small">{{ target_label }}</div>
+  </div>
+  <a class="btn btn-outline-secondary" href="{{ back_url }}">Назад</a>
+</div>
+
+<div class="app-card">
+  <div class="card-body">
+    <div class="alert alert-warning">
+      Меняется только номенклатура / комплектация. VIN, склад, статус, документы и производственная строка не меняются.
+    </div>
+    {% if current_item %}
+      <div class="mb-3">
+        <div class="text-muted small">Текущая модель</div>
+        <div class="fw-bold">{{ current_item.article }} — {{ current_item.name }}</div>
+      </div>
+    {% endif %}
+
+    <form method="post" class="row g-3">
+      {{ form.hidden_tag() }}
+      {% if locked_base and current_item %}
+        <input type="hidden" name="size_body" value="{{ current_item.size_body or '' }}">
+        <input type="hidden" name="axle_count" value="{{ current_item.axle_count or '' }}">
+        <div class="col-md-4">
+          <label class="form-label">Размер кузова</label>
+          <div class="form-control bg-light">{{ current_item.size_body or '—' }}</div>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Количество осей</label>
+          <div class="form-control bg-light">{{ current_item.axle_count or '—' }}</div>
+        </div>
+      {% else %}
+        <div class="col-md-4">
+          {{ form.size_body.label(class="form-label") }}
+          {{ form.size_body(class="form-select") }}
+          {% for error in form.size_body.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+        </div>
+        <div class="col-md-4">
+          {{ form.axle_count.label(class="form-label") }}
+          {{ form.axle_count(class="form-select") }}
+          {% for error in form.axle_count.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+        </div>
+      {% endif %}
+      <div class="col-md-4">
+        {{ form.wheel_radius.label(class="form-label") }}
+        {{ form.wheel_radius(class="form-select") }}
+        {% for error in form.wheel_radius.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+      </div>
+      <div class="col-md-4">
+        {{ form.board_height_mm.label(class="form-label") }}
+        {{ form.board_height_mm(class="form-select") }}
+        {% for error in form.board_height_mm.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+      </div>
+      <div class="col-md-4">
+        {{ form.tent_height_mm.label(class="form-label") }}
+        {{ form.tent_height_mm(class="form-select") }}
+        {% for error in form.tent_height_mm.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+      </div>
+      <div class="col-md-4">
+        {{ form.has_jockey_wheel.label(class="form-label") }}
+        {{ form.has_jockey_wheel(class="form-select") }}
+        {% for error in form.has_jockey_wheel.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+      </div>
+      <div class="col-12 d-flex gap-2">
+        {{ form.submit(class="btn btn-orange") }}
+        <a class="btn btn-outline-secondary" href="{{ back_url }}">Отмена</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
