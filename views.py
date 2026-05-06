@@ -3905,6 +3905,8 @@ def _release_order_trailer_and_vin(order: CustomerOrder, reason: str) -> tuple[b
 def _attach_produced_unit_to_existing_trailer(unit: ProducedUnit, trailer: Trailer, order: CustomerOrder | None, vin_registry_row: VinRegistry | None, user_id: int | None = None) -> tuple[bool, str]:
     if not trailer.vin:
         return False, 'У существующего прицепа нет VIN.'
+    if vin_registry_row and vin_registry_row.vin_full and trailer.vin != vin_registry_row.vin_full:
+        return False, 'VIN-реестр связан с другим VIN. Нельзя связать выпуск с этим прицепом.'
     if trailer.item_id != unit.item_id:
         return False, 'Существующий прицеп с этим VIN не соответствует модели выпуска.'
     linked_units = getattr(trailer, 'produced_unit', None)
@@ -6398,8 +6400,8 @@ def vin_registry_assign(vin_id):
     if not trailer or VinRegistry.query.filter(VinRegistry.trailer_id == trailer.id, VinRegistry.id != row.id, VinRegistry.status != 'void').first():
         flash('Выбранный прицеп недоступен для привязки VIN.', 'danger')
         return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
-    if trailer.vin and trailer.vin != row.vin_full and not (current_user.is_admin or current_user.is_director):
-        flash('У прицепа уже есть другой VIN. Заменить его может только администратор или директор.', 'danger')
+    if trailer.vin and trailer.vin != row.vin_full:
+        flash('У прицепа уже есть другой VIN. Привязка разных VIN к одному прицепу запрещена.', 'danger')
         return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
     if trailer.status == 'SOLD' and not (row.customer_order and row.customer_order.trailer_id == trailer.id):
         flash('Проданный прицеп нельзя привязать к этому VIN.', 'danger')
@@ -6427,6 +6429,9 @@ def vin_registry_confirm(vin_id):
     row = VinRegistry.query.get_or_404(vin_id)
     if row.status != 'assigned':
         flash('Подтвердить нанесение можно только после назначения VIN.', 'danger')
+        return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
+    if not row.trailer or row.trailer.vin != row.vin_full:
+        flash('Нельзя подтвердить VIN: у связанного прицепа другой VIN.', 'danger')
         return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
     old_status = row.status
     row.status = 'confirmed'
