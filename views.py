@@ -3749,6 +3749,39 @@ def _supply_need_started(need: SupplyNeed) -> bool:
     return False
 
 
+def _supply_need_has_produced_output(need: SupplyNeed) -> bool:
+    for line in need.production_lines:
+        if (line.produced_qty or 0) > 0:
+            return True
+        if (line.status or '').lower() in ('ready', 'closed'):
+            return True
+        if line.produced_units.count() > 0:
+            return True
+    return False
+
+
+def _cancel_supply_need_and_production_lines(need: SupplyNeed, reason: str, user_id: int | None = None) -> None:
+    now = datetime.utcnow()
+    need.status = 'CANCELLED'
+    need.cancelled_at = now
+    need.cancelled_by_user_id = user_id
+    need.cancel_reason = reason
+
+    touched_requests = set()
+    for line in need.production_lines:
+        line.status = 'CANCELLED'
+        line.cancelled_at = now
+        line.cancelled_by_user_id = user_id
+        line.cancel_reason = reason
+        line.note = ((line.note or '') + f'\n{reason}').strip()
+        if line.production_request_id:
+            touched_requests.add(line.production_request_id)
+
+    for request_id in touched_requests:
+        production_request = ProductionRequest.query.get(request_id)
+        if production_request and all((line.status or '').upper() == 'CANCELLED' for line in production_request.lines):
+            production_request.status = 'CANCELLED'
+
 def get_or_create_configured_item(config_result: dict) -> Item:
     article = (config_result.get('article') or '').strip()
     if not article:
@@ -4994,7 +5027,7 @@ def stock_replenishment_create():
 @login_required
 def supply_need_cancel(need_id):
     need = SupplyNeed.query.get_or_404(need_id)
-    if current_user.is_admin or current_user.is_director:
+    if current_user.is_admin or current_user.is_director or current_user.is_logistics:
         pass
     elif current_user.is_manager and _is_stock_replenishment_need(need) and current_user.warehouse_id == need.warehouse_id:
         pass
@@ -5005,24 +5038,49 @@ def supply_need_cancel(need_id):
         flash('Для отмены укажите причину.', 'danger')
         return redirect(request.referrer or url_for('main.stock_replenishment_list'))
     if (need.status or '').upper() not in ('NEW', 'PLANNED', 'DRAFT') or _supply_need_started(need):
-        flash('Заявка уже связана с производством. Отменить её нельзя, можно снять резерв под заказ.', 'warning')
+        flash('Заявка уже связана с производством. Отменить её нельзя, можно снять резерв под заказ или отменить ошибочное производство.', 'warning')
     else:
         old_status = need.status
-        need.status = 'CANCELLED'
-        need.cancelled_at = datetime.utcnow()
-        need.cancelled_by_user_id = current_user.id
-        need.cancel_reason = reason
-        for line in need.production_lines:
-            line.status = 'CANCELLED'
-            line.cancelled_at = datetime.utcnow()
-            line.cancelled_by_user_id = current_user.id
-            line.cancel_reason = reason
+        _cancel_supply_need_and_production_lines(need, reason, current_user.id)
         if need.order:
-            add_order_event(need.order, 'production_need_created', old_value=old_status, new_value='CANCELLED', comment=f'Заявка #{need.id} отменена. Причина: {reason}')
+            add_order_event(need.order, 'production_need_cancelled', old_value=old_status, new_value='CANCELLED', comment=f'Заявка #{need.id} отменена. Причина: {reason}')
+            _refresh_order_status(need.order)
         db.session.commit()
         flash('Потребность отменена.', 'success')
     return redirect(request.referrer or url_for('main.stock_replenishment_list'))
 
+@main_bp.route('/supply-needs/<int:need_id>/cleanup-production', methods=['POST'])
+@login_required
+def supply_need_cleanup_production(need_id):
+    need = SupplyNeed.query.get_or_404(need_id)
+    if not (current_user.is_admin or current_user.is_director or current_user.is_logistics):
+        abort(403)
+    reason = (request.form.get('cancel_reason') or request.form.get('reason') or '').strip()
+    if not reason:
+        flash('Укажите причину отмены ошибочного производства.', 'danger')
+        return redirect(request.referrer or url_for('main.supply_needs_list'))
+    if not need.production_lines:
+        flash('По этой потребности нет производственных строк.', 'warning')
+        return redirect(request.referrer or url_for('main.supply_needs_list'))
+    if _supply_need_has_produced_output(need):
+        flash('Нельзя очистить производство: по заявке уже есть выпуск или готовая строка.', 'danger')
+        return redirect(request.referrer or url_for('main.supply_needs_list'))
+
+    old_status = need.status
+    cleanup_reason = f'Ошибочное производство отменено логистикой. Причина: {reason}'
+    _cancel_supply_need_and_production_lines(need, cleanup_reason, current_user.id)
+    if need.order:
+        add_order_event(
+            need.order,
+            'production_need_cancelled',
+            old_value=old_status,
+            new_value='CANCELLED',
+            comment=f'Ошибочная заявка на производство #{need.id} отменена. Документы, VIN и прицеп не изменялись. Причина: {reason}',
+        )
+        _refresh_order_status(need.order)
+    db.session.commit()
+    flash('Ошибочная заявка на производство отменена. Заказ, документы, VIN и прицеп не изменялись.', 'success')
+    return redirect(request.referrer or url_for('main.supply_needs_list'))
 
 @main_bp.route('/supply-needs/<int:need_id>/release-order-reserve', methods=['POST'])
 @login_required

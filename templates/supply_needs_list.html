@@ -53,6 +53,13 @@
                 <input type="hidden" name="reason" value="Снятие резерва из списка потребностей">
                 <button class="btn btn-sm btn-outline-warning">Снять резерв</button>
               </form>
+              {% if current_user.is_admin or current_user.is_director or current_user.is_logistics %}
+                <form method="post" action="{{ url_for('main.supply_need_cleanup_production', need_id=n.id) }}" class="d-inline" onsubmit="return confirm('Отменить ошибочное производство? Заказ, документы, VIN и прицеп не изменятся.');">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="reason" value="Ошибочно отправлено в производство">
+                  <button class="btn btn-sm btn-outline-danger">Отменить производство</button>
+                </form>
+              {% endif %}
             {% endif %}
           </td>
         </tr>
