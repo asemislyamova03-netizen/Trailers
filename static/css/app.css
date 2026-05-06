@@ -193,6 +193,33 @@ a { text-decoration: none; }
   padding: 26px 30px 38px;
 }
 
+
+.compact-page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.compact-page-header h1 {
+  font-size: 1.25rem;
+  font-weight: 850;
+  margin: 0;
+}
+
+.compact-metrics .kpi-grid {
+  margin-bottom: 0 !important;
+}
+
+.compact-metrics .kpi-card {
+  min-height: 88px;
+  padding: 12px;
+}
+
+.compact-metrics .kpi-value {
+  font-size: 1.45rem;
+}
 .hero-dashboard {
   position: relative;
   overflow: hidden;

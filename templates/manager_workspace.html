@@ -3,20 +3,22 @@
 {% block title %}Рабочее место менеджера{% endblock %}
 
 {% block content %}
-<section class="hero-dashboard">
-    <div>
-        <h1>Рабочее место менеджера</h1>
-        <p>{{ current_user.full_name or current_user.username }} · заявки, заказы, склад, производство, оплаты и выдача.</p>
-    </div>
-    <div class="d-flex gap-2 flex-wrap">
-        <a href="{{ url_for('main.order_create', return_to='manager_workspace') }}" class="btn btn-orange"><i class="bi bi-plus-lg me-1"></i>Заказ</a>
-        <a href="{{ url_for('main.lead_create', return_to='manager_workspace') }}" class="btn btn-soft"><i class="bi bi-plus-lg me-1"></i>Заявка</a>
-        <a href="{{ url_for('main.stock_replenishment_create') }}" class="btn btn-soft"><i class="bi bi-box-arrow-in-down me-1"></i>Заказать на склад</a>
-    </div>
-</section>
+<div class="compact-page-header">
+  <div>
+    <h1>Рабочее место менеджера</h1>
+    <div class="text-muted small">Склад: {{ warehouses|selectattr('id', 'equalto', warehouse_id)|map(attribute='name')|first or 'не выбран' }}</div>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    <a href="{{ url_for('main.order_create', return_to='manager_workspace', return_tab='orders') }}" class="btn btn-orange btn-sm"><i class="bi bi-plus-lg me-1"></i>Заказ</a>
+    <a href="{{ url_for('main.lead_create', return_to='manager_workspace', return_tab='leads') }}" class="btn btn-soft btn-sm"><i class="bi bi-plus-lg me-1"></i>Заявка</a>
+    <a href="{{ url_for('main.manager_trailer_picker') }}" class="btn btn-soft btn-sm">Подбор</a>
+    <a href="{{ url_for('main.stock_replenishment_create', return_to='manager_workspace', return_tab='production') }}" class="btn btn-soft btn-sm"><i class="bi bi-box-arrow-in-down me-1"></i>Пополнение</a>
+  </div>
+</div>
 
 {% if current_user.can_view_all %}
 <form method="get" class="app-card p-3 mb-3">
+    <input type="hidden" name="tab" value="{{ active_tab }}">
     <div class="row g-2 align-items-end">
         <div class="col-md-4">
             <label class="form-label">Рабочий склад</label>
@@ -30,6 +32,12 @@
 </form>
 {% endif %}
 
+<div class="compact-metrics app-card p-2 mb-3">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <div class="small text-muted">Диалоги: {{ new_conversations_count }} · Заявки: {{ new_leads|length }} · Заказы: {{ active_orders|length }} · В наличии: {{ stock_trailers|length }} · К выдаче: {{ ready_to_ship_orders|length }}</div>
+    <button class="btn btn-sm btn-soft" type="button" data-bs-toggle="collapse" data-bs-target="#managerKpiCollapse">Показатели</button>
+  </div>
+  <div class="collapse mt-3" id="managerKpiCollapse">
 <div class="kpi-grid mb-4">
     <div class="app-card kpi-card"><div><div class="kpi-title">Новые диалоги</div><div class="kpi-value">{{ new_conversations_count }}</div><div class="kpi-caption">входящие обращения</div></div><div class="kpi-icon"><i class="bi bi-chat-dots"></i></div></div>
     <div class="app-card kpi-card"><div><div class="kpi-title">Непрочитанные</div><div class="kpi-value">{{ unread_messages_count }}</div><div class="kpi-caption">сообщения клиентов</div></div><div class="kpi-icon"><i class="bi bi-envelope-exclamation"></i></div></div>
@@ -48,26 +56,33 @@
     <div class="app-card kpi-card"><div><div class="kpi-title">Выручка сегодня</div><div class="kpi-value">{{ sold_today_revenue|money }}</div><div class="kpi-caption">продано: {{ sold_today_orders|length }}</div></div><div class="kpi-icon"><i class="bi bi-graph-up-arrow"></i></div></div>
     <div class="app-card kpi-card"><div><div class="kpi-title">Выручка за месяц</div><div class="kpi-value">{{ sold_month_revenue|money }}</div><div class="kpi-caption">продано: {{ sold_month_orders|length }}</div></div><div class="kpi-icon"><i class="bi bi-calendar3"></i></div></div>
 </div>
+  </div>
+</div>
 
 <ul class="nav nav-tabs mb-3" role="tablist">
-    <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#conversations-tab" type="button">Диалоги</button></li>
-    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#leads-tab" type="button">Заявки</button></li>
-    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#orders-tab" type="button">Заказы</button></li>
-    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#stock-tab" type="button">Мой склад</button></li>
-    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#production-tab" type="button">В производстве</button></li>
-    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#produced-tab" type="button">Выпущено без VIN</button></li>
-    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#ready-transfer-tab" type="button">Готово к отправке</button></li>
-    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#inbound-tab" type="button">В пути / к приёмке</button></li>
-    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#movements-tab" type="button">Перемещения</button></li>
-    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#payments-tab" type="button">Оплаты</button></li>
-    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#issue-tab" type="button">К выдаче</button></li>
-    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#planned-shipments-tab" type="button">Плановые отгрузки</button></li>
-    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#sales-tab" type="button">Продажи</button></li>
-    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#other-stock-tab" type="button">Другие склады</button></li>
+    <li class="nav-item"><button class="nav-link active" data-manager-tab="stock" data-bs-toggle="tab" data-bs-target="#stock-tab" type="button">Мой склад</button></li>
+    <li class="nav-item"><button class="nav-link" data-manager-tab="orders" data-bs-toggle="tab" data-bs-target="#orders-tab" type="button">Заказы</button></li>
+    <li class="nav-item"><button class="nav-link" data-manager-tab="leads" data-bs-toggle="tab" data-bs-target="#leads-tab" type="button">Заявки</button></li>
+    <li class="nav-item"><button class="nav-link" data-manager-tab="conversations" data-bs-toggle="tab" data-bs-target="#conversations-tab" type="button">Диалоги</button></li>
+    <li class="nav-item"><button class="nav-link" data-manager-tab="issue" data-bs-toggle="tab" data-bs-target="#issue-tab" type="button">К выдаче</button></li>
+    <li class="nav-item"><button class="nav-link" data-manager-tab="production" data-bs-toggle="tab" data-bs-target="#production-tab" type="button">В производстве</button></li>
+    <li class="nav-item dropdown">
+      <button class="nav-link dropdown-toggle" data-bs-toggle="dropdown" type="button">Ещё</button>
+      <ul class="dropdown-menu">
+        <li><button class="dropdown-item" data-manager-tab="inbound" data-bs-toggle="tab" data-bs-target="#inbound-tab" type="button">В пути / к приёмке</button></li>
+        <li><button class="dropdown-item" data-manager-tab="movements" data-bs-toggle="tab" data-bs-target="#movements-tab" type="button">Перемещения</button></li>
+        <li><button class="dropdown-item" data-manager-tab="payments" data-bs-toggle="tab" data-bs-target="#payments-tab" type="button">Оплаты</button></li>
+        <li><button class="dropdown-item" data-manager-tab="planned-shipments" data-bs-toggle="tab" data-bs-target="#planned-shipments-tab" type="button">Плановые отгрузки</button></li>
+        <li><button class="dropdown-item" data-manager-tab="sales" data-bs-toggle="tab" data-bs-target="#sales-tab" type="button">Продажи</button></li>
+        <li><button class="dropdown-item" data-manager-tab="other-stock" data-bs-toggle="tab" data-bs-target="#other-stock-tab" type="button">Другие склады</button></li>
+        <li><button class="dropdown-item" data-manager-tab="produced" data-bs-toggle="tab" data-bs-target="#produced-tab" type="button">Выпущено без VIN</button></li>
+        <li><button class="dropdown-item" data-manager-tab="ready-transfer" data-bs-toggle="tab" data-bs-target="#ready-transfer-tab" type="button">Готово к отправке</button></li>
+      </ul>
+    </li>
 </ul>
 
 <div class="tab-content">
-    <div class="tab-pane fade show active" id="conversations-tab">
+    <div class="tab-pane fade" id="conversations-tab">
         <div class="app-card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span>Диалоги</span>
@@ -93,7 +108,7 @@
 
     <div class="tab-pane fade" id="leads-tab">
         <div class="app-card">
-            <div class="card-header d-flex justify-content-between align-items-center"><span>Заявки</span><a class="btn btn-sm btn-orange" href="{{ url_for('main.lead_create', return_to='manager_workspace') }}">+ Заявка</a></div>
+            <div class="card-header d-flex justify-content-between align-items-center"><span>Заявки</span><a class="btn btn-sm btn-orange" href="{{ url_for('main.lead_create', return_to='manager_workspace', return_tab='leads') }}">+ Заявка</a></div>
             <div class="table-responsive"><table class="table table-hover align-middle">
                 <thead><tr><th>Дата</th><th>Источник</th><th>Клиент</th><th>Телефон</th><th>Модель</th><th>Статус</th><th></th></tr></thead>
                 <tbody>{% for lead in new_leads %}
@@ -105,7 +120,7 @@
 
     <div class="tab-pane fade" id="orders-tab">
         <div class="app-card">
-            <div class="card-header d-flex justify-content-between align-items-center"><span>Заказы</span><a class="btn btn-sm btn-orange" href="{{ url_for('main.order_create', return_to='manager_workspace') }}">+ Заказ</a></div>
+            <div class="card-header d-flex justify-content-between align-items-center"><span>Заказы</span><a class="btn btn-sm btn-orange" href="{{ url_for('main.order_create', return_to='manager_workspace', return_tab='orders') }}">+ Заказ</a></div>
             <div class="table-responsive"><table class="table table-hover align-middle">
                 <thead><tr><th>Номер</th><th>Клиент</th><th>Модель</th><th>Склад</th><th>Статус</th><th>Сумма</th><th>Оплачено</th><th>Остаток</th><th></th></tr></thead>
                 <tbody>{% for order in active_orders %}
@@ -115,7 +130,7 @@
         </div>
     </div>
 
-    <div class="tab-pane fade" id="stock-tab">
+    <div class="tab-pane fade show active" id="stock-tab">
         <div class="app-card">
             <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
                 <span>Мой склад</span>
@@ -149,7 +164,7 @@
                             {% endif %}
                         </td>
                         <td>{% if row.order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=row.order.id) }}">{{ row.order.order_number }}</a>{% else %}<span class="text-muted">—</span>{% endif %}</td>
-                        <td class="text-end">{% if row.group == 'available' and trailer %}<a class="btn btn-sm btn-orange" href="{{ url_for('main.order_create', trailer_id=trailer.id, item_id=trailer.item_id, return_to='manager_workspace') }}">Создать заказ</a>{% endif %}</td>
+                        <td class="text-end">{% if row.group == 'available' and trailer %}<a class="btn btn-sm btn-orange" href="{{ url_for('main.order_create', trailer_id=trailer.id, item_id=trailer.item_id, return_to='manager_workspace', return_tab='stock') }}">Создать заказ</a>{% endif %}</td>
                     </tr>
                 {% else %}<tr><td colspan="7" class="text-muted p-3">На складе нет прицепов</td></tr>{% endfor %}
                     <tr id="stockEmptyRow" class="{% if not warehouse_stock_rows or stock_trailers %}d-none{% endif %}"><td colspan="7" class="text-muted p-3">В выбранной группе нет прицепов</td></tr>
@@ -364,6 +379,21 @@
 
 {% block scripts %}
 <script>
+(function () {
+  const activeTab = {{ active_tab|tojson }} || 'stock';
+  const tabButton = document.querySelector(`[data-manager-tab="${activeTab}"]`);
+  if (tabButton && window.bootstrap) {
+    window.bootstrap.Tab.getOrCreateInstance(tabButton).show();
+  }
+  document.querySelectorAll('[data-manager-tab]').forEach((button) => {
+    button.addEventListener('shown.bs.tab', () => {
+      const url = new URL(window.location.href);
+      url.searchParams.set('tab', button.dataset.managerTab);
+      window.history.replaceState({}, '', url);
+    });
+  });
+})();
+
 (function () {
   const buttons = Array.from(document.querySelectorAll('[data-stock-filter]'));
   const rows = Array.from(document.querySelectorAll('[data-stock-group]'));

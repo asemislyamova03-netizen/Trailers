@@ -793,6 +793,8 @@ def manager_workspace():
         flash('За пользователем не закреплён склад. Обратитесь к администратору.', 'warning')
         return redirect(url_for('main.trailers_list'))
 
+    active_tab = (request.args.get('tab') or 'stock').strip() or 'stock'
+
     stock_trailers = [
         trailer for trailer in (
         Trailer.query
@@ -1047,6 +1049,7 @@ def manager_workspace():
         warehouse_stock_rows=warehouse_stock_rows,
         payments=payments,
         other_stock=other_stock,
+        active_tab=active_tab,
     )
 
 
@@ -3782,6 +3785,97 @@ def _cancel_supply_need_and_production_lines(need: SupplyNeed, reason: str, user
         if production_request and all((line.status or '').upper() == 'CANCELLED' for line in production_request.lines):
             production_request.status = 'CANCELLED'
 
+def _ensure_can_cancel_order_reservation(order: CustomerOrder) -> None:
+    if current_user.is_admin or current_user.is_director or current_user.is_logistics:
+        return
+    if current_user.is_manager and can_access_order(order):
+        return
+    abort(403)
+
+def _order_has_issued_documents_or_shipment(order: CustomerOrder) -> bool:
+    return bool(
+        order.documents_issued
+        or order.is_shipped
+        or (order.status or '').lower() in ('shipped', 'done', 'customer_shipped')
+    )
+
+
+def _cancel_order_active_reservations(order: CustomerOrder, trailer_id: int | None, reason: str) -> None:
+    query = order.reservations.filter_by(status='ACTIVE')
+    if trailer_id:
+        query = query.filter(Reservation.trailer_id == trailer_id)
+    for reservation in query.all():
+        reservation.status = 'CANCELLED'
+        reservation.note = ((reservation.note or '') + f'\nРезерв отменён. Причина: {reason}').strip()
+
+
+def _free_reserved_vin_row(row: VinRegistry, order: CustomerOrder, reason: str) -> None:
+    old_status = row.status
+    _add_vin_event(row, 'reservation_cancelled', old_status, 'free', comment=reason)
+    row.customer_order_id = None
+    row.supply_need_id = None
+    row.reserved_by_user_id = None
+    row.reserved_at = None
+    row.status = 'free'
+    row.vin_full = None
+    row.vin_modification_code = None
+    row.year_code = None
+    if order.reserved_vin_registry_id == row.id:
+        order.reserved_vin_registry_id = None
+
+
+def _release_assigned_vin_from_order(row: VinRegistry, order: CustomerOrder, reason: str) -> None:
+    old_status = row.status
+    _add_vin_event(row, 'reservation_cancelled', old_status, row.status, comment=reason)
+    row.customer_order_id = None
+    row.supply_need_id = None
+    row.reserved_by_user_id = None
+    row.reserved_at = None
+    if order.reserved_vin_registry_id == row.id:
+        order.reserved_vin_registry_id = None
+
+
+def _release_order_trailer_and_vin(order: CustomerOrder, reason: str) -> tuple[bool, str]:
+    if _order_has_issued_documents_or_shipment(order):
+        return False, 'Нельзя отменить резерв: по заказу уже выданы документы или выполнена отгрузка.'
+
+    vin_rows = VinRegistry.query.filter(VinRegistry.customer_order_id == order.id).all()
+    trailer_ids = {order.trailer_id} if order.trailer_id else set()
+    trailer_ids.update(row.trailer_id for row in vin_rows if row.trailer_id)
+
+    for trailer_id in list(trailer_ids):
+        vin_rows += [row for row in VinRegistry.query.filter(VinRegistry.trailer_id == trailer_id).all() if row not in vin_rows]
+    trailer_ids.update(row.trailer_id for row in vin_rows if row.trailer_id)
+
+    for trailer_id in trailer_ids:
+        if _active_movement_for_trailer(trailer_id):
+            return False, 'Нельзя отменить резерв: по прицепу есть активное перемещение.'
+    for row in vin_rows:
+        if row.docs_issued_at:
+            return False, 'Нельзя отменить резерв: по VIN уже выданы документы.'
+
+    for row in vin_rows:
+        if row.status == 'reserved' and not row.trailer_id:
+            _free_reserved_vin_row(row, order, reason)
+        elif row.status in ('assigned', 'confirmed') and row.trailer_id:
+            _release_assigned_vin_from_order(row, order, reason)
+        else:
+            row.customer_order_id = None
+            row.supply_need_id = None
+
+    _cancel_order_active_reservations(order, order.trailer_id, reason)
+    for trailer_id in trailer_ids:
+        trailer = Trailer.query.get(trailer_id)
+        if trailer:
+            trailer.status = 'IN_STOCK'
+            trailer.lifecycle_status = 'in_stock'
+    order.trailer_id = None
+    order.source_warehouse_id = None
+    order.fulfillment_source = 'later'
+    _refresh_order_status(order)
+    add_order_event(order, 'reservation_cancelled', new_value='trailer_reservation_cancelled', comment=reason)
+    return True, 'Резерв прицепа снят. Прицеп возвращён в свободное наличие.'
+
 def _attach_produced_unit_to_existing_trailer(unit: ProducedUnit, trailer: Trailer, order: CustomerOrder | None, vin_registry_row: VinRegistry | None, user_id: int | None = None) -> tuple[bool, str]:
     if not trailer.vin:
         return False, 'У существующего прицепа нет VIN.'
@@ -4266,7 +4360,7 @@ def lead_create():
         db.session.commit()
         flash('Заявка создана', 'success')
         if request.args.get('return_to') == 'manager_workspace' or current_user.is_manager:
-            return redirect(url_for('main.manager_workspace'))
+            return redirect(url_for('main.manager_workspace', tab=request.args.get('return_tab') or 'leads'))
         return redirect(url_for('main.leads_list'))
 
     return render_template('lead_form.html', form=form, title='Новая заявка', item_options=_trailer_item_options(), config_options=_trailer_config_form_context(), item_source_initial='config')
@@ -5066,7 +5160,7 @@ def stock_replenishment_create():
         db.session.commit()
         flash('Заявка на пополнение склада создана.', 'success')
         if current_user.is_manager:
-            return redirect(url_for('main.manager_workspace'))
+            return redirect(url_for('main.manager_workspace', tab=request.args.get('return_tab') or 'production'))
         return redirect(url_for('main.stock_replenishment_list'))
 
     return render_template('stock_replenishment_form.html', form=form, title='Заказать на склад', config_options=_trailer_config_form_context())
@@ -5146,23 +5240,18 @@ def supply_need_release_order_reserve(need_id):
         flash('Эта заявка не закреплена за заказом клиента.', 'warning')
         return redirect(request.referrer or url_for('main.stock_replenishment_list'))
     active_vin = _active_vin_registry_for_order(order.id)
-    if order.documents_issued or order.is_shipped or order.trailer_id:
-        flash('Нельзя снять резерв: по заказу уже есть документы / прицеп / отгрузка.', 'danger')
+    if order.documents_issued or order.is_shipped:
+        flash('Нельзя снять резерв: по заказу уже есть документы / отгрузка.', 'danger')
         return redirect(request.referrer or url_for('main.stock_replenishment_list'))
+    if order.trailer_id:
+        ok, message = _release_order_trailer_and_vin(order, reason)
+        if not ok:
+            flash(message, 'danger')
+            return redirect(request.referrer or url_for('main.stock_replenishment_list'))
+        active_vin = _active_vin_registry_for_order(order.id)
     if active_vin and (order.status or '').lower() in ('cancelled', 'canceled') and active_vin.status == 'reserved' and not active_vin.docs_issued_at and not active_vin.trailer_id:
-        old_vin_status = active_vin.status
-        active_vin.customer_order_id = None
-        active_vin.supply_need_id = None
-        active_vin.reserved_by_user_id = None
-        active_vin.reserved_at = None
-        active_vin.status = 'free'
-        active_vin.vin_full = None
-        active_vin.vin_modification_code = None
-        active_vin.year_code = None
-        if order.reserved_vin_registry_id == active_vin.id:
-            order.reserved_vin_registry_id = None
-        _add_vin_event(active_vin, 'reservation_cancelled', old_vin_status, active_vin.status, comment=f'Резерв VIN отменён при снятии резерва производства. Причина: {reason}')
-        add_order_event(order, 'trailer_reserved', old_value=active_vin.serial7, new_value='VIN reserve cancelled', comment=f'Резерв VIN отменён при снятии резерва производства. Причина: {reason}')
+        _free_reserved_vin_row(active_vin, order, f'Резерв VIN отменён при снятии резерва производства. Причина: {reason}')
+        add_order_event(order, 'reservation_cancelled', old_value=active_vin.serial7, new_value='VIN reserve cancelled', comment=f'Резерв VIN отменён при снятии резерва производства. Причина: {reason}')
         active_vin = None
     if active_vin:
         if active_vin.docs_issued_at:
@@ -6059,38 +6148,52 @@ def order_cancel_vin_reservation(order_id):
     if not (current_user.is_admin or current_user.is_director or current_user.is_manager or current_user.is_logistics):
         abort(403)
     order = CustomerOrder.query.get_or_404(order_id)
-    _ensure_can_access_order(order)
+    _ensure_can_cancel_order_reservation(order)
     row = _active_vin_registry_for_order(order.id)
-    if not row or row.status != 'reserved':
-        flash('По заказу нет резерва VIN, который можно отменить.', 'warning')
+    if not row:
+        flash('По заказу нет активного VIN-резерва.', 'warning')
         return redirect(url_for('main.order_detail', order_id=order.id))
-    if current_user.is_manager and not (current_user.is_admin or current_user.is_director or current_user.is_logistics) and row.reserved_by_user_id != current_user.id:
-        flash('Менеджер может отменить только свой резерв VIN.', 'danger')
+    if _order_has_issued_documents_or_shipment(order) or row.docs_issued_at:
+        flash('Нельзя отменить резерв: по заказу уже выданы документы или выполнена отгрузка.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
-    if row.docs_issued_at:
-        flash('По этому VIN уже выданы документы. Требуется отдельная процедура отмены документов.', 'danger')
+    reason = (request.form.get('comment') or request.form.get('reason') or '').strip() or 'Отмена резерва VIN из карточки заказа'
+    if row.status == 'reserved' and not row.trailer_id:
+        _free_reserved_vin_row(row, order, reason)
+        add_order_event(order, 'reservation_cancelled', old_value=row.serial7, new_value='VIN reserve cancelled', comment=reason)
+        db.session.commit()
+        flash('Резерв VIN отменён. serial7 возвращён в свободные.', 'success')
         return redirect(url_for('main.order_detail', order_id=order.id))
-    if row.trailer_id:
-        flash('Нельзя отменить резерв VIN: VIN уже привязан к физическому прицепу.', 'danger')
+    if row.status in ('assigned', 'confirmed') and row.trailer_id:
+        ok, message = _release_order_trailer_and_vin(order, reason)
+        if ok:
+            db.session.commit()
+            flash('Клиентский резерв снят. VIN остался на физическом прицепе, прицеп вернулся в наличие.', 'success')
+        else:
+            flash(message, 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
-    old_status = row.status
-    if order.reserved_vin_registry_id == row.id:
-        order.reserved_vin_registry_id = None
-    row.customer_order_id = None
-    row.supply_need_id = None
-    row.reserved_by_user_id = None
-    row.reserved_at = None
-    row.status = 'free'
-    row.vin_full = None
-    row.vin_modification_code = None
-    row.year_code = None
-    comment = (request.form.get('comment') or '').strip() or 'Отмена резерва VIN из карточки заказа'
-    _add_vin_event(row, 'reservation_cancelled', old_status, row.status, comment=comment)
-    add_order_event(order, 'trailer_reserved', old_value=row.serial7, new_value='VIN reserve cancelled', comment=comment)
-    db.session.commit()
-    flash('Резерв VIN отменён. serial7 возвращён в свободные.', 'success')
+    flash('Этот VIN нельзя отменить обычной кнопкой.', 'danger')
     return redirect(url_for('main.order_detail', order_id=order.id))
 
+
+@main_bp.route('/orders/<int:order_id>/cancel-trailer-reservation', methods=['POST'])
+@login_required
+def order_cancel_trailer_reservation(order_id):
+    order = CustomerOrder.query.get_or_404(order_id)
+    _ensure_can_cancel_order_reservation(order)
+    reason = (request.form.get('reason') or request.form.get('cancel_reason') or '').strip()
+    if not reason:
+        flash('Укажите причину отмены резерва прицепа.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    if not order.trailer_id:
+        flash('В заказе нет выбранного прицепа.', 'warning')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    ok, message = _release_order_trailer_and_vin(order, reason)
+    if not ok:
+        flash(message, 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    db.session.commit()
+    flash(message, 'success')
+    return redirect(url_for('main.order_detail', order_id=order.id))
 
 @main_bp.route('/logistics/vin-registry', methods=['GET', 'POST'])
 @role_required('logistics', 'director')
@@ -7327,7 +7430,7 @@ def stock_movement_receive(movement_id):
     if movement.status == 'arrived':
         flash('Перемещение уже принято на склад.', 'warning')
         if current_user.is_manager:
-            return redirect(url_for('main.manager_workspace'))
+            return redirect(url_for('main.manager_workspace', tab=request.args.get('return_tab') or 'inbound'))
         return redirect(url_for('main.stock_movements_list'))
     idem_key, duplicate = _reserve_idempotency_key()
     if duplicate:
@@ -7351,7 +7454,7 @@ def stock_movement_receive(movement_id):
     db.session.commit()
     flash('Прицеп принят на склад', 'success')
     if current_user.is_manager:
-        return redirect(url_for('main.manager_workspace'))
+        return redirect(url_for('main.manager_workspace', tab=request.args.get('return_tab') or 'inbound'))
     return redirect(url_for('main.stock_movements_list'))
 
 

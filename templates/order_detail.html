@@ -98,7 +98,7 @@
             <div class="alert alert-warning mt-3 mb-0">VIN зарезервирован под заказ, но ещё не подтверждён производством.</div>
           {% endif %}
         </div>
-        {% if can_manage and order.status != 'cancelled' and not order.is_shipped %}
+        {% if can_manage and not order.documents_issued and not order.is_shipped %}
         <div class="d-flex flex-column gap-2" style="min-width: 220px;">
           {% if not get_order_effective_vin(order) and order.vin_modification_code %}
           <form method="post" action="{{ url_for('main.order_reserve_vin', order_id=order.id) }}">
@@ -108,11 +108,18 @@
             <button class="btn btn-soft w-100">Зарезервировать VIN</button>
           </form>
           {% endif %}
-          {% if order_vin_row and order_vin_row.status == 'reserved' and not order_vin_row.docs_issued_at and not order_vin_row.trailer_id %}
+          {% if order_vin_row and order_vin_row.status in ['reserved', 'assigned', 'confirmed'] and not order_vin_row.docs_issued_at %}
           <form method="post" action="{{ url_for('main.order_cancel_vin_reservation', order_id=order.id) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input name="comment" class="form-control mb-2" placeholder="Причина отмены">
-            <button class="btn btn-outline-danger w-100">Отменить резерв VIN</button>
+            <button class="btn btn-outline-danger w-100">{{ 'Снять клиентский резерв' if order_vin_row.trailer_id else 'Отменить резерв VIN' }}</button>
+          </form>
+          {% endif %}
+          {% if order.trailer_id and not order.documents_issued and not order.is_shipped %}
+          <form method="post" action="{{ url_for('main.order_cancel_trailer_reservation', order_id=order.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input name="reason" class="form-control mb-2" placeholder="Причина отмены резерва прицепа">
+            <button class="btn btn-outline-danger w-100">Отменить резерв прицепа</button>
           </form>
           {% endif %}
         </div>
