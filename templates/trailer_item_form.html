@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 
 {% block title %}{{ title }}{% endblock %}
 
@@ -14,7 +14,7 @@
 <div class="app-card">
   <div class="card-body">
     <div class="alert alert-warning">
-      Меняется только номенклатура / комплектация. VIN, склад, статус, документы и производственная строка не меняются.
+      Меняется только комплектация. VIN, склад, статус, документы и производственная строка не меняются. Размер кузова / рамы, тип кузова и количество осей заблокированы.
     </div>
     {% if current_item %}
       <div class="mb-3">
@@ -25,54 +25,97 @@
 
     <form method="post" class="row g-3">
       {{ form.hidden_tag() }}
-      {% if locked_base and current_item %}
-        <input type="hidden" name="size_body" value="{{ current_item.size_body or '' }}">
-        <input type="hidden" name="axle_count" value="{{ current_item.axle_count or '' }}">
+      {% if locked_config %}
+        <input type="hidden" name="group_code" value="{{ locked_config.group_code }}" data-config-field>
+        <input type="hidden" name="body_execution_code" value="{{ locked_config.body_execution_code }}" data-config-field>
+        <input type="hidden" name="body_size_code" value="{{ locked_config.body_size_code }}" data-config-field>
+        <div class="col-md-4">
+          <label class="form-label">Группа</label>
+          <div class="form-control bg-light">{{ locked_config.group_code }}</div>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Тип кузова</label>
+          <div class="form-control bg-light">{{ locked_config.body_execution_code }}</div>
+        </div>
         <div class="col-md-4">
           <label class="form-label">Размер кузова</label>
-          <div class="form-control bg-light">{{ current_item.size_body or '—' }}</div>
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Количество осей</label>
-          <div class="form-control bg-light">{{ current_item.axle_count or '—' }}</div>
+          <div class="form-control bg-light">{{ locked_config.body_size_code }}</div>
         </div>
       {% else %}
-        <div class="col-md-4">
-          {{ form.size_body.label(class="form-label") }}
-          {{ form.size_body(class="form-select") }}
-          {% for error in form.size_body.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
-        </div>
-        <div class="col-md-4">
-          {{ form.axle_count.label(class="form-label") }}
-          {{ form.axle_count(class="form-select") }}
-          {% for error in form.axle_count.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
-        </div>
+        <div class="col-md-4"><label class="form-label">Группа</label><select class="form-select" name="group_code" data-config-field>{% for item in config_options.groups %}<option value="{{ item.code }}" {% if config.group_code == item.code %}selected{% endif %}>{{ item.code }} — {{ item.name }}</option>{% endfor %}</select></div>
+        <div class="col-md-4"><label class="form-label">Тип кузова</label><select class="form-select" name="body_execution_code" data-config-field>{% for item in config_options.executions %}<option value="{{ item.code }}" {% if config.body_execution_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+        <div class="col-md-4"><label class="form-label">Размер кузова</label><select class="form-select" name="body_size_code" data-config-field>{% for item in config_options.body_sizes %}<option value="{{ item.code }}" {% if config.body_size_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
       {% endif %}
-      <div class="col-md-4">
-        {{ form.wheel_radius.label(class="form-label") }}
-        {{ form.wheel_radius(class="form-select") }}
-        {% for error in form.wheel_radius.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+
+      <div class="col-md-4"><label class="form-label">Высота борта</label><select class="form-select" name="board_height_code" data-config-field>{% for item in config_options.board_heights %}<option value="{{ item.code }}" {% if config.board_height_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+      <div class="col-md-4"><label class="form-label">Колёса</label><select class="form-select" name="wheel_code" data-config-field><option value="">—</option>{% for item in config_options.wheels %}<option value="{{ item.code }}" {% if config.wheel_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+      <div class="col-md-4"><label class="form-label">Ступица</label><select class="form-select" name="hub_code" data-config-field><option value="">—</option>{% for item in config_options.hubs %}<option value="{{ item.code }}" {% if config.hub_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+      <div class="col-md-4"><label class="form-label">Опорное колесо</label><select class="form-select" name="support_wheel_code" data-config-field>{% for item in config_options.support_wheels %}<option value="{{ item.code }}" {% if config.support_wheel_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+      <div class="col-md-4"><label class="form-label">Тент</label><select class="form-select" name="tent_code" data-config-field>{% for item in config_options.tents %}<option value="{{ item.code }}" {% if config.tent_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+      <div class="col-12">
+        <label class="form-label">Спец. параметры</label>
+        <div class="row g-2">
+          {% for item in config_options.specials %}
+            <div class="col-md-4">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="special_options" value="{{ item.code }}" id="trailerSpecial{{ item.id }}" data-config-field {% if item.code in config.special_options %}checked{% endif %}>
+                <label class="form-check-label" for="trailerSpecial{{ item.id }}">{{ item.code }} — {{ item.name }}</label>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
       </div>
-      <div class="col-md-4">
-        {{ form.board_height_mm.label(class="form-label") }}
-        {{ form.board_height_mm(class="form-select") }}
-        {% for error in form.board_height_mm.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+
+      <div class="col-12">
+        <div class="border rounded p-3 bg-light" id="configPreview">
+          <div><span class="text-muted">Артикул:</span> <strong data-preview="article">{{ result.article }}</strong></div>
+          <div><span class="text-muted">Наименование:</span> <strong data-preview="name">{{ result.name }}</strong></div>
+          <div><span class="text-muted">Цена:</span> <strong data-preview="price">{{ result.price.total_price if result.price else 0 }}</strong></div>
+          <div><span class="text-muted">Габариты:</span> <strong data-preview="dimensions">{{ result.dimensions.overall_dimensions_text if result.dimensions else '—' }}</strong></div>
+          <div><span class="text-muted">ОТТС:</span> <strong data-preview="otss">{{ result.otss.otss_number if result.otss else '—' }}</strong></div>
+          <div><span class="text-muted">VIN-модификация:</span> <strong data-preview="vinModification">{{ result.otss.vin_modification_code if result.otss else '—' }}</strong></div>
+          <div class="text-danger small mt-2" data-preview="errors">{{ (result.errors or [])|join('; ') }}</div>
+        </div>
       </div>
-      <div class="col-md-4">
-        {{ form.tent_height_mm.label(class="form-label") }}
-        {{ form.tent_height_mm(class="form-select") }}
-        {% for error in form.tent_height_mm.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
-      </div>
-      <div class="col-md-4">
-        {{ form.has_jockey_wheel.label(class="form-label") }}
-        {{ form.has_jockey_wheel(class="form-select") }}
-        {% for error in form.has_jockey_wheel.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
-      </div>
+
       <div class="col-12 d-flex gap-2">
-        {{ form.submit(class="btn btn-orange") }}
+        <button type="submit" class="btn btn-orange">Сохранить комплектацию</button>
         <a class="btn btn-outline-secondary" href="{{ back_url }}">Отмена</a>
       </div>
     </form>
   </div>
 </div>
+
+<script>
+(function(){
+  const fields = document.querySelectorAll('[data-config-field]');
+  const setText = (name, value) => {
+    const el = document.querySelector(`[data-preview="${name}"]`);
+    if (el) el.textContent = value || '—';
+  };
+  async function refreshPreview(){
+    const params = new URLSearchParams();
+    fields.forEach((field) => {
+      if (field.type === 'checkbox') {
+        if (field.checked) params.append(field.name, field.value || '');
+      } else {
+        params.set(field.name, field.value || '');
+      }
+    });
+    const response = await fetch(`{{ url_for('main.api_trailer_config_preview') }}?${params.toString()}`);
+    if (!response.ok) return;
+    const payload = await response.json();
+    const result = payload.result || {};
+    setText('article', result.article);
+    setText('name', result.name);
+    setText('price', result.price);
+    setText('dimensions', result.overall_dimensions_text);
+    setText('otss', result.otss_number);
+    setText('vinModification', result.vin_modification_code);
+    const errors = document.querySelector('[data-preview="errors"]');
+    if (errors) errors.textContent = (result.errors || []).join('; ');
+  }
+  fields.forEach((field) => field.addEventListener('change', refreshPreview));
+})();
+</script>
 {% endblock %}

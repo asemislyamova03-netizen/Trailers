@@ -825,6 +825,97 @@ def _item_base_matches_locked_item(item: Item, locked_item: Item | None) -> bool
     return item.size_body == locked_item.size_body and item.axle_count == locked_item.axle_count
 
 
+def _default_trailer_config_values() -> dict:
+    return {
+        'group_code': '002',
+        'body_execution_code': 'BOARD',
+        'body_size_code': '2515',
+        'board_height_code': 'E50',
+        'wheel_code': 'Q13',
+        'hub_code': '',
+        'support_wheel_code': 'OK',
+        'tent_code': '90',
+        'special_options': [],
+    }
+
+
+def _config_with_defaults(config: dict | None = None) -> dict:
+    base = _default_trailer_config_values()
+    for key, value in (config or {}).items():
+        if key == 'special_options':
+            base[key] = value or []
+        elif value not in (None, ''):
+            base[key] = value
+    return base
+
+
+def _code_by_article_part(model, text: str) -> tuple[str, str]:
+    for row in model.query.filter_by(is_active=True).order_by(model.sort_order).all():
+        part = row.article_part or row.code
+        if part and text.startswith(part):
+            return row.code, text[len(part):]
+    return '', text
+
+
+def _config_from_item(item: Item | None) -> dict:
+    config = _default_trailer_config_values()
+    article = (item.article if item else '') or ''
+    parts = article.split('-')
+    if len(parts) >= 2:
+        config['group_code'] = parts[0] or config['group_code']
+        left = parts[1]
+        code, left = _code_by_article_part(TrailerBodySize, left)
+        if code:
+            config['body_size_code'] = code
+        code, left = _code_by_article_part(TrailerBoardHeight, left)
+        if code:
+            config['board_height_code'] = code
+            config['body_execution_code'] = 'PLATFORM' if code == 'E0' else 'BOARD'
+        code, rest = _code_by_article_part(TrailerWheelOption, left)
+        if code:
+            config['wheel_code'] = code
+            config['hub_code'] = ''
+        else:
+            code, rest = _code_by_article_part(TrailerHubOption, left)
+            if code:
+                config['hub_code'] = code
+                config['wheel_code'] = ''
+    if len(parts) >= 3:
+        right = ''.join(parts[2:])
+        code, right = _code_by_article_part(TrailerSupportWheelOption, right)
+        if code:
+            config['support_wheel_code'] = code
+        code, right = _code_by_article_part(TrailerTentOption, right)
+        if code:
+            config['tent_code'] = code
+        specials = []
+        while right:
+            code, remainder = _code_by_article_part(TrailerSpecialOption, right)
+            if not code or remainder == right:
+                break
+            specials.append(code)
+            right = remainder
+        config['special_options'] = specials
+    return config
+
+
+def _build_config_result(config: dict) -> dict:
+    from trailer_configurator import build_trailer_configuration_result
+
+    result = build_trailer_configuration_result(config)
+    result['config'] = config
+    return result
+
+
+def _locked_config_base_matches(config: dict, locked_config: dict | None) -> bool:
+    if not locked_config:
+        return True
+    for key in ('group_code', 'body_execution_code', 'body_size_code'):
+        if (config.get(key) or '') != (locked_config.get(key) or ''):
+            return False
+    return True
+
+
 def _can_change_trailer_item(trailer: Trailer) -> tuple[bool, str]:
     if _trailer_is_customer_shipped(trailer):
         return False, 'Комплектацию нельзя менять: прицеп уже отгружен клиенту.'
@@ -1309,26 +1400,34 @@ def trailer_create():
         abort(403)
     form = TrailerCreateForm()
     _fill_trailer_form_choices(form)
+    config = _config_with_defaults(_config_from_request_values(request.values))
+    result = _build_config_result(config)
 
-    if form.validate_on_submit():
-        item, error = _find_item_for_form(form)
-        if error:
-            flash(error, 'danger')
-            return render_template('trailer_form.html', form=form, title='Новый прицеп')
+    if request.method == 'POST':
+        if result.get('errors'):
+            for error in result.get('errors') or []:
+                flash(error, 'danger')
+            return render_template('trailer_form.html', form=form, title='Новый прицеп', config_options=_trailer_config_form_context(), config=config, result=result, locked_config=None)
+        item = get_or_create_configured_item(result)
+        vin = (request.form.get('vin') or '').strip().upper()
+        warehouse_id = request.form.get('warehouse_id', type=int)
+        if not vin or not warehouse_id:
+            flash('Укажите VIN и склад.', 'danger')
+            return render_template('trailer_form.html', form=form, title='Новый прицеп', config_options=_trailer_config_form_context(), config=config, result=result, locked_config=None)
 
         trailer = Trailer(
-            vin=form.vin.data.strip(),
+            vin=vin,
             item_id=item.id,
-            warehouse_id=form.warehouse_id.data,
+            warehouse_id=warehouse_id,
             manufacture_date=form.manufacture_date.data,
-            status=form.status.data,
+            status=request.form.get('status') or 'IN_STOCK',
         )
         db.session.add(trailer)
         db.session.commit()
         flash('Прицеп создан', 'success')
         return redirect(url_for('main.trailers_list'))
 
-    return render_template('trailer_form.html', form=form, title='Новый прицеп')
+    return render_template('trailer_form.html', form=form, title='Новый прицеп', config_options=_trailer_config_form_context(), config=config, result=result, locked_config=None)
 
 
 @main_bp.route('/trailers/<int:trailer_id>/edit', methods=['GET', 'POST'])
@@ -1345,6 +1444,9 @@ def trailer_edit(trailer_id):
         status=trailer.status,
     )
     _fill_trailer_form_choices(form)
+    base_config = _config_from_item(trailer.item)
+    config = _config_with_defaults(_config_from_request_values(request.values) if request.method == 'POST' else base_config)
+    result = _build_config_result(config)
 
     # при GET заполняем характеристики из текущего Item
     if request.method == 'GET' and trailer.item:
@@ -1373,23 +1475,30 @@ def trailer_edit(trailer_id):
 
 
 
-    if form.validate_on_submit():
-        item, error = _find_item_for_form(form)
-        if error:
-            flash(error, 'danger')
-            return render_template('trailer_form.html', form=form, title='Редактирование прицепа')
+    if request.method == 'POST':
+        if not _locked_config_base_matches(config, base_config):
+            flash('Нельзя менять группу, тип кузова и размер кузова через эту форму.', 'danger')
+            return render_template('trailer_form.html', form=form, title='Редактирование прицепа', config_options=_trailer_config_form_context(), config=config, result=result, locked_config=base_config)
+        if result.get('errors'):
+            for error in result.get('errors') or []:
+                flash(error, 'danger')
+            return render_template('trailer_form.html', form=form, title='Редактирование прицепа', config_options=_trailer_config_form_context(), config=config, result=result, locked_config=base_config)
+        item = get_or_create_configured_item(result)
+        if not _item_base_matches_locked_item(item, trailer.item):
+            flash('Нельзя менять размер рамы / кузова и количество осей.', 'danger')
+            return render_template('trailer_form.html', form=form, title='Редактирование прицепа', config_options=_trailer_config_form_context(), config=config, result=result, locked_config=base_config)
 
-        trailer.vin = form.vin.data.strip()
-        trailer.warehouse_id = form.warehouse_id.data
+        trailer.vin = (request.form.get('vin') or '').strip().upper()
+        trailer.warehouse_id = request.form.get('warehouse_id', type=int)
         trailer.manufacture_date = form.manufacture_date.data
-        trailer.status = form.status.data
+        trailer.status = request.form.get('status') or trailer.status
         trailer.item_id = item.id
 
         db.session.commit()
         flash('Прицеп обновлён', 'success')
         return redirect(url_for('main.trailers_list'))
 
-    return render_template('trailer_form.html', form=form, title='Редактирование прицепа')
+    return render_template('trailer_form.html', form=form, title='Редактирование прицепа', config_options=_trailer_config_form_context(), config=config, result=result, locked_config=base_config)
 
 
 @main_bp.route('/trailers/<int:trailer_id>/change-item', methods=['GET', 'POST'])
@@ -1401,15 +1510,14 @@ def trailer_change_item(trailer_id):
         flash(message, 'danger')
         return redirect(url_for('main.trailers_list', vin=trailer.vin or ''))
 
-    form = TrailerItemChangeForm()
-    _fill_trailer_item_change_form_choices(form)
-    if request.method == 'GET':
-        _prefill_trailer_item_change_form(form, trailer.item)
+    form = FlaskForm()
+    locked_config = _config_from_item(trailer.item)
+    config = _config_with_defaults(_config_from_request_values(request.values) if request.method == 'POST' else locked_config)
+    result = _build_config_result(config)
 
-    if form.validate_on_submit():
-        item, error = _find_item_for_form(form)
-        if error:
-            flash(error, 'danger')
+    if request.method == 'POST':
+        if not _locked_config_base_matches(config, locked_config):
+            flash('Нельзя менять группу, тип кузова и размер кузова. Измените только комплектацию.', 'danger')
             return render_template(
                 'trailer_item_form.html',
                 form=form,
@@ -1418,7 +1526,28 @@ def trailer_change_item(trailer_id):
                 target_label=f'Trailer #{trailer.id} {trailer.vin or ""}',
                 back_url=url_for('main.trailers_list', vin=trailer.vin or ''),
                 locked_base=True,
+                locked_config=locked_config,
+                config=config,
+                config_options=_trailer_config_form_context(),
+                result=result,
             )
+        if result.get('errors'):
+            for error in result.get('errors') or []:
+                flash(error, 'danger')
+            return render_template(
+                'trailer_item_form.html',
+                form=form,
+                title='Изменить комплектацию прицепа',
+                current_item=trailer.item,
+                target_label=f'Trailer #{trailer.id} {trailer.vin or ""}',
+                back_url=url_for('main.trailers_list', vin=trailer.vin or ''),
+                locked_base=True,
+                locked_config=locked_config,
+                config=config,
+                config_options=_trailer_config_form_context(),
+                result=result,
+            )
+        item = get_or_create_configured_item(result)
         if not _item_base_matches_locked_item(item, trailer.item):
             flash('Нельзя менять размер рамы / кузова и количество осей. Выберите комплектацию с тем же размером и осями.', 'danger')
             return render_template(
@@ -1429,6 +1558,10 @@ def trailer_change_item(trailer_id):
                 target_label=f'Trailer #{trailer.id} {trailer.vin or ""}',
                 back_url=url_for('main.trailers_list', vin=trailer.vin or ''),
                 locked_base=True,
+                locked_config=locked_config,
+                config=config,
+                config_options=_trailer_config_form_context(),
+                result=result,
             )
         old_item = trailer.item
         old_label = old_item.article if old_item else trailer.item_id
@@ -1459,6 +1592,10 @@ def trailer_change_item(trailer_id):
         target_label=f'Trailer #{trailer.id} {trailer.vin or ""}',
         back_url=url_for('main.trailers_list', vin=trailer.vin or ''),
         locked_base=True,
+        locked_config=locked_config,
+        config=config,
+        config_options=_trailer_config_form_context(),
+        result=result,
     )
 
 
@@ -7516,15 +7653,14 @@ def produced_unit_change_item(unit_id):
         flash(message, 'danger')
         return redirect(url_for('main.logistics_workspace'))
 
-    form = TrailerItemChangeForm()
-    _fill_trailer_item_change_form_choices(form)
-    if request.method == 'GET':
-        _prefill_trailer_item_change_form(form, unit.item)
+    form = FlaskForm()
+    locked_config = _config_from_item(unit.item)
+    config = _config_with_defaults(_config_from_request_values(request.values) if request.method == 'POST' else locked_config)
+    result = _build_config_result(config)
 
-    if form.validate_on_submit():
-        item, error = _find_item_for_form(form)
-        if error:
-            flash(error, 'danger')
+    if request.method == 'POST':
+        if not _locked_config_base_matches(config, locked_config):
+            flash('Нельзя менять группу, тип кузова и размер кузова. Измените только комплектацию.', 'danger')
             return render_template(
                 'trailer_item_form.html',
                 form=form,
@@ -7533,7 +7669,28 @@ def produced_unit_change_item(unit_id):
                 target_label=f'Выпущенная единица #{unit.id}',
                 back_url=url_for('main.logistics_workspace'),
                 locked_base=True,
+                locked_config=locked_config,
+                config=config,
+                config_options=_trailer_config_form_context(),
+                result=result,
             )
+        if result.get('errors'):
+            for error in result.get('errors') or []:
+                flash(error, 'danger')
+            return render_template(
+                'trailer_item_form.html',
+                form=form,
+                title='Изменить комплектацию выпущенной единицы',
+                current_item=unit.item,
+                target_label=f'Выпущенная единица #{unit.id}',
+                back_url=url_for('main.logistics_workspace'),
+                locked_base=True,
+                locked_config=locked_config,
+                config=config,
+                config_options=_trailer_config_form_context(),
+                result=result,
+            )
+        item = get_or_create_configured_item(result)
         if not _item_base_matches_locked_item(item, unit.item):
             flash('Нельзя менять размер рамы / кузова и количество осей. Выберите комплектацию с тем же размером и осями.', 'danger')
             return render_template(
@@ -7544,6 +7701,10 @@ def produced_unit_change_item(unit_id):
                 target_label=f'Выпущенная единица #{unit.id}',
                 back_url=url_for('main.logistics_workspace'),
                 locked_base=True,
+                locked_config=locked_config,
+                config=config,
+                config_options=_trailer_config_form_context(),
+                result=result,
             )
         old_item = unit.item
         old_label = old_item.article if old_item else unit.item_id
@@ -7574,6 +7735,10 @@ def produced_unit_change_item(unit_id):
         target_label=f'Выпущенная единица #{unit.id}',
         back_url=url_for('main.logistics_workspace'),
         locked_base=True,
+        locked_config=locked_config,
+        config=config,
+        config_options=_trailer_config_form_context(),
+        result=result,
     )
 
 
