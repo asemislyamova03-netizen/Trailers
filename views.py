@@ -3815,7 +3815,11 @@ def _free_reserved_vin_row(row: VinRegistry, order: CustomerOrder, reason: str) 
     row.customer_order_id = None
     row.supply_need_id = None
     row.reserved_by_user_id = None
+    row.assigned_by_user_id = None
+    row.confirmed_by_user_id = None
     row.reserved_at = None
+    row.assigned_at = None
+    row.confirmed_at = None
     row.status = 'free'
     row.vin_full = None
     row.vin_modification_code = None
@@ -3833,6 +3837,14 @@ def _release_assigned_vin_from_order(row: VinRegistry, order: CustomerOrder, rea
     row.reserved_at = None
     if order.reserved_vin_registry_id == row.id:
         order.reserved_vin_registry_id = None
+
+
+def _release_order_produced_units_without_trailer(order: CustomerOrder, reason: str) -> None:
+    for unit in ProducedUnit.query.filter_by(order_id=order.id, trailer_id=None).all():
+        if unit.status == 'vin_assigned':
+            unit.status = 'produced_no_vin'
+        unit.order_id = None
+        unit.note = ((unit.note or '') + f'\nКлиентский резерв снят. Причина: {reason}').strip()
 
 
 def _release_order_trailer_and_vin(order: CustomerOrder, reason: str) -> tuple[bool, str]:
@@ -3859,10 +3871,13 @@ def _release_order_trailer_and_vin(order: CustomerOrder, reason: str) -> tuple[b
             _free_reserved_vin_row(row, order, reason)
         elif row.status in ('assigned', 'confirmed') and row.trailer_id:
             _release_assigned_vin_from_order(row, order, reason)
+        elif row.status in ('assigned', 'confirmed') and not row.trailer_id:
+            _free_reserved_vin_row(row, order, reason)
         else:
             row.customer_order_id = None
             row.supply_need_id = None
 
+    _release_order_produced_units_without_trailer(order, reason)
     _cancel_order_active_reservations(order, order.trailer_id, reason)
     for trailer_id in trailer_ids:
         trailer = Trailer.query.get(trailer_id)
@@ -5249,8 +5264,11 @@ def supply_need_release_order_reserve(need_id):
             flash(message, 'danger')
             return redirect(request.referrer or url_for('main.stock_replenishment_list'))
         active_vin = _active_vin_registry_for_order(order.id)
-    if active_vin and (order.status or '').lower() in ('cancelled', 'canceled') and active_vin.status == 'reserved' and not active_vin.docs_issued_at and not active_vin.trailer_id:
-        _free_reserved_vin_row(active_vin, order, f'Резерв VIN отменён при снятии резерва производства. Причина: {reason}')
+    if active_vin and (order.status or '').lower() in ('cancelled', 'canceled') and active_vin.status in ('reserved', 'assigned', 'confirmed') and not active_vin.docs_issued_at and not active_vin.trailer_id:
+        ok, release_message = _release_order_trailer_and_vin(order, f'Резерв VIN отменён при снятии резерва производства. Причина: {reason}')
+        if not ok:
+            flash(release_message, 'danger')
+            return redirect(request.referrer or url_for('main.stock_replenishment_list'))
         add_order_event(order, 'reservation_cancelled', old_value=active_vin.serial7, new_value='VIN reserve cancelled', comment=f'Резерв VIN отменён при снятии резерва производства. Причина: {reason}')
         active_vin = None
     if active_vin:
@@ -6163,11 +6181,14 @@ def order_cancel_vin_reservation(order_id):
         db.session.commit()
         flash('Резерв VIN отменён. serial7 возвращён в свободные.', 'success')
         return redirect(url_for('main.order_detail', order_id=order.id))
-    if row.status in ('assigned', 'confirmed') and row.trailer_id:
+    if row.status in ('assigned', 'confirmed'):
         ok, message = _release_order_trailer_and_vin(order, reason)
         if ok:
             db.session.commit()
-            flash('Клиентский резерв снят. VIN остался на физическом прицепе, прицеп вернулся в наличие.', 'success')
+            if row.trailer_id:
+                flash('Клиентский резерв снят. VIN остался на физическом прицепе, прицеп вернулся в наличие.', 'success')
+            else:
+                flash('Резерв VIN отменён. Выпущенная единица снова ожидает присвоения VIN.', 'success')
         else:
             flash(message, 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
