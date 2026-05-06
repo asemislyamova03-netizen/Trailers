@@ -73,10 +73,8 @@
                     {{ nav_item('Подбор прицепа', 'bi-ui-checks-grid', 'main.manager_trailer_picker', match='/manager/trailer-picker') }}
                     {{ nav_item('Реестр VIN', 'bi-upc', 'main.vin_registry_list', match='/logistics/vin-registry') }}
                     {{ nav_item('Пополнение складов', 'bi-box-arrow-in-down', 'main.stock_replenishment_list', match='/stock-replenishment') }}
-                    {{ nav_item('Выпущено без VIN', 'bi-upc-scan', 'main.logistics_workspace') }}
                     {{ nav_item('Прицепы склада выпуска', 'bi-box-seam', 'main.trailers_list', match='/trailers') }}
                     {{ nav_item('Перемещения', 'bi-arrow-left-right', 'main.stock_movements_list', match='/stock-movements') }}
-                    {{ nav_item('В пути', 'bi-signpost-2', 'main.stock_movements_list') }}
                 {% elif current_user.is_director %}
                     {{ nav_item('Панель', 'bi-speedometer2', 'main.director_dashboard', match='/director') }}
                     {{ nav_item('Диалоги', 'bi-chat-dots', 'main.conversations_list', match='/conversations') }}

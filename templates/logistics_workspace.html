@@ -2,29 +2,14 @@
 {% block title %}Логистика{% endblock %}
 
 {% block content %}
-<section class="hero-dashboard">
+<div class="compact-page-header">
   <div>
     <h1>Логистика</h1>
-    <p>VIN, склад выпуска, отправки по филиалам и контроль движения под клиентов и на склад.</p>
+    <div class="text-muted small">Склад выпуска: <strong>{{ production_warehouse.name if production_warehouse else 'не задан' }}</strong>{% if production_warehouses|length > 1 %} · несколько производственных складов{% endif %}</div>
   </div>
-</section>
-
-<div class="app-card p-3 mb-3">
-  <div class="d-flex flex-wrap justify-content-between gap-2 align-items-center">
-    <div><span class="text-muted">Склад выпуска:</span> <strong>{{ production_warehouse.name if production_warehouse else 'не задан' }}</strong></div>
-    {% if production_warehouses|length > 1 %}<span class="badge text-bg-warning">Несколько производственных складов</span>{% endif %}
-  </div>
-  {% if production_warehouse_warning %}<div class="alert alert-warning mt-3 mb-0">{{ production_warehouse_warning }}</div>{% endif %}
+  <div class="small text-muted text-end">В производство: {{ production_needs|length }} · Без VIN: {{ produced_unit_rows|length }} · К отправке: {{ ready_trailer_rows|length }} · В пути: {{ inbound|length }} · К выдаче: {{ sold_not_shipped_rows|length }}</div>
 </div>
-
-<div class="kpi-grid mb-4">
-  <div class="app-card kpi-card"><div><div class="kpi-title">Нужно в производство</div><div class="kpi-value">{{ production_needs|length }}</div><div class="kpi-caption">клиенты и склад</div></div><div class="kpi-icon"><i class="bi bi-list-check"></i></div></div>
-  <div class="app-card kpi-card"><div><div class="kpi-title">Без VIN</div><div class="kpi-value">{{ produced_unit_rows|length }}</div><div class="kpi-caption">ждёт присвоения</div></div><div class="kpi-icon"><i class="bi bi-upc-scan"></i></div></div>
-  <div class="app-card kpi-card"><div><div class="kpi-title">Готово к отправке</div><div class="kpi-value">{{ ready_trailer_rows|length }}</div><div class="kpi-caption">со склада выпуска</div></div><div class="kpi-icon"><i class="bi bi-box-seam"></i></div></div>
-  <div class="app-card kpi-card"><div><div class="kpi-title">В пути</div><div class="kpi-value">{{ inbound|length }}</div><div class="kpi-caption">активные перемещения</div></div><div class="kpi-icon"><i class="bi bi-truck"></i></div></div>
-  <div class="app-card kpi-card"><div><div class="kpi-title">Продано, не отгружено</div><div class="kpi-value">{{ sold_not_shipped_rows|length }}</div><div class="kpi-caption">ожидает выдачи</div></div><div class="kpi-icon"><i class="bi bi-clipboard-check"></i></div></div>
-</div>
-
+{% if production_warehouse_warning %}<div class="alert alert-warning mb-3">{{ production_warehouse_warning }}</div>{% endif %}
 <div class="app-card mb-3">
   <div class="card-header">Документы выданы, прицеп не привязан</div>
   <div class="table-responsive">
@@ -147,8 +132,22 @@
               <td>{{ row.unit.item.article if row.unit.item else '' }} {{ row.unit.item.name if row.unit.item else '' }}</td>
               <td>{{ row.target_warehouse.name if row.target_warehouse else '' }}</td>
               <td>{% if row.order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=row.order.id) }}">{{ row.order.order_number }}</a>{% else %}<span class="text-muted">на склад</span>{% endif %}</td>
-              <td>{% if row.vin_to_apply %}<span class="fw-bold">{{ row.vin_to_apply }}</span>{% if row.vin_docs_issued %}<div class="text-danger small">Документы уже выданы</div>{% endif %}{% else %}<span class="text-muted">не зарезервирован</span>{% endif %}</td>
-              <td class="text-end"><a class="btn btn-sm btn-orange" href="{{ url_for('main.logistics_assign_vin', unit_id=row.unit.id) }}">{{ 'Привязать VIN' if row.vin_to_apply else 'Присвоить VIN' }}</a></td>
+              <td>
+                {% if row.vin_to_apply %}
+                  <span class="fw-bold">{{ row.vin_to_apply }}</span>
+                  {% if row.vin_conflict_trailer %}<div class="text-danger small">уже есть Trailer #{{ row.vin_conflict_trailer.id }}</div>{% endif %}
+                  {% if row.vin_docs_issued %}<div class="text-danger small">Документы уже выданы</div>{% endif %}
+                {% else %}
+                  <span class="text-muted">не зарезервирован</span>
+                {% endif %}
+              </td>
+              <td class="text-end">
+                {% if row.vin_conflict_trailer %}
+                  <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.trailers_list', vin=row.vin_to_apply) }}">Открыть прицеп</a>
+                {% else %}
+                  <a class="btn btn-sm btn-orange" href="{{ url_for('main.logistics_assign_vin', unit_id=row.unit.id) }}">{{ 'Привязать VIN' if row.vin_to_apply else 'Присвоить VIN' }}</a>
+                {% endif %}
+              </td>
             </tr>
           {% else %}
             <tr><td colspan="7" class="text-muted p-3">Нет единиц без VIN</td></tr>

@@ -331,6 +331,12 @@ def _produced_unit_context(unit: ProducedUnit | None):
     if not order:
         order = need.order if need and need.order_id else None
     vin_row = _vin_registry_for_order_or_need(order, need)
+    vin_to_apply = vin_row.vin_full if vin_row else None
+    vin_conflict_trailer = None
+    if vin_to_apply:
+        existing_trailer = Trailer.query.filter_by(vin=vin_to_apply).first()
+        if existing_trailer and (not unit or existing_trailer.id != unit.trailer_id):
+            vin_conflict_trailer = existing_trailer
     return {
         'unit': unit,
         'line': line,
@@ -339,7 +345,8 @@ def _produced_unit_context(unit: ProducedUnit | None):
         'need_type': _need_type_key(need),
         'target_warehouse': unit.target_warehouse if unit else None,
         'vin_registry': vin_row,
-        'vin_to_apply': vin_row.vin_full if vin_row else None,
+        'vin_to_apply': vin_to_apply,
+        'vin_conflict_trailer': vin_conflict_trailer,
         'vin_docs_issued': bool(vin_row and vin_row.docs_issued_at),
     }
 
@@ -1229,7 +1236,7 @@ def trailers_list():
 @main_bp.route('/trailers/new', methods=['GET', 'POST'])
 @login_required
 def trailer_create():
-    if not (current_user.is_admin or current_user.is_logistics):
+    if not current_user.is_admin:
         abort(403)
     form = TrailerCreateForm()
     _fill_trailer_form_choices(form)
@@ -1258,7 +1265,7 @@ def trailer_create():
 @main_bp.route('/trailers/<int:trailer_id>/edit', methods=['GET', 'POST'])
 @login_required
 def trailer_edit(trailer_id):
-    if not (current_user.is_admin or current_user.is_logistics):
+    if not current_user.is_admin:
         abort(403)
     trailer = Trailer.query.get_or_404(trailer_id)
 
@@ -1319,7 +1326,7 @@ def trailer_edit(trailer_id):
 @main_bp.route('/trailers/<int:trailer_id>/delete')
 @login_required
 def trailer_delete(trailer_id):
-    if not (current_user.is_admin or current_user.is_logistics):
+    if not current_user.is_admin:
         abort(403)
     trailer = Trailer.query.get_or_404(trailer_id)
 

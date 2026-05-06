@@ -3,16 +3,13 @@
 {% block title %}Пополнение складов{% endblock %}
 
 {% block content %}
-<section class="hero-dashboard">
+<div class="compact-page-header">
   <div>
     <h1>Пополнение складов</h1>
-    <p>Потребности на производство без клиентского заказа: склад → производство → VIN → отправка → наличие.</p>
+    <div class="text-muted small">Складские потребности на производство · {{ needs|length }} записей</div>
   </div>
-  <a href="{{ url_for('main.stock_replenishment_create') }}" class="btn btn-orange">
-    <i class="bi bi-plus-lg me-1"></i>Заказать на склад
-  </a>
-</section>
-
+  <a href="{{ url_for('main.stock_replenishment_create') }}" class="btn btn-orange btn-sm"><i class="bi bi-plus-lg me-1"></i>Заказать на склад</a>
+</div>
 <form method="get" class="app-card p-3 mb-3">
   <div class="row g-2 align-items-end">
     <div class="col-md-3">
