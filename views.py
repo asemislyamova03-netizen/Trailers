@@ -1362,7 +1362,8 @@ def trailers_list():
     """Список всех прицепов с фильтрами."""
     vin_filter = request.args.get('vin', '').strip()
     article_filter = request.args.get('article', '').strip()
-    status_filter = request.args.get('status', 'all')
+    status_arg = request.args.get('status')
+    status_filter = status_arg if status_arg is not None else ('IN_STOCK' if getattr(current_user, 'is_manager', False) else 'all')
     warehouse_id = request.args.get('warehouse_id', type=int)
 
     query = Trailer.query.join(Item).join(Warehouse)
@@ -5584,6 +5585,18 @@ def supply_need_cleanup_production(need_id):
         return redirect(request.referrer or url_for('main.supply_needs_list'))
     if not need.production_lines:
         flash('По этой потребности нет производственных строк.', 'warning')
+        return redirect(request.referrer or url_for('main.supply_needs_list'))
+
+    order = need.order
+    active_vin = _vin_registry_for_order_or_need(order=order, need=need)
+    if active_vin:
+        flash('Нельзя очистить производство: по заказу или заявке уже есть активный VIN.', 'danger')
+        return redirect(request.referrer or url_for('main.supply_needs_list'))
+    if order and (order.documents_issued or order.trailer_id or order.is_shipped):
+        flash('Нельзя очистить производство: по заказу уже есть документы, прицеп или отгрузка.', 'danger')
+        return redirect(request.referrer or url_for('main.supply_needs_list'))
+    if _supply_need_started(need):
+        flash('Производство уже начато. Отменить производственную строку нельзя. Можно снять резерв под заказ, если VIN и документы ещё не оформлены.', 'warning')
         return redirect(request.referrer or url_for('main.supply_needs_list'))
     if _supply_need_has_produced_output(need):
         flash('Нельзя очистить производство: по заявке уже есть выпуск или готовая строка.', 'danger')

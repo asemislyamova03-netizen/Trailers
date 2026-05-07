@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block title %}{{ 'Привязать зарезервированный VIN' if reserved_vin_row else 'Присвоить VIN' }}{% endblock %}
 {% block content %}
-<section class="hero-dashboard">
-  <div><h1>{{ 'Привязать зарезервированный VIN' if reserved_vin_row else 'Присвоить VIN' }}</h1><p>Создание конкретного прицепа на производственном складе после выпуска.</p></div>
-</section>
+<div class="compact-page-header">
+  <div><h1>{{ 'Привязать зарезервированный VIN' if reserved_vin_row else 'Присвоить VIN' }}</h1><div class="text-muted small">Создание конкретного прицепа на производственном складе после выпуска</div></div>
+</div>
 <div class="app-card p-4">
   <div class="alert alert-secondary">Единица #{{ unit.id }}: {{ unit.item.article if unit.item else '' }} {{ unit.item.name if unit.item else '' }}</div>
   {% if reserved_vin_row %}

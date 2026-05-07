@@ -73,6 +73,7 @@
             <th>Сумма</th>
             <th>Способ оплаты</th>
             <th>Источник</th>
+            <th>SIGEX/eGov</th>
             <th>Оплачен</th>
             <th>Отгружен</th>
             <th>Действия</th>
@@ -100,6 +101,15 @@
             <td>{{ c.price or '' }}</td>
             <td>{{ c.payment_method or '' }}</td>
             <td>{{ c.source or '' }}</td>
+            <td>
+                {% if c.sigex_document_id or c.sigex_last_status %}
+                    <div><span class="badge text-bg-{{ c.sigex_last_status|status_badge_class }}">{{ c.sigex_last_status|status_label if c.sigex_last_status else 'документ' }}</span></div>
+                    {% if c.sigex_operation_id %}<div class="small text-muted">QR: {{ c.sigex_operation_id }}</div>{% endif %}
+                    {% if c.sigex_last_sign_id %}<div class="small text-muted">sign: {{ c.sigex_last_sign_id }}</div>{% endif %}
+                {% else %}
+                    <span class="text-muted small">не начато</span>
+                {% endif %}
+            </td>
             <td>
                 {% if c.is_paid %}<span class="badge bg-success">Да</span>
                 {% else %}<span class="badge bg-secondary">Нет</span>{% endif %}

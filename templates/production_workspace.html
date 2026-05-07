@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Производство{% endblock %}
 {% block content %}
-<section class="hero-dashboard">
-  <div><h1>Производство</h1><p>Мобильная панель производственника: задания, выпуск единиц и комментарии по проблемам.</p></div>
+<div class="compact-page-header">
+  <div><h1>Производство</h1><div class="text-muted small">Задания, выпуск единиц и комментарии по проблемам</div></div>
   <span class="badge text-bg-success fs-6">Сегодня выпущено: {{ today_units|length }}</span>
-</section>
+</div>
 
 <div class="nav nav-tabs mb-3">
   <a class="nav-link {% if active_tab == 'todo' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='todo') }}">К выполнению</a>
