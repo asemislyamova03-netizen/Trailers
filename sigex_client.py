@@ -42,6 +42,21 @@ def sigex_get_json(path: str, params: dict | None = None) -> dict:
     return r.json()
 
 
+def sigex_delete_json(path: str, params: dict | None = None) -> dict:
+    """
+    DELETE -> JSON (если вернёт)
+    """
+    url = f"{_base_url()}{path}"
+    r = requests.delete(url, params=params, cert=_cert_tuple(), timeout=60)
+    r.raise_for_status()
+    if not r.content:
+        return {}
+    try:
+        return r.json()
+    except Exception:
+        return {"raw": r.text}
+
+
 def sigex_post_octet(path: str, data_bytes: bytes, params: dict | None = None) -> dict:
     """
     POST application/octet-stream -> JSON (если вернёт)

@@ -45,7 +45,7 @@ except Exception as e:
 
 from sqlalchemy.exc import IntegrityError
 
-from sigex_client import sigex_post_json, sigex_get_json, sigex_post_octet
+from sigex_client import sigex_post_json, sigex_get_json, sigex_post_octet, sigex_delete_json
 from pdf_utils import build_contract_pdf_bytes
 from app import csrf
 main_bp = Blueprint('main', __name__)
@@ -594,6 +594,11 @@ def status_label(value):
         'reserved': 'В резерве',
         'sold': 'Продан',
         'decommissioned': 'Списан',
+        'document_ready': 'Документ подготовлен',
+        'qr_started': 'QR ожидает подписи',
+        'fail': 'Ошибка',
+        'expired': 'Истёк срок',
+        'org_signed': 'Подписан организацией',
     })
     normalized = str(value or '').lower()
     return labels.get(normalized, value or '')
@@ -604,15 +609,15 @@ def status_badge_class(value):
     value = (value or '').lower()
     if value in ('draft', 'new', 'planned', 'manual', 'website', 'phone', 'other', 'customer_order'):
         return 'secondary'
-    if value in ('in_progress', 'in_production', 'sent', 'in_transit', 'manager_handling', 'telegram'):
+    if value in ('in_progress', 'in_production', 'sent', 'in_transit', 'manager_handling', 'telegram', 'qr_started'):
         return 'primary'
     if value in ('waiting_payment', 'waiting_production', 'waiting_transfer', 'produced_waiting_vin', 'produced_no_vin', 'invoice_sent', 'partial', 'not_started', 'manager_needed', 'waiting_client'):
         return 'warning'
     if value in ('prepaid', 'partial_ready', 'ai_handling', 'whatsapp', 'instagram', 'stock_replenishment', 'warehouse_stock'):
         return 'info'
-    if value in ('ready', 'arrived', 'ready_to_ship', 'sold_not_shipped', 'customer_shipped', 'done', 'vin_assigned', 'confirmed', 'paid', 'documents_ready', 'documents_issued', 'contract_ready', 'order_created', 'in_stock', 'sold'):
+    if value in ('ready', 'arrived', 'ready_to_ship', 'sold_not_shipped', 'customer_shipped', 'done', 'vin_assigned', 'confirmed', 'paid', 'documents_ready', 'documents_issued', 'contract_ready', 'order_created', 'in_stock', 'sold', 'document_ready', 'org_signed'):
         return 'success'
-    if value in ('cancelled', 'canceled', 'closed', 'spam', 'decommissioned'):
+    if value in ('cancelled', 'canceled', 'closed', 'spam', 'decommissioned', 'fail', 'expired'):
         return 'dark'
     if value == 'reserved':
         return 'warning'
@@ -3260,14 +3265,76 @@ def _sigex_title_for_contract(contract) -> str:
     num = contract.contract_number or contract.id
     return f"Договор_{num}.pdf"
 
+
+def _sigex_json_error(exc, status_code=502):
+    return jsonify({"ok": False, "error": str(exc)}), status_code
+
+
+def _prepare_sigex_contract_document(contract) -> str:
+    if HTML is None:
+        raise RuntimeError("WeasyPrint is not available. HTML print/PDF fallback is available, SIGEX PDF is disabled.")
+
+    if contract.sigex_document_id:
+        return contract.sigex_document_id
+
+    title = _sigex_title_for_contract(contract)
+    payload = {
+        "title": title,
+        "description": f"Договор №{contract.contract_number or contract.id}",
+        "settings": {
+            "private": False,
+            "signaturesLimit": 2,
+            "switchToPrivateAfterLimitReached": True,
+            "tempStorageAfterRegistration": 86400000,
+        },
+    }
+
+    reg = sigex_post_json("/api", payload)
+    document_id = reg["documentId"]
+    pdf_bytes = _contract_pdf_bytes(contract.id)
+    sigex_post_octet(f"/api/{document_id}/data", pdf_bytes)
+
+    contract.sigex_document_id = document_id
+    contract.sigex_last_status = "document_ready"
+    contract.sigex_expire_at = datetime.utcnow() + timedelta(hours=24)
+    return document_id
+
+
+def _sync_sigex_operation_status(contract, response_payload: dict) -> str | None:
+    status = response_payload.get("status")
+    old_status = contract.sigex_last_status
+    if status:
+        contract.sigex_last_status = status
+    if status == "done":
+        sign_id = response_payload.get("signId")
+        if sign_id is not None:
+            contract.sigex_last_sign_id = sign_id
+        if old_status != "done" and contract.order:
+            add_order_event(
+                contract.order,
+                "contract_ready",
+                old_value=old_status,
+                new_value="sigex_signed",
+                comment=f"Договор №{contract.contract_number or contract.id} подписан через eGov QR / SIGEX",
+            )
+    return status
+
+
+def _active_sigex_qr_payload(contract) -> dict:
+    return {
+        "description": f"Подпишите договор №{contract.contract_number or contract.id}",
+        "meta": [
+            {"name": "Номер договора", "value": str(contract.contract_number or contract.id)},
+            {"name": "Сумма", "value": str(contract.price or "")},
+        ],
+    }
+
+
 @main_bp.route('/contracts/<int:contract_id>/sign')
 @login_required
 def contract_sign(contract_id):
     """
-    Страница подписи:
-      1) менеджер подписывает ЭЦП организации (через NCALayer на своём ПК)
-      2) показываем QR для клиента
-      3) после done — даём кнопку "Открыть карточку (DDC)"
+    Страница подписи через eGov QR / SIGEX.
     """
     ctx = _build_contract_context(contract_id)
     contract = ctx["contract"]
@@ -3290,39 +3357,21 @@ def contract_sigex_pdf_base64(contract_id):
 def contract_sigex_preregister(contract_id):
     contract = SalesContract.query.get_or_404(contract_id)
     _ensure_can_manage_contract(contract)
-    if HTML is None:
-        return jsonify({"ok": False, "error": "WeasyPrint is not available. HTML print/PDF fallback is available, SIGEX PDF is disabled."}), 503
+    try:
+        document_id = _prepare_sigex_contract_document(contract)
+        db.session.commit()
+    except RuntimeError as exc:
+        db.session.rollback()
+        return _sigex_json_error(exc, 503)
+    except Exception as exc:
+        db.session.rollback()
+        return _sigex_json_error(exc)
 
-    # если уже есть documentId — просто вернём
-    if contract.sigex_document_id:
-        return jsonify({"documentId": contract.sigex_document_id})
-
-    # предрегистрация без подписи возможна только при mTLS :contentReference[oaicite:3]{index=3}
-    title = _sigex_title_for_contract(contract)
-
-    payload = {
-        "title": title,
-        "description": f"Договор №{contract.contract_number or contract.id}",
-        "settings": {
-            "private": False,
-            "signaturesLimit": 2,
-            "switchToPrivateAfterLimitReached": True,
-            # чтобы QR-подпись работала: документ должен быть в tempStorage или архиве :contentReference[oaicite:4]{index=4}
-            "tempStorageAfterRegistration": 86400000,  # 24 часа
-        },
-    }
-
-    reg = sigex_post_json("/api", payload)
-    document_id = reg["documentId"]
-
-    # завершить регистрацию нужно передачей тела документа :contentReference[oaicite:5]{index=5}
-    pdf_bytes = _contract_pdf_bytes(contract_id)
-    sigex_post_octet(f"/api/{document_id}/data", pdf_bytes)
-
-    contract.sigex_document_id = document_id
-    db.session.commit()
-
-    return jsonify({"documentId": document_id})
+    return jsonify({
+        "ok": True,
+        "documentId": document_id,
+        "status": contract.sigex_last_status,
+    })
 
 @main_bp.route('/contracts/<int:contract_id>/sigex/add_org_signature', methods=['POST'])
 @login_required
@@ -3344,39 +3393,47 @@ def contract_sigex_add_org_signature(contract_id):
         abort(400, "signature is required")
 
     # добавление подписи к документу :contentReference[oaicite:6]{index=6}
-    res = sigex_post_json(f"/api/{contract.sigex_document_id}", {
-        "signType": sign_type,
-        "signature": signature,
-    })
+    try:
+        res = sigex_post_json(f"/api/{contract.sigex_document_id}", {
+            "signType": sign_type,
+            "signature": signature,
+        })
+    except Exception as exc:
+        return _sigex_json_error(exc)
 
     contract.sigex_last_sign_id = res.get("signId")
     contract.sigex_last_status = "org_signed"
     db.session.commit()
 
-    return jsonify({"ok": True, "signId": res.get("signId")})
+    return jsonify({
+        "ok": True,
+        "documentId": contract.sigex_document_id,
+        "signId": res.get("signId"),
+        "status": contract.sigex_last_status,
+    })
 
 @main_bp.route('/contracts/<int:contract_id>/sigex/start_qr', methods=['POST'])
 @login_required
 def contract_sigex_start_qr(contract_id):
     contract = SalesContract.query.get_or_404(contract_id)
     _ensure_can_manage_contract(contract)
-    if not contract.sigex_document_id:
-        abort(400, "SIGEX document not preregistered")
-
-    payload = {
-        "description": f"Подпишите договор №{contract.contract_number or contract.id}",
-        "meta": [
-            {"name": "Номер договора", "value": str(contract.contract_number or contract.id)},
-            {"name": "Сумма", "value": str(contract.price or "")},
-        ],
-    }
-
-    # инициировать процедуру QR-подписи :contentReference[oaicite:7]{index=7}
-    res = sigex_post_json(f"/api/{contract.sigex_document_id}/egovQr", payload)
-
-    contract.sigex_operation_id = res["operationId"]
-    contract.sigex_last_status = "qr_started"
-    db.session.commit()
+    if not (contract.sigex_last_sign_id or contract.sigex_last_status == "org_signed"):
+        return jsonify({"ok": False, "error": "Сначала подпишите договор ЭЦП организации через NCALayer."}), 400
+    try:
+        document_id = _prepare_sigex_contract_document(contract)
+        res = sigex_post_json(f"/api/{document_id}/egovQr", _active_sigex_qr_payload(contract))
+        operation_id = res.get("operationId")
+        if not operation_id:
+            raise RuntimeError("SIGEX не вернул operationId для QR-подписания.")
+        contract.sigex_operation_id = operation_id
+        contract.sigex_last_status = "qr_started"
+        db.session.commit()
+    except RuntimeError as exc:
+        db.session.rollback()
+        return _sigex_json_error(exc, 503)
+    except Exception as exc:
+        db.session.rollback()
+        return _sigex_json_error(exc)
 
     return jsonify(res)
 
@@ -3388,16 +3445,35 @@ def contract_sigex_qr_status(contract_id):
     if not (contract.sigex_document_id and contract.sigex_operation_id):
         abort(400, "No active operation")
 
-    # получить статус процедуры :contentReference[oaicite:8]{index=8}
-    res = sigex_get_json(f"/api/{contract.sigex_document_id}/egovOperation/{contract.sigex_operation_id}")
-
-    status = res.get("status")
-    contract.sigex_last_status = status
-    if status == "done":
-        contract.sigex_last_sign_id = res.get("signId")
-    db.session.commit()
+    try:
+        res = sigex_get_json(f"/api/{contract.sigex_document_id}/egovOperation/{contract.sigex_operation_id}")
+        _sync_sigex_operation_status(contract, res)
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        return _sigex_json_error(exc)
 
     return jsonify(res)
+
+
+@main_bp.route('/contracts/<int:contract_id>/sigex/cancel_qr', methods=['POST'])
+@login_required
+def contract_sigex_cancel_qr(contract_id):
+    contract = SalesContract.query.get_or_404(contract_id)
+    _ensure_can_manage_contract(contract)
+    if not (contract.sigex_document_id and contract.sigex_operation_id):
+        return jsonify({"ok": True, "status": contract.sigex_last_status or "no_active_operation"})
+
+    try:
+        sigex_delete_json(f"/api/{contract.sigex_document_id}/egovOperation/{contract.sigex_operation_id}")
+        contract.sigex_operation_id = None
+        contract.sigex_last_status = "canceled"
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        return _sigex_json_error(exc)
+
+    return jsonify({"ok": True, "status": contract.sigex_last_status})
 
 @main_bp.route('/contracts/<int:contract_id>/sigex/ddc')
 @login_required
@@ -3410,7 +3486,6 @@ def contract_sigex_ddc(contract_id):
     if not contract.sigex_document_id:
         abort(400, "SIGEX document not preregistered")
 
-    # buildDDC :contentReference[oaicite:9]{index=9}
     params = {
         "fileName": _sigex_title_for_contract(contract),
         "withoutDocumentVisualization": "false",

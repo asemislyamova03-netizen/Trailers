@@ -2,140 +2,309 @@
 {% block title %}Подписание договора{% endblock %}
 
 {% block content %}
-<h1 class="h5 mb-3">Подписание договора №{{ contract.contract_number or contract.id }}</h1>
-
-<div class="mb-3">
-    <button id="btnPreregister" class="btn btn-outline-primary btn-sm">1) Подготовить документ (SIGEX)</button>
-    <button id="btnOrgSign" class="btn btn-primary btn-sm" disabled>2) Подписать ЭЦП организации (NCALayer)</button>
-    <button id="btnStartQR" class="btn btn-success btn-sm" disabled>3) Показать QR клиенту</button>
-    <a id="btnDDC" class="btn btn-outline-secondary btn-sm d-none" target="_blank"
-        href="{{ url_for('main.contract_sigex_ddc', contract_id=contract.id) }}">
-        Открыть карточку (DDC)
-    </a>
+{% set sigex_status = contract.sigex_last_status or '' %}
+{% set document_ready = contract.sigex_document_id %}
+{% set org_signed = contract.sigex_last_sign_id or sigex_status in ['org_signed', 'qr_started', 'done'] %}
+<div class="compact-page-header">
+    <div>
+        <h1>Подписание договора №{{ contract.contract_number or contract.id }}</h1>
+        <div class="text-muted small">SIGEX: ЭЦП организации через NCALayer, затем eGov QR клиента</div>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('main.contracts_list') }}">К договорам</a>
+        <a id="btnDDC"
+           class="btn btn-outline-primary btn-sm {% if not contract.sigex_document_id or contract.sigex_last_status != 'done' %}d-none{% endif %}"
+           target="_blank"
+           href="{{ url_for('main.contract_sigex_ddc', contract_id=contract.id) }}">
+            Открыть карточку DDC
+        </a>
+    </div>
 </div>
 
-<div class="row">
-    <div class="col-md-6">
+<div class="row g-3">
+    <div class="col-lg-5">
+        <div class="card">
+            <div class="card-body">
+                <h2 class="h6 mb-3">Состояние SIGEX</h2>
+                <dl class="row mb-0 small">
+                    <dt class="col-5">Документ</dt>
+                    <dd class="col-7" id="docIdText">{{ contract.sigex_document_id or 'не подготовлен' }}</dd>
+
+                    <dt class="col-5">Подпись организации</dt>
+                    <dd class="col-7" id="orgSignText">{{ 'есть' if org_signed else 'нет' }}</dd>
+
+                    <dt class="col-5">Операция QR</dt>
+                    <dd class="col-7" id="operationIdText">{{ contract.sigex_operation_id or 'нет' }}</dd>
+
+                    <dt class="col-5">Статус</dt>
+                    <dd class="col-7" id="statusText">{{ contract.sigex_last_status|status_label or 'не начато' }}</dd>
+
+                    <dt class="col-5">Последняя подпись</dt>
+                    <dd class="col-7" id="signIdText">{{ contract.sigex_last_sign_id or 'нет' }}</dd>
+                </dl>
+            </div>
+        </div>
+
+        <div class="d-grid gap-2 mt-3">
+            <button id="btnPreregister" class="btn btn-outline-primary" {% if document_ready %}disabled{% endif %}>
+                1. Подготовить документ
+            </button>
+            <button id="btnOrgSign" class="btn btn-primary" {% if not document_ready or org_signed %}disabled{% endif %}>
+                2. Подписать ЭЦП организации
+            </button>
+            <button id="btnStartQR" class="btn btn-success" {% if not org_signed %}disabled{% endif %}>
+                3. Показать QR клиенту
+            </button>
+            <button id="btnCheckStatus" class="btn btn-outline-primary" {% if not contract.sigex_operation_id %}disabled{% endif %}>
+                Проверить статус
+            </button>
+            <button id="btnCancelQR" class="btn btn-outline-danger" {% if not contract.sigex_operation_id %}disabled{% endif %}>
+                Отменить QR
+            </button>
+        </div>
+
+        <div id="messageBox" class="alert alert-light border mt-3 mb-0 small">
+            Сначала подготовьте договор и подпишите его ЭЦП организации, затем покажите QR клиенту.
+        </div>
+    </div>
+
+    <div class="col-lg-7">
         <div class="card">
             <div class="card-header">QR для клиента</div>
             <div class="card-body text-center">
-                <img id="qrImg" class="img-fluid d-none" alt="QR">
-                <div id="qrHint" class="text-muted small">Нажми “Показать QR”, чтобы клиент подписал в eGov.</div>
-                <div id="status" class="mt-2 small"></div>
+                <img id="qrImg" class="img-fluid d-none" alt="QR eGov">
+                <div id="qrLinkBox" class="d-none mt-3">
+                    <a id="qrLink" href="#" target="_blank" rel="noopener">Открыть ссылку подписания</a>
+                </div>
+                <div id="qrHint" class="text-muted small">QR появится после подписи организации и запуска клиентского подписания.</div>
             </div>
         </div>
     </div>
 </div>
 
-<!-- 1) Скопируй ncalayer-client.js из репозитория sigex-kz/ncalayer-js-client в static/js/ -->
 <script src="{{ url_for('static', filename='js/ncalayer-client.js') }}"></script>
-
 <script>
     const contractId = {{ contract.id }};
-
-    async function postJson(url, body) {
-        const r = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body || {})
-        });
-        if (!r.ok) throw new Error(await r.text());
-        return await r.json();
-    }
-
-    async function getJson(url) {
-        const r = await fetch(url);
-        if (!r.ok) throw new Error(await r.text());
-        return await r.json();
-    }
+    const csrfToken = "{{ csrf_token() }}";
+    let pollTimer = null;
 
     const btnPreregister = document.getElementById('btnPreregister');
     const btnOrgSign = document.getElementById('btnOrgSign');
     const btnStartQR = document.getElementById('btnStartQR');
+    const btnCheckStatus = document.getElementById('btnCheckStatus');
+    const btnCancelQR = document.getElementById('btnCancelQR');
     const btnDDC = document.getElementById('btnDDC');
     const qrImg = document.getElementById('qrImg');
-    const statusBox = document.getElementById('status');
+    const qrHint = document.getElementById('qrHint');
+    const qrLinkBox = document.getElementById('qrLinkBox');
+    const qrLink = document.getElementById('qrLink');
+    const messageBox = document.getElementById('messageBox');
+    const docIdText = document.getElementById('docIdText');
+    const orgSignText = document.getElementById('orgSignText');
+    const operationIdText = document.getElementById('operationIdText');
+    const statusText = document.getElementById('statusText');
+    const signIdText = document.getElementById('signIdText');
+
+    async function postJson(url, body) {
+        const r = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrfToken
+            },
+            body: JSON.stringify(body || {})
+        });
+        const text = await r.text();
+        let data = {};
+        try {
+            data = text ? JSON.parse(text) : {};
+        } catch (e) {
+            data = { error: text };
+        }
+        if (!r.ok || data.ok === false) {
+            throw new Error(data.error || text || 'Ошибка запроса');
+        }
+        return data;
+    }
+
+    async function getJson(url) {
+        const r = await fetch(url);
+        const text = await r.text();
+        let data = {};
+        try {
+            data = text ? JSON.parse(text) : {};
+        } catch (e) {
+            data = { error: text };
+        }
+        if (!r.ok || data.ok === false) {
+            throw new Error(data.error || text || 'Ошибка запроса');
+        }
+        return data;
+    }
+
+    function setMessage(text, type = 'light') {
+        messageBox.className = `alert alert-${type} border mt-3 mb-0 small`;
+        messageBox.textContent = text;
+    }
+
+    function stopPolling() {
+        if (pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+        }
+    }
+
+    function setQrFromResponse(res) {
+        const qrCode = res.qrCode || res.qr || res.qrcode || res.qrImage;
+        const qrUrl = res.eGovMobileLaunchLink || res.eGovBusinessLaunchLink || res.url || res.qrUrl || res.link;
+
+        if (qrCode) {
+            qrImg.src = qrCode.startsWith('data:') ? qrCode : `data:image/png;base64,${qrCode}`;
+            qrImg.classList.remove('d-none');
+            qrHint.classList.add('d-none');
+        }
+
+        if (qrUrl) {
+            qrLink.href = qrUrl;
+            qrLinkBox.classList.remove('d-none');
+        }
+    }
+
+    function syncStatus(res) {
+        if (res.documentId) {
+            docIdText.textContent = res.documentId;
+        }
+        if (res.operationId) {
+            operationIdText.textContent = res.operationId;
+            btnCheckStatus.disabled = false;
+            btnCancelQR.disabled = false;
+        }
+        if (res.signId) {
+            signIdText.textContent = res.signId;
+        }
+
+        const status = res.status || 'qr_started';
+        statusText.textContent = status;
+
+        if (status === 'org_signed') {
+            orgSignText.textContent = 'есть';
+            btnOrgSign.disabled = true;
+            btnStartQR.disabled = false;
+        }
+
+        if (status === 'done') {
+            stopPolling();
+            setMessage('Клиент подписал договор. Можно открыть карточку DDC.', 'success');
+            btnDDC.classList.remove('d-none');
+            btnStartQR.disabled = false;
+            btnCancelQR.disabled = true;
+        } else if (['fail', 'canceled', 'cancelled', 'expired'].includes(status)) {
+            stopPolling();
+            setMessage(`Подписание не завершилось: ${status}`, 'warning');
+            btnStartQR.disabled = false;
+            btnCancelQR.disabled = true;
+        }
+    }
+
+    async function checkStatus() {
+        const st = await getJson(`/contracts/${contractId}/sigex/qr_status`);
+        syncStatus(st);
+        return st;
+    }
+
+    function startPolling() {
+        stopPolling();
+        pollTimer = setInterval(async () => {
+            try {
+                await checkStatus();
+            } catch (e) {
+                // Временные ошибки сети при polling не показываем пользователю каждую итерацию.
+            }
+        }, 2500);
+    }
 
     btnPreregister.addEventListener('click', async () => {
         btnPreregister.disabled = true;
-        statusBox.textContent = 'Подготовка документа...';
+        setMessage('Готовим PDF и регистрируем документ в SIGEX...', 'light');
         try {
-            await postJson(`/contracts/${contractId}/sigex/preregister`);
-            statusBox.textContent = 'Документ подготовлен. Теперь подпись ЭЦП организации.';
+            const res = await postJson(`/contracts/${contractId}/sigex/preregister`);
+            docIdText.textContent = res.documentId;
+            statusText.textContent = res.status || 'document_ready';
             btnOrgSign.disabled = false;
+            setMessage('Документ подготовлен. Теперь подпишите его ЭЦП организации через NCALayer.', 'info');
         } catch (e) {
-            statusBox.textContent = 'Ошибка: ' + e.message;
+            setMessage('Ошибка подготовки: ' + e.message, 'danger');
             btnPreregister.disabled = false;
         }
     });
 
     btnOrgSign.addEventListener('click', async () => {
         btnOrgSign.disabled = true;
-        statusBox.textContent = 'Получаем PDF и подписываем через NCALayer...';
-
+        setMessage('Получаем PDF и открываем NCALayer...', 'light');
         try {
-            // получить PDF base64
+            if (typeof NCALayerClient === 'undefined') {
+                throw new Error('JS-клиент NCALayer не загружен.');
+            }
             const pdf = await getJson(`/contracts/${contractId}/sigex/pdf_base64`);
-            const pdfBase64 = pdf.pdfBase64;
-
             const ncalayerClient = new NCALayerClient();
             await ncalayerClient.connect();
-
-            // detached CMS, чтобы подпись не тащила весь документ в себя (рекомендовано SIGEX) :contentReference[oaicite:10]{index=10}
             const signatureBase64 = await ncalayerClient.basicsSignCMS(
                 NCALayerClient.basicsStorageAll,
-                pdfBase64,
+                pdf.pdfBase64,
                 NCALayerClient.basicsCMSParamsDetached,
                 NCALayerClient.basicsSignerSignAny,
             );
-
-            await postJson(`/contracts/${contractId}/sigex/add_org_signature`, {
+            const res = await postJson(`/contracts/${contractId}/sigex/add_org_signature`, {
                 signType: 'cms',
                 signature: signatureBase64
             });
-
-            statusBox.textContent = 'ЭЦП организации поставлена. Можно показывать QR клиенту.';
-            btnStartQR.disabled = false;
+            syncStatus(res);
+            setMessage('ЭЦП организации поставлена. Теперь можно показать QR клиенту.', 'success');
         } catch (e) {
-            statusBox.textContent = 'Ошибка подписи: ' + e.message;
+            setMessage('Ошибка подписи организации: ' + e.message, 'danger');
             btnOrgSign.disabled = false;
         }
     });
 
     btnStartQR.addEventListener('click', async () => {
         btnStartQR.disabled = true;
-        statusBox.textContent = 'Генерируем QR...';
-
+        setMessage('Создаём QR-подписание для клиента...', 'light');
         try {
             const res = await postJson(`/contracts/${contractId}/sigex/start_qr`);
-            qrImg.src = 'data:image/png;base64,' + res.qrCode;
-            qrImg.classList.remove('d-none');
-
-            statusBox.textContent = 'Ожидаем подпись клиента...';
-            // polling статуса
-            const timer = setInterval(async () => {
-                try {
-                    const st = await getJson(`/contracts/${contractId}/sigex/qr_status`);
-                    statusBox.textContent = `Статус: ${st.status}`;
-
-                    if (st.status === 'done') {
-                        clearInterval(timer);
-                        statusBox.textContent = 'Клиент подписал ✅ Можно открыть карточку (DDC).';
-                        btnDDC.classList.remove('d-none');
-                    }
-                    if (st.status === 'fail' || st.status === 'canceled') {
-                        clearInterval(timer);
-                        statusBox.textContent = 'Подписание не завершилось: ' + st.status;
-                        btnStartQR.disabled = false;
-                    }
-                } catch (e) {
-                    // молча, чтобы не спамить
-                }
-            }, 2500);
-
+            setQrFromResponse(res);
+            syncStatus(res);
+            setMessage('QR готов. Ожидаем подпись клиента в eGov mobile...', 'info');
+            startPolling();
         } catch (e) {
-            statusBox.textContent = 'Ошибка QR: ' + e.message;
+            setMessage('Ошибка QR: ' + e.message, 'danger');
             btnStartQR.disabled = false;
+        }
+    });
+
+    btnCheckStatus.addEventListener('click', async () => {
+        setMessage('Проверяем статус...', 'light');
+        try {
+            await checkStatus();
+        } catch (e) {
+            setMessage('Ошибка проверки: ' + e.message, 'danger');
+        }
+    });
+
+    btnCancelQR.addEventListener('click', async () => {
+        if (!confirm('Отменить текущий QR-запрос на подпись?')) {
+            return;
+        }
+        btnCancelQR.disabled = true;
+        try {
+            const res = await postJson(`/contracts/${contractId}/sigex/cancel_qr`);
+            stopPolling();
+            syncStatus(res);
+            operationIdText.textContent = 'нет';
+            setMessage('QR-подписание отменено.', 'warning');
+            btnStartQR.disabled = false;
+        } catch (e) {
+            setMessage('Ошибка отмены: ' + e.message, 'danger');
+            btnCancelQR.disabled = false;
         }
     });
 </script>
