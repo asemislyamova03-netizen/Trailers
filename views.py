@@ -164,7 +164,7 @@ def can_access_contract(contract: SalesContract) -> bool:
 
 
 def can_manage_contract(contract: SalesContract) -> bool:
-    if current_user.is_admin:
+    if current_user.is_admin or current_user.is_director:
         return True
     if current_user.is_manager and contract.order:
         return can_manage_order(contract.order) and not contract.order.documents_issued and not contract.order.is_shipped
@@ -589,16 +589,19 @@ def status_label(value):
         'warehouse_transfer': 'Между складами',
         'production_arrival': 'Поступление с производства',
         'customer_shipment': 'Отгрузка клиенту',
+        'contract_signed': 'Договор подписан',
+        'sigex_signed': 'Подписан через SIGEX',
         'ready_production_warehouse': 'Готов на складе выпуска',
         'in_stock': 'В наличии',
         'reserved': 'В резерве',
         'sold': 'Продан',
         'decommissioned': 'Списан',
-        'document_ready': 'Документ подготовлен',
+        'document_ready': 'Документ SIGEX подготовлен',
         'qr_started': 'QR ожидает подписи',
-        'fail': 'Ошибка',
-        'expired': 'Истёк срок',
+        'fail': 'Ошибка SIGEX',
+        'expired': 'QR истёк',
         'org_signed': 'Подписан организацией',
+        'canceled': 'QR отменён',
     })
     normalized = str(value or '').lower()
     return labels.get(normalized, value or '')
@@ -615,7 +618,7 @@ def status_badge_class(value):
         return 'warning'
     if value in ('prepaid', 'partial_ready', 'ai_handling', 'whatsapp', 'instagram', 'stock_replenishment', 'warehouse_stock'):
         return 'info'
-    if value in ('ready', 'arrived', 'ready_to_ship', 'sold_not_shipped', 'customer_shipped', 'done', 'vin_assigned', 'confirmed', 'paid', 'documents_ready', 'documents_issued', 'contract_ready', 'order_created', 'in_stock', 'sold', 'document_ready', 'org_signed'):
+    if value in ('ready', 'arrived', 'ready_to_ship', 'sold_not_shipped', 'customer_shipped', 'done', 'vin_assigned', 'confirmed', 'paid', 'documents_ready', 'documents_issued', 'contract_ready', 'contract_signed', 'sigex_signed', 'order_created', 'in_stock', 'sold', 'document_ready', 'org_signed'):
         return 'success'
     if value in ('cancelled', 'canceled', 'closed', 'spam', 'decommissioned', 'fail', 'expired'):
         return 'dark'
@@ -3016,6 +3019,7 @@ def contracts_list():
         .outerjoin(Item, Item.id == Trailer.item_id)
         .outerjoin(Customer, Customer.id == SalesContract.customer_id)
         .outerjoin(Warehouse, Warehouse.id == Trailer.warehouse_id)
+        .outerjoin(VinRegistry, VinRegistry.customer_order_id == CustomerOrder.id)
     )
     if current_user.is_manager:
         query = query.filter(or_(
@@ -3044,6 +3048,7 @@ def contracts_list():
             or_(
                 Trailer.vin.ilike(like),
                 Item.article.ilike(like),
+                VinRegistry.vin_full.ilike(like),
             )
         )
 
@@ -3058,6 +3063,7 @@ def contracts_list():
     contracts = (
         query
         .order_by(SalesContract.contract_date.desc().nullslast(), SalesContract.id.desc())
+        .distinct()
         .all()
     )
 
@@ -3148,6 +3154,7 @@ def contract_edit(contract_id):
         old_db_value = contract.contract_number  # сохраняем как есть (может быть None)
         old_norm = (old_db_value or '').strip()
         new_norm = (form.contract_number.data or '').strip()
+        proposed_contract_number = old_db_value if not new_norm or new_norm == old_norm else new_norm
 
         # если поле очистили — НЕ меняем номер
         if not new_norm:
@@ -3162,6 +3169,32 @@ def contract_edit(contract_id):
                     form.contract_number.errors.append('Такой номер договора уже существует. Введите другой.')
                     return render_template('contract_form.html', form=form, form_title='Редактирование договора')
                 contract.contract_number = new_norm
+
+        key_fields_before = (
+            old_db_value,
+            contract.contract_date,
+            contract.customer_id,
+            contract.trailer_id,
+            contract.order_id,
+            str(contract.price or ''),
+            contract.payment_method or '',
+            contract.source or '',
+        )
+        key_fields_after = (
+            proposed_contract_number,
+            form.contract_date.data,
+            form.customer_id.data,
+            new_trailer.id,
+            contract.order_id,
+            str(form.price.data or ''),
+            _norm_str(form.payment_method.data) or '',
+            contract.source or '',
+        )
+        key_fields_changed = key_fields_before != key_fields_after
+        if key_fields_changed and contract.sigex_last_status == 'done':
+            contract.contract_number = old_db_value
+            flash('Договор уже подписан через SIGEX/eGov QR. Ключевые поля нельзя менять обычным способом.', 'danger')
+            return render_template('contract_form.html', form=form, form_title='Редактирование договора')
 
         # если поменяли прицеп — старый вернуть в IN_STOCK (если других договоров нет)
         if old_trailer and old_trailer.id != new_trailer.id:
@@ -3181,6 +3214,13 @@ def contract_edit(contract_id):
         if current_user.is_admin:
             contract.is_paid = bool(form.is_paid.data)
             contract.is_shipped = bool(form.is_shipped.data)
+
+        if key_fields_changed and contract.sigex_last_status != 'done':
+            contract.sigex_document_id = None
+            contract.sigex_operation_id = None
+            contract.sigex_expire_at = None
+            contract.sigex_last_status = None
+            contract.sigex_last_sign_id = None
 
         try:
             db.session.commit()
@@ -3268,7 +3308,11 @@ def _sigex_title_for_contract(contract) -> str:
 
 
 def _sigex_json_error(exc, status_code=502):
-    return jsonify({"ok": False, "error": str(exc)}), status_code
+    current_app.logger.exception("SIGEX/eGov QR integration error")
+    message = "Ошибка SIGEX/eGov QR. Проверьте настройку интеграции и повторите действие."
+    if "WeasyPrint" in str(exc):
+        message = "PDF для SIGEX сейчас недоступен. Проверьте генерацию PDF на сервере."
+    return jsonify({"ok": False, "error": message}), status_code
 
 
 def _prepare_sigex_contract_document(contract) -> str:
@@ -3313,10 +3357,10 @@ def _sync_sigex_operation_status(contract, response_payload: dict) -> str | None
         if old_status != "done" and contract.order:
             add_order_event(
                 contract.order,
-                "contract_ready",
+                "contract_signed",
                 old_value=old_status,
                 new_value="sigex_signed",
-                comment=f"Договор №{contract.contract_number or contract.id} подписан через eGov QR / SIGEX",
+                comment="Договор подписан клиентом через eGov QR / SIGEX",
             )
     return status
 
@@ -3418,6 +3462,11 @@ def contract_sigex_add_org_signature(contract_id):
 def contract_sigex_start_qr(contract_id):
     contract = SalesContract.query.get_or_404(contract_id)
     _ensure_can_manage_contract(contract)
+    last_status = (contract.sigex_last_status or '').lower()
+    if last_status == 'done':
+        return jsonify({"ok": False, "error": "Договор уже подписан через SIGEX/eGov QR."}), 400
+    if contract.sigex_operation_id and last_status not in ('canceled', 'cancelled', 'expired', 'fail'):
+        return jsonify({"ok": False, "error": "По договору уже есть активный QR-запрос. Проверьте статус или отмените QR."}), 400
     if not (contract.sigex_last_sign_id or contract.sigex_last_status == "org_signed"):
         return jsonify({"ok": False, "error": "Сначала подпишите договор ЭЦП организации через NCALayer."}), 400
     try:
@@ -3498,7 +3547,8 @@ def contract_sigex_ddc(contract_id):
         "language": "ru",
     }
 
-    res = sigex_post_json(f"/api/{contract.sigex_document_id}/buildDDC", payload={}, params=params)
+    pdf_bytes = _contract_pdf_bytes(contract.id)
+    res = sigex_post_octet(f"/api/{contract.sigex_document_id}/buildDDC", pdf_bytes, params=params)
 
     ddc_b64 = res["ddc"]
     ddc_bytes = base64.b64decode(ddc_b64)

@@ -52,13 +52,13 @@
             <button id="btnOrgSign" class="btn btn-primary" {% if not document_ready or org_signed %}disabled{% endif %}>
                 2. Подписать ЭЦП организации
             </button>
-            <button id="btnStartQR" class="btn btn-success" {% if not org_signed %}disabled{% endif %}>
+            <button id="btnStartQR" class="btn btn-success" {% if not org_signed or sigex_status == 'done' %}disabled{% endif %}>
                 3. Показать QR клиенту
             </button>
             <button id="btnCheckStatus" class="btn btn-outline-primary" {% if not contract.sigex_operation_id %}disabled{% endif %}>
                 Проверить статус
             </button>
-            <button id="btnCancelQR" class="btn btn-outline-danger" {% if not contract.sigex_operation_id %}disabled{% endif %}>
+            <button id="btnCancelQR" class="btn btn-outline-danger" {% if not contract.sigex_operation_id or sigex_status == 'done' %}disabled{% endif %}>
                 Отменить QR
             </button>
         </div>
@@ -196,7 +196,7 @@
             stopPolling();
             setMessage('Клиент подписал договор. Можно открыть карточку DDC.', 'success');
             btnDDC.classList.remove('d-none');
-            btnStartQR.disabled = false;
+            btnStartQR.disabled = true;
             btnCancelQR.disabled = true;
         } else if (['fail', 'canceled', 'cancelled', 'expired'].includes(status)) {
             stopPolling();

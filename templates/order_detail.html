@@ -301,6 +301,12 @@
                 <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.contract_print', contract_id=order_contract.id) }}" target="_blank">Печать</a>
                 <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.contract_pdf', contract_id=order_contract.id) }}" target="_blank">PDF</a>
                 {% if can_manage_contract(order_contract) %}
+                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('main.contract_sign', contract_id=order_contract.id) }}">Подписать через eGov QR</a>
+                {% endif %}
+                {% if order_contract.sigex_last_status == 'done' %}
+                <a class="btn btn-sm btn-outline-success" href="{{ url_for('main.contract_sigex_ddc', contract_id=order_contract.id) }}" target="_blank">Открыть DDC</a>
+                {% endif %}
+                {% if can_manage_contract(order_contract) %}
                 <form method="post" action="{{ url_for('main.contract_delete', contract_id=order_contract.id) }}">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                   <button class="btn btn-sm btn-outline-danger" onclick="return confirm('Удалить договор?');">Удалить</button>

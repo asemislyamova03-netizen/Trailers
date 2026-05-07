@@ -95,7 +95,7 @@
                     -
                 {% endif %}
             </td>
-            <td>{{ c.trailer.vin if c.trailer else '' }}</td>
+            <td>{% if c.order %}{{ get_order_effective_vin(c.order) or '' }}{% elif c.trailer %}{{ c.trailer.vin }}{% endif %}</td>
             <td>{{ c.trailer.item.article if c.trailer and c.trailer.item else '' }}</td>
             <td>{{ c.trailer.warehouse.name if c.trailer and c.trailer.warehouse else '' }}</td>
             <td>{{ c.price or '' }}</td>
@@ -142,6 +142,10 @@
                 {% if can_manage_contract(c) %}
                     <a href="{{ url_for('main.contract_sign', contract_id=c.id) }}"
                        class="btn btn-sm btn-outline-primary">eGov QR</a>
+                {% endif %}
+                {% if c.sigex_last_status == 'done' %}
+                    <a href="{{ url_for('main.contract_sigex_ddc', contract_id=c.id) }}"
+                       class="btn btn-sm btn-outline-success" target="_blank">Открыть DDC</a>
                 {% endif %}
             </td>
         </tr>
