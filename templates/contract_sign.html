@@ -86,6 +86,14 @@
 <script>
     const contractId = {{ contract.id }};
     const csrfToken = "{{ csrf_token() }}";
+    const sigexUrls = {
+        preregister: "{{ url_for('main.contract_sigex_preregister', contract_id=contract.id) }}",
+        pdfBase64: "{{ url_for('main.contract_sigex_pdf_base64', contract_id=contract.id) }}",
+        addOrgSignature: "{{ url_for('main.contract_sigex_add_org_signature', contract_id=contract.id) }}",
+        startQr: "{{ url_for('main.contract_sigex_start_qr', contract_id=contract.id) }}",
+        qrStatus: "{{ url_for('main.contract_sigex_qr_status', contract_id=contract.id) }}",
+        cancelQr: "{{ url_for('main.contract_sigex_cancel_qr', contract_id=contract.id) }}"
+    };
     let pollTimer = null;
 
     const btnPreregister = document.getElementById('btnPreregister');
@@ -207,7 +215,7 @@
     }
 
     async function checkStatus() {
-        const st = await getJson(`/contracts/${contractId}/sigex/qr_status`);
+        const st = await getJson(sigexUrls.qrStatus);
         syncStatus(st);
         return st;
     }
@@ -227,7 +235,7 @@
         btnPreregister.disabled = true;
         setMessage('Готовим PDF и регистрируем документ в SIGEX...', 'light');
         try {
-            const res = await postJson(`/contracts/${contractId}/sigex/preregister`);
+            const res = await postJson(sigexUrls.preregister);
             docIdText.textContent = res.documentId;
             statusText.textContent = res.status || 'document_ready';
             btnOrgSign.disabled = false;
@@ -245,7 +253,7 @@
             if (typeof NCALayerClient === 'undefined') {
                 throw new Error('JS-клиент NCALayer не загружен.');
             }
-            const pdf = await getJson(`/contracts/${contractId}/sigex/pdf_base64`);
+            const pdf = await getJson(sigexUrls.pdfBase64);
             const ncalayerClient = new NCALayerClient();
             await ncalayerClient.connect();
             const signatureBase64 = await ncalayerClient.basicsSignCMS(
@@ -254,7 +262,7 @@
                 NCALayerClient.basicsCMSParamsDetached,
                 NCALayerClient.basicsSignerSignAny,
             );
-            const res = await postJson(`/contracts/${contractId}/sigex/add_org_signature`, {
+            const res = await postJson(sigexUrls.addOrgSignature, {
                 signType: 'cms',
                 signature: signatureBase64
             });
@@ -270,7 +278,7 @@
         btnStartQR.disabled = true;
         setMessage('Создаём QR-подписание для клиента...', 'light');
         try {
-            const res = await postJson(`/contracts/${contractId}/sigex/start_qr`);
+            const res = await postJson(sigexUrls.startQr);
             setQrFromResponse(res);
             syncStatus(res);
             setMessage('QR готов. Ожидаем подпись клиента в eGov mobile...', 'info');
@@ -296,7 +304,7 @@
         }
         btnCancelQR.disabled = true;
         try {
-            const res = await postJson(`/contracts/${contractId}/sigex/cancel_qr`);
+            const res = await postJson(sigexUrls.cancelQr);
             stopPolling();
             syncStatus(res);
             operationIdText.textContent = 'нет';
