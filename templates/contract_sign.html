@@ -236,10 +236,12 @@
         setMessage('Готовим PDF и регистрируем документ в SIGEX...', 'light');
         try {
             const res = await postJson(sigexUrls.preregister);
-            docIdText.textContent = res.documentId;
+            if (res.documentId) {
+                docIdText.textContent = res.documentId;
+            }
             statusText.textContent = res.status || 'document_ready';
             btnOrgSign.disabled = false;
-            setMessage('Документ подготовлен. Теперь подпишите его ЭЦП организации через NCALayer.', 'info');
+            setMessage('PDF подготовлен. Теперь подпишите его ЭЦП организации через NCALayer.', 'info');
         } catch (e) {
             setMessage('Ошибка подготовки: ' + e.message, 'danger');
             btnPreregister.disabled = false;

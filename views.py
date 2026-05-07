@@ -3345,6 +3345,39 @@ def _prepare_sigex_contract_document(contract) -> str:
     return document_id
 
 
+def _sigex_document_id_from_response(response_payload: dict) -> str:
+    document_id = response_payload.get("documentId") or response_payload.get("id")
+    if not document_id:
+        current_app.logger.error("SIGEX document registration returned no document id: %s", response_payload)
+        raise RuntimeError("SIGEX не вернул идентификатор документа.")
+    return str(document_id)
+
+
+def _register_sigex_contract_with_org_signature(contract, signature: str, sign_type: str) -> dict:
+    if HTML is None:
+        raise RuntimeError("WeasyPrint is not available. HTML print/PDF fallback is available, SIGEX PDF is disabled.")
+
+    title = _sigex_title_for_contract(contract)
+    payload = {
+        "title": title,
+        "description": f"Договор №{contract.contract_number or contract.id}",
+        "signType": sign_type,
+        "signature": signature,
+        "settings": {
+            "private": False,
+            "signaturesLimit": 2,
+            "switchToPrivateAfterLimitReached": True,
+            "tempStorageAfterRegistration": 86400000,
+        },
+    }
+    reg = sigex_post_json("/api", payload)
+    document_id = _sigex_document_id_from_response(reg)
+    pdf_bytes = _contract_pdf_bytes(contract.id)
+    sigex_post_octet(f"/api/{document_id}/data", pdf_bytes)
+    reg["documentId"] = document_id
+    return reg
+
+
 def _sync_sigex_operation_status(contract, response_payload: dict) -> str | None:
     status = response_payload.get("status")
     old_status = contract.sigex_last_status
@@ -3403,19 +3436,16 @@ def contract_sigex_preregister(contract_id):
     contract = SalesContract.query.get_or_404(contract_id)
     _ensure_can_manage_contract(contract)
     try:
-        document_id = _prepare_sigex_contract_document(contract)
-        db.session.commit()
+        _contract_pdf_bytes(contract_id)
     except RuntimeError as exc:
-        db.session.rollback()
         return _sigex_json_error(exc, 503)
     except Exception as exc:
-        db.session.rollback()
         return _sigex_json_error(exc)
 
     return jsonify({
         "ok": True,
-        "documentId": document_id,
-        "status": contract.sigex_last_status,
+        "documentId": contract.sigex_document_id,
+        "status": contract.sigex_last_status or "pdf_ready",
     })
 
 @main_bp.route('/contracts/<int:contract_id>/sigex/add_org_signature', methods=['POST'])
@@ -3427,9 +3457,6 @@ def contract_sigex_add_org_signature(contract_id):
     contract = SalesContract.query.get_or_404(contract_id)
     _ensure_can_manage_contract(contract)
 
-    if not contract.sigex_document_id:
-        abort(400, "SIGEX document not preregistered")
-
     data = request.get_json(silent=True) or {}
     signature = data.get("signature")
     sign_type = data.get("signType", "cms")
@@ -3437,17 +3464,24 @@ def contract_sigex_add_org_signature(contract_id):
     if not signature:
         abort(400, "signature is required")
 
-    # добавление подписи к документу :contentReference[oaicite:6]{index=6}
     try:
-        res = sigex_post_json(f"/api/{contract.sigex_document_id}", {
-            "signType": sign_type,
-            "signature": signature,
-        })
+        if contract.sigex_document_id:
+            res = sigex_post_json(f"/api/{contract.sigex_document_id}", {
+                "signType": sign_type,
+                "signature": signature,
+            })
+            document_id = contract.sigex_document_id
+        else:
+            res = _register_sigex_contract_with_org_signature(contract, signature, sign_type)
+            document_id = res["documentId"]
     except Exception as exc:
+        db.session.rollback()
         return _sigex_json_error(exc)
 
+    contract.sigex_document_id = document_id
     contract.sigex_last_sign_id = res.get("signId")
     contract.sigex_last_status = "org_signed"
+    contract.sigex_expire_at = datetime.utcnow() + timedelta(hours=24)
     db.session.commit()
 
     return jsonify({
