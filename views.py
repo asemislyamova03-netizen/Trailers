@@ -6290,6 +6290,7 @@ def order_contract_create(order_id):
         return redirect(url_for('main.order_detail', order_id=order.id))
     trailer_contract = SalesContract.query.filter_by(trailer_id=order.trailer_id).first() if order.trailer_id else None
     if trailer_contract:
+        stale_contract_relinked = False
         if trailer_contract.order_id and trailer_contract.order_id != order.id:
             linked_order = CustomerOrder.query.get(trailer_contract.order_id)
             linked_order_still_uses_trailer = bool(linked_order and linked_order.trailer_id == order.trailer_id)
@@ -6310,6 +6311,31 @@ def order_contract_create(order_id):
                     new_value=order.order_number,
                     comment=f'Прицеп снят со старого заказа при создании нового договора по заказу {order.order_number}',
                 )
+            elif linked_order and linked_order.trailer_id:
+                replacement_trailer_contract = (
+                    SalesContract.query
+                    .filter(SalesContract.trailer_id == linked_order.trailer_id, SalesContract.id != trailer_contract.id)
+                    .first()
+                )
+                if replacement_trailer_contract:
+                    replacement_number = linked_order.order_number if linked_order else trailer_contract.order_id
+                    flash(f'Договор заказа {replacement_number} нельзя перенести на его текущий прицеп: на нём уже есть другой договор.', 'danger')
+                    return redirect(url_for('main.order_detail', order_id=order.id))
+                trailer_contract.trailer_id = linked_order.trailer_id
+                trailer_contract.customer_id = linked_order.customer_id
+                trailer_contract.price = linked_order.price
+                trailer_contract.is_shipped = bool(linked_order.is_shipped)
+                for row in VinRegistry.query.filter_by(trailer_id=linked_order.trailer_id).all():
+                    row.customer_order_id = linked_order.id
+                    row.sales_contract_id = trailer_contract.id
+                stale_contract_relinked = True
+                add_order_event(
+                    linked_order,
+                    'trailer_assigned',
+                    old_value=order.trailer.vin if order.trailer else order.trailer_id,
+                    new_value=linked_order.trailer.vin if linked_order.trailer else linked_order.trailer_id,
+                    comment=f'Договор перепривязан к текущему прицепу заказа; старый прицеп освобождён для заказа {order.order_number}',
+                )
             elif linked_order:
                 add_order_event(
                     linked_order,
@@ -6326,7 +6352,8 @@ def order_contract_create(order_id):
                 if row.docs_issued_order_id == trailer_contract.order_id:
                     row.docs_issued_order_id = None
                     row.docs_issued_at = None
-            trailer_contract.trailer_id = None
+            if not stale_contract_relinked:
+                trailer_contract.trailer_id = None
         if trailer_contract.order_id == order.id:
             flash('Договор по этому заказу уже создан.', 'warning')
             return redirect(url_for('main.order_detail', order_id=order.id))
