@@ -471,6 +471,147 @@ def _ensure_order_reservation(order: CustomerOrder, trailer: Trailer, source_typ
         ))
 
 
+def _contract_for_order(order: CustomerOrder) -> SalesContract | None:
+    if not order or not order.id:
+        return None
+    return SalesContract.query.filter_by(order_id=order.id).first()
+
+
+def _vin_registry_for_trailer_or_vin(trailer: Trailer | None) -> VinRegistry | None:
+    if not trailer:
+        return None
+    query = VinRegistry.query.filter(VinRegistry.status != 'void')
+    if trailer.id and trailer.vin:
+        query = query.filter(or_(VinRegistry.trailer_id == trailer.id, VinRegistry.vin_full == trailer.vin))
+    elif trailer.id:
+        query = query.filter(VinRegistry.trailer_id == trailer.id)
+    elif trailer.vin:
+        query = query.filter(VinRegistry.vin_full == trailer.vin)
+    else:
+        return None
+    return query.order_by(VinRegistry.id.desc()).first()
+
+
+def _ensure_vin_registry_for_trailer(trailer: Trailer, source: str = 'order_trailer_change') -> VinRegistry | None:
+    row = _vin_registry_for_trailer_or_vin(trailer)
+    if row:
+        return row
+    if not trailer or not trailer.vin:
+        return None
+    parsed, error = _parse_vin_full(trailer.vin)
+    if error:
+        return None
+    row = VinRegistry(status='assigned', trailer_id=trailer.id, source=source, **parsed)
+    db.session.add(row)
+    db.session.flush()
+    _add_vin_event(row, 'created', None, row.status, comment='VIN-реестр создан при замене прицепа в заказе')
+    return row
+
+
+def _trailer_has_other_commercial_links(trailer_id: int, order_id: int | None = None, contract_id: int | None = None) -> bool:
+    order_query = CustomerOrder.query.filter(
+        CustomerOrder.trailer_id == trailer_id,
+        CustomerOrder.status.notin_(['cancelled', 'canceled']),
+    )
+    if order_id:
+        order_query = order_query.filter(CustomerOrder.id != order_id)
+    if order_query.first():
+        return True
+
+    contract_query = SalesContract.query.filter(SalesContract.trailer_id == trailer_id)
+    if contract_id:
+        contract_query = contract_query.filter(SalesContract.id != contract_id)
+    return contract_query.first() is not None
+
+
+def _sync_order_trailer_links(order: CustomerOrder, old_trailer: Trailer | None, new_trailer: Trailer | None, source_type: str = 'STOCK') -> tuple[bool, str]:
+    contract = _contract_for_order(order)
+    if contract and old_trailer and new_trailer and old_trailer.id != new_trailer.id:
+        if contract.sigex_last_status == 'done':
+            return False, 'Договор уже подписан через SIGEX/eGov QR. Сначала нужна отдельная корректировка договора.'
+        other_contract = (
+            SalesContract.query
+            .filter(SalesContract.trailer_id == new_trailer.id, SalesContract.id != contract.id)
+            .first()
+        )
+        if other_contract:
+            return False, 'На новый прицеп уже существует другой договор.'
+
+    if old_trailer and (not new_trailer or old_trailer.id != new_trailer.id):
+        _cancel_order_active_reservations(order, old_trailer.id, 'Прицеп заменён в заказе')
+        for row in VinRegistry.query.filter(VinRegistry.trailer_id == old_trailer.id, VinRegistry.status != 'void').all():
+            if row.customer_order_id == order.id:
+                row.customer_order_id = None
+            if row.docs_issued_order_id == order.id:
+                row.docs_issued_order_id = None
+            if contract and row.sales_contract_id == contract.id:
+                row.sales_contract_id = None
+            if order.reserved_vin_registry_id == row.id:
+                order.reserved_vin_registry_id = None
+        if not _trailer_has_other_commercial_links(old_trailer.id, order_id=order.id, contract_id=contract.id if contract else None):
+            old_trailer.status = 'IN_STOCK'
+            old_trailer.lifecycle_status = 'in_stock'
+
+    if new_trailer:
+        existing_vin_row = _vin_registry_for_trailer_or_vin(new_trailer)
+        if existing_vin_row:
+            if existing_vin_row.trailer_id and existing_vin_row.trailer_id != new_trailer.id:
+                return False, 'VIN-реестр уже связан с другим физическим прицепом.'
+            if existing_vin_row.customer_order_id and existing_vin_row.customer_order_id != order.id:
+                return False, 'VIN-реестр нового прицепа уже связан с другим заказом.'
+            if contract and existing_vin_row.sales_contract_id and existing_vin_row.sales_contract_id != contract.id:
+                return False, 'VIN-реестр нового прицепа уже связан с другим договором.'
+
+        if contract:
+            contract.trailer_id = new_trailer.id
+            contract.customer_id = order.customer_id
+            contract.price = order.price
+            contract.is_shipped = bool(order.is_shipped)
+
+        order.trailer_id = new_trailer.id
+        if not order.warehouse_id:
+            order.warehouse_id = new_trailer.warehouse_id
+        order.source_warehouse_id = new_trailer.warehouse_id
+        order.fulfillment_source = order.fulfillment_source or ('stock' if source_type == 'STOCK' else source_type.lower())
+
+        if order.is_shipped:
+            new_trailer.status = 'SOLD'
+            new_trailer.lifecycle_status = 'customer_shipped'
+            StockMovement.query.filter(
+                StockMovement.order_id == order.id,
+                StockMovement.trailer_id == (old_trailer.id if old_trailer else new_trailer.id),
+                StockMovement.movement_type == 'customer_shipment',
+            ).update({StockMovement.trailer_id: new_trailer.id}, synchronize_session=False)
+        elif order.documents_issued or order.status == 'sold_not_shipped':
+            new_trailer.status = 'SOLD'
+            new_trailer.lifecycle_status = 'sold'
+        else:
+            new_trailer.status = 'RESERVED'
+            new_trailer.lifecycle_status = 'reserved'
+            _ensure_order_reservation(order, new_trailer, source_type)
+
+        row = _ensure_vin_registry_for_trailer(new_trailer)
+        if row:
+            row.trailer_id = new_trailer.id
+            row.customer_order_id = order.id
+            row.sales_contract_id = contract.id if contract else row.sales_contract_id
+            if order.documents_issued:
+                row.docs_issued_order_id = order.id
+                row.docs_issued_at = row.docs_issued_at or order.documents_issued_at or datetime.utcnow()
+            if order.is_shipped or order.documents_issued or new_trailer.status == 'SOLD':
+                row.status = 'confirmed'
+            elif row.status == 'free':
+                row.status = 'assigned'
+
+    else:
+        order.trailer_id = None
+        order.source_warehouse_id = None
+        if contract:
+            contract.trailer_id = None
+
+    return True, ''
+
+
 def _find_order_for_sold_trailer(trailer: Trailer):
     if not trailer:
         return None
@@ -3764,19 +3905,19 @@ def _trailer_item_options():
     ]
 
 
-def _order_trailer_options(current_order_id: int | None = None):
+def _order_trailer_options(current_order_id: int | None = None, current_trailer_id: int | None = None):
     trailers = (
         Trailer.query
         .filter(
-            Trailer.status == 'IN_STOCK',
-            or_(Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped'),
+            or_(Trailer.status == 'IN_STOCK', Trailer.id == current_trailer_id),
+            or_(Trailer.id == current_trailer_id, Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped'),
         )
         .order_by(Trailer.vin)
         .all()
     )
     result = []
     for trailer in trailers:
-        if not _trailer_available_for_sale(trailer, exclude_order_id=current_order_id):
+        if trailer.id != current_trailer_id and not _trailer_available_for_sale(trailer, exclude_order_id=current_order_id):
             continue
         result.append({
             'id': trailer.id,
@@ -3844,7 +3985,7 @@ def _fill_order_form_choices(form: CustomerOrderForm, item_id_prefill: int | Non
     _apply_customer_search(form)
     form.trailer_id.choices = [(0, '— подобрать позже / под заказ —')] + [
         (option['id'], f'{option["vin"]} — {option["article"]} — {option["warehouse"]} — {option["status"]}')
-        for option in _order_trailer_options(current_order_id)
+        for option in _order_trailer_options(current_order_id, getattr(form, 'trailer_id').data or None)
     ]
     _set_item_search_label(form, 'item_search', 'item_id')
     _set_customer_search_label(form)
@@ -6066,6 +6207,8 @@ def order_edit(order_id):
 
     if form.validate_on_submit():
         old_status = order.status
+        old_trailer_id = order.trailer_id
+        old_trailer = Trailer.query.get(old_trailer_id) if old_trailer_id else None
         new_trailer_id = form.trailer_id.data or None
         if new_trailer_id and _active_reservation_for_trailer(new_trailer_id, exclude_order_id=order.id):
             flash('Этот прицеп уже зарезервирован под другой активный заказ.', 'danger')
@@ -6074,8 +6217,11 @@ def order_edit(order_id):
         if selected_trailer and selected_trailer.item_id != form.item_id.data:
             flash('Выбранный VIN не соответствует выбранной модели.', 'danger')
             return _render_order_form(form, 'Редактирование заказа')
-        if selected_trailer and selected_trailer.status == 'SOLD':
+        if selected_trailer and selected_trailer.status == 'SOLD' and selected_trailer.id != old_trailer_id:
             flash('Проданный прицеп нельзя выбрать для новой продажи.', 'danger')
+            return _render_order_form(form, 'Редактирование заказа')
+        if selected_trailer and selected_trailer.status not in ('IN_STOCK', 'RESERVED', 'SOLD'):
+            flash('Выбранный прицеп сейчас недоступен для заказа.', 'danger')
             return _render_order_form(form, 'Редактирование заказа')
         if selected_trailer and (form.fulfillment_source.data or 'stock') != 'other_warehouse' and form.warehouse_id.data and selected_trailer.warehouse_id != form.warehouse_id.data:
             flash('Для продажи из наличия выбранный VIN должен находиться на складе продажи.', 'danger')
@@ -6084,12 +6230,10 @@ def order_edit(order_id):
             flash('Для сценария с другого склада выберите VIN не со склада продажи.', 'danger')
             return _render_order_form(form, 'Редактирование заказа')
 
-        old_trailer_id = order.trailer_id
         order.order_number = (form.order_number.data or '').strip() or order.order_number
         order.lead_id = form.lead_id.data or None
         order.customer_id = form.customer_id.data
         order.item_id = form.item_id.data
-        order.trailer_id = new_trailer_id
         order.warehouse_id = form.warehouse_id.data or None
         order.assigned_user_id = form.assigned_user_id.data or None
         order.quantity = form.quantity.data or 1
@@ -6102,24 +6246,13 @@ def order_edit(order_id):
         order.note = (form.note.data or '').strip() or None
         order.manager_comment = (form.manager_comment.data or '').strip() or None
 
-        if old_trailer_id and old_trailer_id != new_trailer_id:
-            old_reservations = Reservation.query.filter_by(order_id=order.id, trailer_id=old_trailer_id, status='ACTIVE').all()
-            for reservation in old_reservations:
-                reservation.status = 'CANCELED'
-            old_trailer = Trailer.query.get(old_trailer_id)
-            if old_trailer and old_trailer.status == 'RESERVED':
-                old_trailer.status = 'IN_STOCK'
+        ok, message = _sync_order_trailer_links(order, old_trailer, selected_trailer, 'STOCK')
+        if not ok:
+            flash(message, 'danger')
+            return _render_order_form(form, 'Редактирование заказа')
 
         if new_trailer_id:
-            trailer = Trailer.query.get(new_trailer_id)
-            if trailer:
-                trailer.status = 'RESERVED'
-                order.fulfillment_source = order.fulfillment_source or 'stock'
-                if not order.warehouse_id:
-                    order.warehouse_id = trailer.warehouse_id
-                active = Reservation.query.filter_by(order_id=order.id, trailer_id=trailer.id, status='ACTIVE').first()
-                if not active:
-                    db.session.add(Reservation(order_id=order.id, trailer_id=trailer.id, item_id=order.item_id, source_type='STOCK', status='ACTIVE', priority=10))
+            order.fulfillment_source = order.fulfillment_source or 'stock'
         elif order.fulfillment_source == 'production' and order.supply_needs.count() == 0:
             can_request, message = order_can_request_production(order)
             if not can_request:
@@ -6261,14 +6394,14 @@ def order_reserve_trailer(order_id):
         return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
 
     old_trailer_id = order.trailer_id
-    order.trailer_id = trailer.id
+    old_trailer = Trailer.query.get(old_trailer_id) if old_trailer_id else None
     order.fulfillment_source = 'stock'
-    trailer.status = 'RESERVED'
-    trailer.lifecycle_status = 'reserved'
-    reservation = Reservation(order_id=order.id, trailer_id=trailer.id, item_id=order.item_id, status='ACTIVE', source_type='STOCK', priority=10)
-    db.session.add(reservation)
+    ok, message = _sync_order_trailer_links(order, old_trailer, trailer, 'STOCK')
+    if not ok:
+        flash(message, 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
     db.session.flush()
-    _finish_idempotency(idem_key, 'Reservation', reservation.id)
+    _finish_idempotency(idem_key, 'CustomerOrder', order.id)
     _refresh_order_status(order)
     add_order_event(order, 'trailer_reserved', old_value=old_trailer_id, new_value=trailer.vin)
     db.session.commit()
@@ -6297,15 +6430,15 @@ def order_request_transfer(order_id):
     if duplicate:
         return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
 
-    order.trailer_id = trailer.id
+    old_trailer = Trailer.query.get(order.trailer_id) if order.trailer_id else None
     order.fulfillment_source = 'other_warehouse'
     order.status = 'waiting_transfer'
-    trailer.status = 'RESERVED'
-    trailer.lifecycle_status = 'reserved'
-    reservation = Reservation(order_id=order.id, trailer_id=trailer.id, item_id=order.item_id, status='ACTIVE', source_type='TRANSFER', priority=10)
-    db.session.add(reservation)
+    ok, message = _sync_order_trailer_links(order, old_trailer, trailer, 'TRANSFER')
+    if not ok:
+        flash(message, 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
     db.session.flush()
-    _finish_idempotency(idem_key, 'Reservation', reservation.id)
+    _finish_idempotency(idem_key, 'CustomerOrder', order.id)
     add_order_event(order, 'transfer_requested', new_value=trailer.vin, comment='Прицеп зарезервирован на другом складе. Нужна отправка.')
     db.session.commit()
     flash('Прицеп зарезервирован на другом складе. Нужна отправка.', 'success')
