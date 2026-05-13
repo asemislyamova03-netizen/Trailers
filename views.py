@@ -6288,9 +6288,17 @@ def order_contract_create(order_id):
     if existing:
         flash('Договор по этому заказу уже создан.', 'warning')
         return redirect(url_for('main.order_detail', order_id=order.id))
-    if order.trailer_id and SalesContract.query.filter_by(trailer_id=order.trailer_id).first():
-        flash('На этот прицеп уже существует договор.', 'danger')
-        return redirect(url_for('main.order_detail', order_id=order.id))
+    trailer_contract = SalesContract.query.filter_by(trailer_id=order.trailer_id).first() if order.trailer_id else None
+    if trailer_contract:
+        if trailer_contract.order_id and trailer_contract.order_id != order.id:
+            linked_order = CustomerOrder.query.get(trailer_contract.order_id)
+            linked_number = linked_order.order_number if linked_order else trailer_contract.order_id
+            flash(f'На этот прицеп уже существует договор по заказу {linked_number}.', 'danger')
+            return redirect(url_for('main.order_detail', order_id=order.id))
+        if trailer_contract.order_id == order.id:
+            flash('Договор по этому заказу уже создан.', 'warning')
+            return redirect(url_for('main.order_detail', order_id=order.id))
+        trailer_contract.trailer_id = None
     idem_key, duplicate = _reserve_idempotency_key()
     if duplicate:
         return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
@@ -6308,6 +6316,11 @@ def order_contract_create(order_id):
     )
     db.session.add(contract)
     db.session.flush()
+    if order.trailer_id:
+        for row in VinRegistry.query.filter_by(trailer_id=order.trailer_id).all():
+            row.sales_contract_id = contract.id
+            if not row.customer_order_id:
+                row.customer_order_id = order.id
     _finish_idempotency(idem_key, 'SalesContract', contract.id)
     order.document_status = 'contract_ready'
     add_order_event(order, 'contract_ready', new_value=contract.contract_number or contract.id)
