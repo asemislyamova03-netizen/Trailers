@@ -6292,9 +6292,32 @@ def order_contract_create(order_id):
     if trailer_contract:
         if trailer_contract.order_id and trailer_contract.order_id != order.id:
             linked_order = CustomerOrder.query.get(trailer_contract.order_id)
-            linked_number = linked_order.order_number if linked_order else trailer_contract.order_id
-            flash(f'На этот прицеп уже существует договор по заказу {linked_number}.', 'danger')
-            return redirect(url_for('main.order_detail', order_id=order.id))
+            if linked_order and _order_has_issued_documents_or_shipment(linked_order):
+                linked_number = linked_order.order_number if linked_order else trailer_contract.order_id
+                flash(f'На этот прицеп уже существует договор по заказу {linked_number}; по нему уже есть документы или отгрузка.', 'danger')
+                return redirect(url_for('main.order_detail', order_id=order.id))
+            if linked_order and linked_order.trailer_id == order.trailer_id:
+                _cancel_order_active_reservations(linked_order, order.trailer_id, f'Прицеп перенесён в заказ {order.order_number}')
+                linked_order.trailer_id = None
+                linked_order.source_warehouse_id = None
+                linked_order.fulfillment_source = 'later'
+                _refresh_order_status(linked_order)
+                add_order_event(
+                    linked_order,
+                    'reservation_cancelled',
+                    old_value=order.trailer.vin if order.trailer else order.trailer_id,
+                    new_value=order.order_number,
+                    comment=f'Прицеп снят со старого заказа при создании нового договора по заказу {order.order_number}',
+                )
+            for row in VinRegistry.query.filter_by(trailer_id=order.trailer_id).all():
+                if row.customer_order_id == trailer_contract.order_id:
+                    row.customer_order_id = None
+                if row.sales_contract_id == trailer_contract.id:
+                    row.sales_contract_id = None
+                if row.docs_issued_order_id == trailer_contract.order_id:
+                    row.docs_issued_order_id = None
+                    row.docs_issued_at = None
+            trailer_contract.trailer_id = None
         if trailer_contract.order_id == order.id:
             flash('Договор по этому заказу уже создан.', 'warning')
             return redirect(url_for('main.order_detail', order_id=order.id))
