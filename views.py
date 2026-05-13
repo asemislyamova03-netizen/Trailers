@@ -4100,6 +4100,18 @@ def _request_has_trailer_config(values) -> bool:
     return any((values.get(key) or '').strip() for key in ('group_code', 'body_size_code', 'board_height_code', 'wheel_code', 'hub_code', 'support_wheel_code', 'tent_code', 'body_execution_code'))
 
 
+def _order_should_build_config(values, fulfillment_source: str) -> bool:
+    return (
+        fulfillment_source == 'production'
+        and (
+            (values.get('item_source') or '').strip() == 'config'
+            or _request_has_trailer_config(values)
+            or not (values.get('item_id') or '').strip()
+            or (values.get('item_id') or '').strip() == '0'
+        )
+    )
+
+
 def _snapshot_from_result(result: dict) -> dict:
     price = result.get('price') or {}
     dimensions = result.get('dimensions') or {}
@@ -5403,21 +5415,23 @@ def order_create():
         if fulfillment_source == 'production':
             selected_trailer = None
             form.trailer_id.data = 0
-            if _request_has_trailer_config(request.form):
+            if _order_should_build_config(request.form, fulfillment_source):
                 configured_item, configured_snapshot, config_errors = _configured_item_from_request(request.form)
                 if config_errors:
                     for error in config_errors:
                         flash(error, 'danger')
                     return _render_order_form(form, 'Новый заказ')
                 form.item_id.data = configured_item.id
-            elif lead_id_prefill:
+            elif form.item_id.data:
+                configured_item = Item.query.get(form.item_id.data)
+            if not configured_item and lead_id_prefill:
                 lead = Lead.query.get(lead_id_prefill)
                 if lead and lead.article_snapshot and lead.desired_item_id:
                     configured_item = lead.desired_item
                     configured_snapshot = _lead_snapshot(lead)
                     form.item_id.data = lead.desired_item_id
             if not configured_item:
-                flash('Для заказа в производство соберите прицеп через конфигуратор.', 'danger')
+                flash('Для заказа в производство выберите номенклатуру или соберите прицеп через конфигуратор.', 'danger')
                 return _render_order_form(form, 'Новый заказ')
         elif fulfillment_source == 'stock':
             if not selected_trailer:
