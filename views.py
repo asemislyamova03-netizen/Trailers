@@ -6358,23 +6358,30 @@ def order_detail(order_id):
     order_lines = order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()).all()
     order_line_rows = []
     for line in order_lines:
-        vin_row = (
+        vin_rows = (
             VinRegistry.query
             .filter(
                 VinRegistry.order_line_id == line.id,
                 VinRegistry.status.in_(['reserved', 'assigned', 'confirmed']),
             )
             .order_by(VinRegistry.confirmed_at.desc().nullslast(), VinRegistry.assigned_at.desc().nullslast(), VinRegistry.reserved_at.desc().nullslast(), VinRegistry.id.desc())
-            .first()
+            .all()
         )
         active_reservation = next((row for row in getattr(line, 'reservations', []) if row.status == 'ACTIVE'), None)
-        active_need = next((row for row in getattr(line, 'supply_needs', []) if row.status in ('NEW', 'PLANNED', 'IN_PRODUCTION', 'SENT_TO_PRODUCTION', 'PARTIALLY_DONE')), None)
+        active_needs = [row for row in getattr(line, 'supply_needs', []) if row.status in ('NEW', 'PLANNED', 'IN_PRODUCTION', 'SENT_TO_PRODUCTION', 'PARTIALLY_DONE')]
+        production_qty = sum(need.quantity or 0 for need in active_needs)
+        vin_count = len(vin_rows)
+        shortage_qty = max((line.quantity or 1) - production_qty, 0) if line.fulfillment_source == 'production' else 0
         order_line_rows.append({
             'line': line,
-            'vin_row': vin_row,
+            'vin_rows': vin_rows,
+            'vin_count': vin_count,
             'reservation': active_reservation,
-            'supply_need': active_need,
-            'trailer': (vin_row.trailer if vin_row and vin_row.trailer else (active_reservation.trailer if active_reservation else None)),
+            'supply_need': active_needs[0] if active_needs else None,
+            'supply_needs': active_needs,
+            'production_qty': production_qty,
+            'shortage_qty': shortage_qty,
+            'trailer': (vin_rows[0].trailer if vin_rows and vin_rows[0].trailer else (active_reservation.trailer if active_reservation else None)),
         })
     add_line_stock_trailers = [
         trailer for trailer in (
@@ -6760,6 +6767,45 @@ def order_line_add_production(order_id):
     add_order_event(order, 'order_line_added', new_value=item.article or item.name, comment=f'Добавлена позиция #{line.line_no} в производство')
     db.session.commit()
     flash('Позиция в производство добавлена, потребность создана.', 'success')
+    return redirect(url_for('main.order_detail', order_id=order.id))
+
+
+@main_bp.route('/orders/<int:order_id>/lines/<int:line_id>/create-missing-production', methods=['POST'])
+@login_required
+def order_line_create_missing_production(order_id, line_id):
+    order = CustomerOrder.query.get_or_404(order_id)
+    _ensure_can_manage_order(order)
+    line = CustomerOrderLine.query.filter_by(id=line_id, order_id=order.id).first_or_404()
+    if order.status == 'cancelled' or order.documents_issued or order.is_shipped:
+        flash('Производственную потребность можно менять только до выдачи документов и отгрузки.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    active_needs = [need for need in line.supply_needs if need.status in ('NEW', 'PLANNED', 'IN_PRODUCTION', 'SENT_TO_PRODUCTION', 'PARTIALLY_DONE')]
+    production_qty = sum(need.quantity or 0 for need in active_needs)
+    missing_qty = max((line.quantity or 1) - production_qty, 0)
+    if missing_qty <= 0:
+        flash('По этой позиции уже создано производство на всё количество.', 'warning')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
+    need = SupplyNeed(
+        order_id=order.id,
+        order_line_id=line.id,
+        item_id=line.item_id,
+        warehouse_id=order.warehouse_id,
+        quantity=missing_qty,
+        status='NEW',
+        priority=10,
+        need_type='CUSTOMER_ORDER',
+        required_by=order.expected_date,
+        note=f'Досоздана недостающая потребность по позиции #{line.line_no}',
+    )
+    _apply_snapshot(need, {key: getattr(line, key, None) for key in SNAPSHOT_FIELD_NAMES})
+    db.session.add(need)
+    _finish_idempotency(idem_key, 'SupplyNeed', need.id)
+    add_order_event(order, 'production_need_created', new_value=missing_qty, comment=f'Досоздано производство по позиции #{line.line_no}')
+    db.session.commit()
+    flash(f'Создана недостающая потребность: {missing_qty} шт.', 'success')
     return redirect(url_for('main.order_detail', order_id=order.id))
 
 
