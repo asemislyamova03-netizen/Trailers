@@ -6223,6 +6223,24 @@ def order_edit(order_id):
         old_status = order.status
         old_trailer_id = order.trailer_id
         old_trailer = Trailer.query.get(old_trailer_id) if old_trailer_id else None
+        fulfillment_source = (form.fulfillment_source.data or '').strip() or None
+        configured_item = None
+        configured_snapshot = None
+        if fulfillment_source == 'production':
+            form.trailer_id.data = 0
+            if _order_should_build_config(request.form, fulfillment_source):
+                configured_item, configured_snapshot, config_errors = _configured_item_from_request(request.form)
+                if config_errors:
+                    for error in config_errors:
+                        flash(error, 'danger')
+                    return _render_order_form(form, 'Редактирование заказа')
+                form.item_id.data = configured_item.id
+            elif form.item_id.data:
+                configured_item = Item.query.get(form.item_id.data)
+            if not configured_item:
+                flash('Для заказа в производство выберите номенклатуру или соберите прицеп через конфигуратор.', 'danger')
+                return _render_order_form(form, 'Редактирование заказа')
+
         new_trailer_id = form.trailer_id.data or None
         if new_trailer_id and _active_reservation_for_trailer(new_trailer_id, exclude_order_id=order.id):
             flash('Этот прицеп уже зарезервирован под другой активный заказ.', 'danger')
@@ -6251,14 +6269,16 @@ def order_edit(order_id):
         order.warehouse_id = form.warehouse_id.data or None
         order.assigned_user_id = form.assigned_user_id.data or None
         order.quantity = form.quantity.data or 1
-        order.price = form.price.data
+        order.price = form.price.data or (configured_snapshot.get('calculated_price') if configured_snapshot else None)
         order.prepayment_percent = form.prepayment_percent.data
-        order.fulfillment_source = (form.fulfillment_source.data or '').strip() or None
+        order.fulfillment_source = fulfillment_source
         order.expected_date = form.expected_date.data
         order.planned_ship_date = form.planned_ship_date.data
         order.planned_ship_comment = (form.planned_ship_comment.data or '').strip() or None
         order.note = (form.note.data or '').strip() or None
         order.manager_comment = (form.manager_comment.data or '').strip() or None
+        if configured_snapshot:
+            _apply_snapshot(order, configured_snapshot)
 
         ok, message = _sync_order_trailer_links(order, old_trailer, selected_trailer, 'STOCK')
         if not ok:
@@ -6272,7 +6292,9 @@ def order_edit(order_id):
             if not can_request:
                 flash(message, 'warning')
                 return _render_order_form(form, 'Редактирование заказа')
-            db.session.add(SupplyNeed(order_id=order.id, item_id=order.item_id, warehouse_id=order.warehouse_id, quantity=order.quantity, status='NEW', priority=10, need_type='CUSTOMER_ORDER', required_by=order.expected_date))
+            need = SupplyNeed(order_id=order.id, item_id=order.item_id, warehouse_id=order.warehouse_id, quantity=order.quantity, status='NEW', priority=10, need_type='CUSTOMER_ORDER', required_by=order.expected_date)
+            _apply_snapshot(need, configured_snapshot or _order_snapshot(order))
+            db.session.add(need)
 
         _refresh_order_status(order)
         if old_status != order.status:
