@@ -2298,14 +2298,14 @@ def _catalog_choices(field):
 
 
 def _catalog_text_choices(section_key, field):
-    if section_key != 'otss':
+    if section_key not in ('groups', 'otss'):
         return []
     if field == 'otss_number':
         return [
             {'value': row.number, 'label': f'{row.number} — мод. {row.modification} — {row.name}'}
             for row in OTTS.query.filter_by(is_active=True).order_by(OTTS.number, OTTS.modification, OTTS.name).all()
         ]
-    if field == 'otss_modification':
+    if section_key == 'otss' and field == 'otss_modification':
         rows = (
             OTTS.query
             .filter_by(is_active=True)
@@ -2743,7 +2743,7 @@ def manager_trailer_picker():
         config=config,
         result=result,
         inventory=inventory,
-        config_options=_trailer_config_form_context(),
+        config_options=_trailer_config_form_context(config),
         customer_options=_customer_options(limit=80),
         warehouses=Warehouse.query.filter_by(is_active=True).order_by(Warehouse.name).all(),
     )
@@ -4066,8 +4066,7 @@ def _filtered_trailer_config_options(config: dict | None = None) -> dict:
         }
         if not price_ids:
             option_warnings.append(warning)
-            return []
-        return [item for item in allowed if item.id in price_ids]
+        return allowed
 
     body_sizes = allowed_items('body_size', TrailerBodySize)
     board_heights = allowed_items('board_height', TrailerBoardHeight)
@@ -4078,8 +4077,7 @@ def _filtered_trailer_config_options(config: dict | None = None) -> dict:
                 is_active=True,
             ).all()
         }
-        board_heights = [item for item in board_heights if item.id in board_price_ids]
-        if not board_heights:
+        if not board_price_ids:
             option_warnings.append(f'Для кузова {selected_body_size.code} не заведены цены бортов.')
 
     tents = allowed_items('tent', TrailerTentOption)
@@ -4090,8 +4088,7 @@ def _filtered_trailer_config_options(config: dict | None = None) -> dict:
                 is_active=True,
             ).all()
         }
-        tents = [item for item in tents if item.id in tent_price_ids]
-        if not tents:
+        if not tent_price_ids:
             option_warnings.append(f'Для кузова {selected_body_size.code} не заведены цены тентов.')
 
     wheels = matrix_filtered_items(

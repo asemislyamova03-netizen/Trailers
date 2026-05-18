@@ -133,8 +133,8 @@ def validate_trailer_config(config):
     for special in objects['special_options']:
         if group and not _is_allowed(group, 'special', special):
             errors.append(f'Параметр {special.code} запрещён для группы {group.code}')
-        if group and group.code != '004G' and special.code in ('SINGLE', 'DOUBLE'):
-            errors.append('SINGLE / DOUBLE доступны только для группы 004G')
+        if group and not (group.code or '').endswith('G') and special.code in ('SINGLE', 'DOUBLE'):
+            errors.append('SINGLE / DOUBLE доступны только для грузовых групп G')
 
     special_by_type = {}
     for special in objects['special_options']:
@@ -357,7 +357,7 @@ def resolve_otss_modification(config):
     for row in rows:
         if row.special_option_id and row.special_option_id not in special_ids:
             continue
-        if not row.special_option_id and special_ids and group.code == '004G':
+        if not row.special_option_id and special_ids and (group.code or '').endswith('G'):
             continue
         return {
             'otss_number': row.otss_number or group.otss_number,
