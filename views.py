@@ -4655,6 +4655,36 @@ def _configured_item_from_request(values):
     return item, snapshot, []
 
 
+def _order_price_from_form_or_config(form: CustomerOrderForm, configured_snapshot: dict | None):
+    if form.price.data is not None:
+        return form.price.data
+    if not configured_snapshot:
+        return None
+    unit_price = configured_snapshot.get('calculated_price')
+    if unit_price is None:
+        return None
+    return Decimal(unit_price) * Decimal(form.quantity.data or 1)
+
+
+def _sync_editable_order_production_need(order: CustomerOrder, snapshot: dict | None):
+    need = (
+        order.supply_needs
+        .filter(SupplyNeed.status.in_(['NEW', 'PLANNED']))
+        .order_by(SupplyNeed.created_at.desc(), SupplyNeed.id.desc())
+        .first()
+    )
+    if not need:
+        return None
+    if _active_production_line_for_need(need.id):
+        return 'Производственная заявка уже запущена; количество в потребности нужно менять в производстве.'
+    need.item_id = order.item_id
+    need.warehouse_id = order.warehouse_id
+    need.quantity = order.quantity
+    need.required_by = order.expected_date
+    _apply_snapshot(need, snapshot or _order_snapshot(order))
+    return None
+
+
 def _trailer_inventory_rows(article: str | None = None, body_size_code: str | None = None, board_height_code: str | None = None, group_code: str | None = None):
     trailers = [
         trailer for trailer in Trailer.query.filter(
@@ -5513,6 +5543,9 @@ def order_create():
             if not selected_trailer:
                 flash('Для продажи из наличия выберите конкретный прицеп из таблицы.', 'danger')
                 return _render_order_form(form, 'Новый заказ')
+            if (form.quantity.data or 1) > 1:
+                flash('Для продажи из наличия можно выбрать только 1 прицеп, потому что заказ привязывается к одному VIN. Для двух прицепов используйте производство или отдельные заказы.', 'danger')
+                return _render_order_form(form, 'Новый заказ')
             form.item_id.data = selected_trailer.item_id
         else:
             selected_trailer = None
@@ -5539,7 +5572,7 @@ def order_create():
             source_warehouse_id=selected_trailer.warehouse_id if selected_trailer else None,
             assigned_user_id=form.assigned_user_id.data or None,
             quantity=form.quantity.data or 1,
-            price=form.price.data or (configured_snapshot.get('calculated_price') if configured_snapshot else None),
+            price=_order_price_from_form_or_config(form, configured_snapshot),
             prepayment_percent=form.prepayment_percent.data,
             status='waiting_payment',
             fulfillment_source=fulfillment_source,
@@ -6322,6 +6355,9 @@ def order_edit(order_id):
             flash('Этот прицеп уже зарезервирован под другой активный заказ.', 'danger')
             return _render_order_form(form, 'Редактирование заказа')
         selected_trailer = Trailer.query.get(new_trailer_id) if new_trailer_id else None
+        if selected_trailer and (form.quantity.data or 1) > 1:
+            flash('Для продажи из наличия можно выбрать только 1 прицеп, потому что заказ привязывается к одному VIN. Для двух прицепов используйте производство или отдельные заказы.', 'danger')
+            return _render_order_form(form, 'Редактирование заказа')
         if selected_trailer and selected_trailer.item_id != form.item_id.data:
             flash('Выбранный VIN не соответствует выбранной модели.', 'danger')
             return _render_order_form(form, 'Редактирование заказа')
@@ -6345,7 +6381,7 @@ def order_edit(order_id):
         order.warehouse_id = form.warehouse_id.data or None
         order.assigned_user_id = form.assigned_user_id.data or None
         order.quantity = form.quantity.data or 1
-        order.price = form.price.data or (configured_snapshot.get('calculated_price') if configured_snapshot else None)
+        order.price = _order_price_from_form_or_config(form, configured_snapshot) or order.price
         order.prepayment_percent = form.prepayment_percent.data
         order.fulfillment_source = fulfillment_source
         order.expected_date = form.expected_date.data
@@ -6371,6 +6407,10 @@ def order_edit(order_id):
             need = SupplyNeed(order_id=order.id, item_id=order.item_id, warehouse_id=order.warehouse_id, quantity=order.quantity, status='NEW', priority=10, need_type='CUSTOMER_ORDER', required_by=order.expected_date)
             _apply_snapshot(need, configured_snapshot or _order_snapshot(order))
             db.session.add(need)
+        elif order.fulfillment_source == 'production':
+            warning = _sync_editable_order_production_need(order, configured_snapshot)
+            if warning:
+                flash(warning, 'warning')
 
         _refresh_order_status(order)
         if old_status != order.status:

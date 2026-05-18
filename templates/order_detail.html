@@ -54,6 +54,7 @@
           <h2 class="h5 mb-3">Товар и исполнение</h2>
           <dl class="row small mb-0">
             <dt class="col-5">Модель</dt><dd class="col-7">{{ order.item.article if order.item else '' }} {{ order.item.name if order.item else '' }}</dd>
+            <dt class="col-5">Количество</dt><dd class="col-7">{{ order.quantity or 1 }} шт.</dd>
             <dt class="col-5">Кузов</dt><dd class="col-7">{{ order.item.size_body if order.item else '' }}</dd>
             <dt class="col-5">Исполнение</dt><dd class="col-7">{{ order.fulfillment_source|status_label }}</dd>
             <dt class="col-5">Склад продажи</dt><dd class="col-7">{{ order.warehouse.name if order.warehouse else '' }}</dd>
