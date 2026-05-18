@@ -135,7 +135,7 @@
         <div class="col-md-6"><label class="form-label">Тент</label><select class="form-select" name="tent_code" data-config-field><option value="">—</option>{% for item in config_options.tents %}<option value="{{ item.code }}" {% if cfg.get('tent_code') == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
         <div class="col-12">
           <label class="form-label">Спец. параметры</label>
-          <div class="row g-2">
+          <div class="row g-2" data-special-options>
             {% for item in config_options.specials %}
             <div class="col-md-4">
               <div class="form-check">
@@ -176,6 +176,7 @@
   const productionPanel = document.querySelector('#productionPanel');
   const showAll = document.querySelector('#showAllWarehouses');
   const preview = document.querySelector('#configPreview');
+  const submitButton = document.querySelector('#orderForm [type="submit"]');
 
   function syncCustomerId() {
     const match = customerOptions.find((option) => option.value === customerInput.value);
@@ -222,6 +223,7 @@
       trailerSelect.value = '0';
     }
     filterTrailers();
+    if (mode !== 'production' && submitButton) submitButton.disabled = false;
     const selectedRow = trailerSelect.value !== '0' ? document.querySelector(`[data-trailer-row][data-id="${trailerSelect.value}"]`) : null;
     if (mode === 'stock' && selectedRow && selectedRow.classList.contains('d-none') && showAll) {
       showAll.checked = true;
@@ -268,31 +270,97 @@
   function money(value) {
     return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(Number(value || 0)) + ' ₸';
   }
+  function escapeHtml(value) {
+    const div = document.createElement('div');
+    div.textContent = value == null ? '' : String(value);
+    return div.innerHTML;
+  }
+  function syncSelectOptions(name, rows, allowBlank = true) {
+    const field = document.querySelector(`[data-config-field][name="${name}"]`);
+    if (!field) return false;
+    const current = field.value || '';
+    const options = rows || [];
+    field.innerHTML = `${allowBlank ? '<option value="">—</option>' : ''}${options.map((row) => `<option value="${escapeHtml(row.code)}">${escapeHtml(row.name || row.code)}</option>`).join('')}`;
+    const values = new Set(options.map((row) => String(row.code)));
+    if (values.has(current)) {
+      field.value = current;
+    } else {
+      field.value = allowBlank ? '' : (options[0] ? options[0].code : '');
+    }
+    return field.value !== current;
+  }
+  function syncSpecialOptions(rows) {
+    const container = productionPanel.querySelector('[data-special-options]');
+    if (!container) return;
+    const selected = new Set(Array.from(container.querySelectorAll('[name="special_options"]:checked')).map((field) => field.value));
+    container.innerHTML = (rows || []).map((row, index) => {
+      const id = `orderSpecialDynamic${index}`;
+      const checked = selected.has(String(row.code)) ? ' checked' : '';
+      return `<div class="col-md-4">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="special_options" value="${escapeHtml(row.code)}" id="${id}" data-config-field${checked}>
+          <label class="form-check-label" for="${id}">${escapeHtml(row.code)} - ${escapeHtml(row.name || row.code)}</label>
+        </div>
+      </div>`;
+    }).join('');
+    container.querySelectorAll('[data-config-field]').forEach((field) => field.addEventListener('change', refreshConfigPreview));
+  }
+  function syncConfigOptions(options) {
+    if (!options) return false;
+    let changed = false;
+    changed = syncSelectOptions('group_code', options.groups, false) || changed;
+    changed = syncSelectOptions('body_execution_code', options.executions, false) || changed;
+    changed = syncSelectOptions('body_size_code', options.body_sizes) || changed;
+    changed = syncSelectOptions('board_height_code', options.board_heights) || changed;
+    changed = syncSelectOptions('wheel_code', options.wheels) || changed;
+    changed = syncSelectOptions('hub_code', options.hubs) || changed;
+    changed = syncSelectOptions('support_wheel_code', options.support_wheels) || changed;
+    changed = syncSelectOptions('tent_code', options.tents) || changed;
+    syncSpecialOptions(options.specials);
+    return changed;
+  }
+  function alertHtml(kind, rows) {
+    const messages = rows || [];
+    if (!messages.length) return '';
+    return `<div class="alert alert-${kind} mt-3 mb-0">${messages.map((message) => `<div>${escapeHtml(message)}</div>`).join('')}</div>`;
+  }
   function trailerRowsHtml(title, rows) {
-    const body = (rows || []).slice(0, 8).map((row) => `<tr><td>${row.warehouse || '—'}</td><td class="fw-semibold">${row.vin || '—'}</td><td>${row.article || '—'}</td><td>${row.name || '—'}</td><td class="text-end">${money(row.price)}</td></tr>`).join('');
+    const body = (rows || []).slice(0, 8).map((row) => `<tr><td>${escapeHtml(row.warehouse || '—')}</td><td class="fw-semibold">${escapeHtml(row.vin || '—')}</td><td>${escapeHtml(row.article || '—')}</td><td>${escapeHtml(row.name || '—')}</td><td class="text-end">${money(row.price)}</td></tr>`).join('');
     return `<div class="mt-3"><div class="fw-semibold small mb-1">${title}</div><div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>Склад</th><th>VIN</th><th>Артикул</th><th>Наименование</th><th class="text-end">Цена</th></tr></thead><tbody>${body || '<tr><td colspan="5" class="text-muted">Нет свободных прицепов</td></tr>'}</tbody></table></div></div>`;
   }
 
-  async function refreshConfigPreview() {
+  async function refreshConfigPreview(allowRetry = true) {
     if ((sourceSelect.value || '') !== 'production') return;
     const response = await fetch(`{{ url_for('main.api_trailer_config_preview') }}?${configParams().toString()}`);
     if (!response.ok) return;
     const data = await response.json();
     const result = data.result || {};
+    const optionsChanged = syncConfigOptions(data.options || {});
+    if (optionsChanged && allowRetry) {
+      refreshConfigPreview(false);
+      return;
+    }
     const exact = (result.inventory && result.inventory.exact) || [];
     const body = (result.inventory && result.inventory.body_match) || [];
     const size = (result.inventory && result.inventory.size_match) || [];
+    const errors = result.errors || [];
+    const warnings = [...((data.options && data.options.option_warnings) || []), ...((result.warnings) || [])];
+    const missing = (result.missing_components || []).map((item) => `Не заполнена матрица цены: ${item}`);
+    if (submitButton) submitButton.disabled = Boolean(errors.length);
     preview.innerHTML = `
       <div class="border rounded p-3 mt-3">
-        <div class="small text-muted">Артикул</div><div class="h5">${result.article || '—'}</div>
-        <div class="small text-muted">Наименование</div><div>${result.name || '—'}</div>
+        <div class="small text-muted">Артикул</div><div class="h5">${escapeHtml(result.article || '—')}</div>
+        <div class="small text-muted">Наименование</div><div>${escapeHtml(result.name || '—')}</div>
         <div class="row g-2 mt-2">
           <div class="col-md-6"><div class="small text-muted">Цена</div><div class="fw-bold">${money(result.price)}</div></div>
-          <div class="col-md-6"><div class="small text-muted">VIN-модификация</div><div class="fw-bold">${result.vin_modification_code || '—'}</div></div>
-          <div class="col-md-6"><div class="small text-muted">Габариты</div><div>${result.overall_dimensions_text || '—'}</div></div>
-          <div class="col-md-6"><div class="small text-muted">Внутренние размеры</div><div>${result.inner_dimensions_text || '—'}</div></div>
-          <div class="col-md-12"><div class="small text-muted">ОТТС</div><div>${result.otss_number || '—'} ${result.otss_type || ''} ${result.otss_modification || ''}</div></div>
+          <div class="col-md-6"><div class="small text-muted">VIN-модификация</div><div class="fw-bold">${escapeHtml(result.vin_modification_code || '—')}</div></div>
+          <div class="col-md-6"><div class="small text-muted">Габариты</div><div>${escapeHtml(result.overall_dimensions_text || '—')}</div></div>
+          <div class="col-md-6"><div class="small text-muted">Внутренние размеры</div><div>${escapeHtml(result.inner_dimensions_text || '—')}</div></div>
+          <div class="col-md-12"><div class="small text-muted">ОТТС</div><div>${escapeHtml(result.otss_number || '—')} ${escapeHtml(result.otss_type || '')} ${escapeHtml(result.otss_modification || '')}</div></div>
         </div>
+        ${alertHtml('danger', errors)}
+        ${alertHtml('warning', warnings)}
+        ${alertHtml('warning', missing)}
         <div class="mt-3 small"><strong>Точное наличие:</strong> ${exact.length || 0} VIN. <strong>Аналоги по кузову:</strong> ${body.length || 0}. <strong>Похожие по размеру:</strong> ${size.length || 0}.</div>
         ${trailerRowsHtml('Точное наличие', exact)}
         ${trailerRowsHtml('Аналоги по кузову и борту', body)}

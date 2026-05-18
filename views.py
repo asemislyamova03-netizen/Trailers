@@ -2297,6 +2297,32 @@ def _catalog_choices(field):
     return model.query.order_by(getattr(model, 'sort_order', model.id), model.id).all()
 
 
+def _catalog_text_choices(section_key, field):
+    if section_key != 'otss':
+        return []
+    if field == 'otss_number':
+        return [
+            {'value': row.number, 'label': f'{row.number} — мод. {row.modification} — {row.name}'}
+            for row in OTTS.query.filter_by(is_active=True).order_by(OTTS.number, OTTS.modification, OTTS.name).all()
+        ]
+    if field == 'otss_modification':
+        rows = (
+            OTTS.query
+            .filter_by(is_active=True)
+            .order_by(OTTS.modification, OTTS.number)
+            .all()
+        )
+        seen = set()
+        choices = []
+        for row in rows:
+            if row.modification in seen:
+                continue
+            seen.add(row.modification)
+            choices.append({'value': row.modification, 'label': row.modification})
+        return choices
+    return []
+
+
 def _apply_catalog_form(obj, fields):
     for field in fields:
         if field in TRAILER_CATALOG_BOOL_FIELDS:
@@ -2439,6 +2465,7 @@ def trailer_config_catalog_create(section):
                 obj=obj,
                 field_labels=TRAILER_CATALOG_FIELD_LABELS,
                 choices_getter=_catalog_choices,
+                text_choices_getter=_catalog_text_choices,
                 bool_fields=TRAILER_CATALOG_BOOL_FIELDS,
                 date_fields=TRAILER_CATALOG_DATE_FIELDS,
             )
@@ -2459,6 +2486,7 @@ def trailer_config_catalog_create(section):
         obj=None,
         field_labels=TRAILER_CATALOG_FIELD_LABELS,
         choices_getter=_catalog_choices,
+        text_choices_getter=_catalog_text_choices,
         bool_fields=TRAILER_CATALOG_BOOL_FIELDS,
         date_fields=TRAILER_CATALOG_DATE_FIELDS,
     )
@@ -2486,6 +2514,7 @@ def trailer_config_catalog_edit(section, row_id):
                 obj=obj,
                 field_labels=TRAILER_CATALOG_FIELD_LABELS,
                 choices_getter=_catalog_choices,
+                text_choices_getter=_catalog_text_choices,
                 bool_fields=TRAILER_CATALOG_BOOL_FIELDS,
                 date_fields=TRAILER_CATALOG_DATE_FIELDS,
             )
@@ -2505,6 +2534,7 @@ def trailer_config_catalog_edit(section, row_id):
         obj=obj,
         field_labels=TRAILER_CATALOG_FIELD_LABELS,
         choices_getter=_catalog_choices,
+        text_choices_getter=_catalog_text_choices,
         bool_fields=TRAILER_CATALOG_BOOL_FIELDS,
         date_fields=TRAILER_CATALOG_DATE_FIELDS,
     )
@@ -2544,81 +2574,16 @@ def trailer_config_test():
     }
     result = build_trailer_configuration_result(config)
     selected_group = TrailerProductGroup.query.filter_by(code=config['group_code']).first()
-    selected_body_size = TrailerBodySize.query.filter_by(code=config['body_size_code']).first()
-    option_warnings = []
-
-    def allowed_items(option_type, model):
-        base_query = model.query.filter_by(is_active=True)
-        if not selected_group:
-            return base_query.order_by(model.sort_order).all()
-        allowed_ids = [
-            row.option_id for row in TrailerAllowedOption.query.filter_by(
-                group_id=selected_group.id,
-                option_type=option_type,
-                is_allowed=True,
-            ).all()
-        ]
-        if not allowed_ids:
-            return []
-        return base_query.filter(model.id.in_(allowed_ids)).order_by(model.sort_order).all()
-
-    def matrix_filtered_items(option_type, model, price_model, price_field, warning):
-        allowed = allowed_items(option_type, model)
-        if not selected_group:
-            return allowed
-        price_ids = [
-            getattr(row, price_field) for row in price_model.query.filter_by(
-                group_id=selected_group.id,
-                is_active=True,
-            ).all()
-        ]
-        if not price_ids:
-            option_warnings.append(warning)
-            return []
-        return [item for item in allowed if item.id in set(price_ids)]
-
-    board_heights = allowed_items('board_height', TrailerBoardHeight)
-    if selected_body_size:
-        board_price_ids = {
-            row.board_height_id for row in TrailerBoardPriceMatrix.query.filter_by(
-                body_size_id=selected_body_size.id,
-                is_active=True,
-            ).all()
-        }
-        board_heights = [item for item in board_heights if item.id in board_price_ids]
-        if not board_heights:
-            option_warnings.append(f'Для кузова {selected_body_size.code} не заведены цены бортов.')
-
-    tents = allowed_items('tent', TrailerTentOption)
-    if selected_body_size:
-        tent_price_ids = {
-            row.tent_option_id for row in TrailerTentPriceMatrix.query.filter_by(
-                body_size_id=selected_body_size.id,
-                is_active=True,
-            ).all()
-        }
-        tents = [item for item in tents if item.id in tent_price_ids]
-        if not tents:
-            option_warnings.append(f'Для кузова {selected_body_size.code} не заведены цены тентов.')
-
-    wheels = matrix_filtered_items(
-        'wheel',
-        TrailerWheelOption,
-        TrailerWheelPriceMatrix,
-        'wheel_option_id',
-        f'Для группы {selected_group.code} не заведены цены колёс.' if selected_group else 'Не выбрана группа для цен колёс.',
-    )
-    hubs = matrix_filtered_items(
-        'hub',
-        TrailerHubOption,
-        TrailerHubPriceMatrix,
-        'hub_option_id',
-        f'Для группы {selected_group.code} не заведены цены ступиц.' if selected_group else 'Не выбрана группа для цен ступиц.',
-    )
-    body_sizes = allowed_items('body_size', TrailerBodySize)
-    support_wheels = allowed_items('support_wheel', TrailerSupportWheelOption)
-    executions = allowed_items('body_execution', TrailerBodyExecution)
-    specials = allowed_items('special', TrailerSpecialOption)
+    config_options = _filtered_trailer_config_options(config)
+    body_sizes = config_options['body_sizes']
+    board_heights = config_options['board_heights']
+    wheels = config_options['wheels']
+    hubs = config_options['hubs']
+    support_wheels = config_options['support_wheels']
+    tents = config_options['tents']
+    executions = config_options['executions']
+    specials = config_options['specials']
+    option_warnings = list(config_options.get('option_warnings') or [])
 
     def warn_if_selected_unavailable(label, selected_code, options):
         if not selected_code:
@@ -4064,7 +4029,104 @@ def _order_future_availability(item_id: int | None, warehouse_id: int | None):
     }
 
 
-def _trailer_config_form_context():
+def _trailer_config_option_payload(items):
+    return [{'code': item.code, 'name': item.name} for item in items]
+
+
+def _filtered_trailer_config_options(config: dict | None = None) -> dict:
+    config = config or {}
+    selected_group = TrailerProductGroup.query.filter_by(code=config.get('group_code') or '002').first()
+    selected_body_size = TrailerBodySize.query.filter_by(code=config.get('body_size_code') or '').first()
+    option_warnings = []
+
+    def allowed_items(option_type, model):
+        base_query = model.query.filter_by(is_active=True)
+        if not selected_group:
+            return base_query.order_by(model.sort_order, model.id).all()
+        allowed_ids = [
+            row.option_id for row in TrailerAllowedOption.query.filter_by(
+                group_id=selected_group.id,
+                option_type=option_type,
+                is_allowed=True,
+            ).all()
+        ]
+        if not allowed_ids:
+            return []
+        return base_query.filter(model.id.in_(allowed_ids)).order_by(model.sort_order, model.id).all()
+
+    def matrix_filtered_items(option_type, model, price_model, price_field, warning):
+        allowed = allowed_items(option_type, model)
+        if not selected_group:
+            return allowed
+        price_ids = {
+            getattr(row, price_field) for row in price_model.query.filter_by(
+                group_id=selected_group.id,
+                is_active=True,
+            ).all()
+        }
+        if not price_ids:
+            option_warnings.append(warning)
+            return []
+        return [item for item in allowed if item.id in price_ids]
+
+    body_sizes = allowed_items('body_size', TrailerBodySize)
+    board_heights = allowed_items('board_height', TrailerBoardHeight)
+    if selected_body_size:
+        board_price_ids = {
+            row.board_height_id for row in TrailerBoardPriceMatrix.query.filter_by(
+                body_size_id=selected_body_size.id,
+                is_active=True,
+            ).all()
+        }
+        board_heights = [item for item in board_heights if item.id in board_price_ids]
+        if not board_heights:
+            option_warnings.append(f'Для кузова {selected_body_size.code} не заведены цены бортов.')
+
+    tents = allowed_items('tent', TrailerTentOption)
+    if selected_body_size:
+        tent_price_ids = {
+            row.tent_option_id for row in TrailerTentPriceMatrix.query.filter_by(
+                body_size_id=selected_body_size.id,
+                is_active=True,
+            ).all()
+        }
+        tents = [item for item in tents if item.id in tent_price_ids]
+        if not tents:
+            option_warnings.append(f'Для кузова {selected_body_size.code} не заведены цены тентов.')
+
+    wheels = matrix_filtered_items(
+        'wheel',
+        TrailerWheelOption,
+        TrailerWheelPriceMatrix,
+        'wheel_option_id',
+        f'Для группы {selected_group.code} не заведены цены колёс.' if selected_group else 'Не выбрана группа для цен колёс.',
+    )
+    hubs = matrix_filtered_items(
+        'hub',
+        TrailerHubOption,
+        TrailerHubPriceMatrix,
+        'hub_option_id',
+        f'Для группы {selected_group.code} не заведены цены ступиц.' if selected_group else 'Не выбрана группа для цен ступиц.',
+    )
+
+    options = {
+        'groups': TrailerProductGroup.query.filter_by(is_active=True).order_by(TrailerProductGroup.sort_order, TrailerProductGroup.code).all(),
+        'body_sizes': body_sizes,
+        'board_heights': board_heights,
+        'wheels': wheels,
+        'hubs': hubs,
+        'support_wheels': allowed_items('support_wheel', TrailerSupportWheelOption),
+        'tents': tents,
+        'executions': allowed_items('body_execution', TrailerBodyExecution),
+        'specials': allowed_items('special', TrailerSpecialOption),
+        'option_warnings': option_warnings,
+    }
+    return options
+
+
+def _trailer_config_form_context(config: dict | None = None):
+    if config:
+        return _filtered_trailer_config_options(config)
     return {
         'groups': TrailerProductGroup.query.filter_by(is_active=True).order_by(TrailerProductGroup.sort_order, TrailerProductGroup.code).all(),
         'body_sizes': TrailerBodySize.query.filter_by(is_active=True).order_by(TrailerBodySize.sort_order, TrailerBodySize.code).all(),
@@ -4677,7 +4739,24 @@ def _config_preview_payload(result: dict) -> dict:
     }
 
 
+def _config_options_payload(config: dict) -> dict:
+    options = _filtered_trailer_config_options(config)
+    return {
+        'groups': _trailer_config_option_payload(options['groups']),
+        'body_sizes': _trailer_config_option_payload(options['body_sizes']),
+        'board_heights': _trailer_config_option_payload(options['board_heights']),
+        'wheels': _trailer_config_option_payload(options['wheels']),
+        'hubs': _trailer_config_option_payload(options['hubs']),
+        'support_wheels': _trailer_config_option_payload(options['support_wheels']),
+        'tents': _trailer_config_option_payload(options['tents']),
+        'executions': _trailer_config_option_payload(options['executions']),
+        'specials': _trailer_config_option_payload(options['specials']),
+        'option_warnings': options.get('option_warnings') or [],
+    }
+
+
 def _render_order_form(form: CustomerOrderForm, title: str):
+    config = _config_from_request_values(request.form) if request.method == 'POST' else {'group_code': '002', 'body_execution_code': 'BOARD'}
     return render_template(
         'order_form.html',
         form=form,
@@ -4686,7 +4765,7 @@ def _render_order_form(form: CustomerOrderForm, title: str):
         item_options=_trailer_item_options(),
         trailer_options=_order_trailer_options(getattr(form, 'order_id', None)),
         availability=_order_future_availability(form.item_id.data or None, form.warehouse_id.data or None),
-        config_options=_trailer_config_form_context(),
+        config_options=_trailer_config_form_context(config),
     )
 
 
@@ -5314,7 +5393,7 @@ def api_trailer_config_preview():
     config = _config_from_request_values(request.args)
     result = build_trailer_configuration_result(config)
     result['config'] = config
-    return jsonify({'ok': True, 'result': _config_preview_payload(result)})
+    return jsonify({'ok': True, 'result': _config_preview_payload(result), 'options': _config_options_payload(config)})
 
 
 @main_bp.route('/api/available-trailers')

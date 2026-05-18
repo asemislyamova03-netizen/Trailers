@@ -35,6 +35,16 @@
                             </option>
                         {% endfor %}
                     </select>
+                {% elif text_choices_getter(active_section, field) %}
+                    <label class="form-label" for="{{ field }}">{{ field_labels.get(field, field) }}</label>
+                    <select class="form-select" name="{{ field }}" id="{{ field }}">
+                        <option value="">—</option>
+                        {% for choice in text_choices_getter(active_section, field) %}
+                            <option value="{{ choice.value }}" {% if value == choice.value %}selected{% endif %}>
+                                {{ choice.label }}
+                            </option>
+                        {% endfor %}
+                    </select>
                 {% elif field == 'comment' or field == 'description' %}
                     <label class="form-label" for="{{ field }}">{{ field_labels.get(field, field) }}</label>
                     <textarea class="form-control" name="{{ field }}" id="{{ field }}" rows="3">{{ value or '' }}</textarea>
