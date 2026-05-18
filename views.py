@@ -2676,13 +2676,13 @@ def manager_trailer_picker():
                 status='waiting_payment',
                 fulfillment_source='stock',
             )
-        db.session.add(order)
-        db.session.flush()
-        order_line = _sync_primary_order_line(order, _order_snapshot(order))
-        db.session.flush()
-        trailer.status = 'RESERVED'
-        trailer.lifecycle_status = 'reserved'
-        db.session.add(Reservation(order_id=order.id, order_line_id=order_line.id, trailer_id=trailer.id, item_id=trailer.item_id, source_type='STOCK' if trailer.warehouse_id == order.warehouse_id else 'TRANSFER', status='ACTIVE', priority=10, note='Резерв из подбора прицепа'))
+            db.session.add(order)
+            db.session.flush()
+            order_line = _sync_primary_order_line(order, _order_snapshot(order))
+            db.session.flush()
+            trailer.status = 'RESERVED'
+            trailer.lifecycle_status = 'reserved'
+            db.session.add(Reservation(order_id=order.id, order_line_id=order_line.id, trailer_id=trailer.id, item_id=trailer.item_id, source_type='STOCK' if trailer.warehouse_id == order.warehouse_id else 'TRANSFER', status='ACTIVE', priority=10, note='Резерв из подбора прицепа'))
             add_order_event(order, 'order_created', new_value=order.status, comment='Создан из подбора прицепа')
             add_order_event(order, 'trailer_reserved', new_value=trailer.vin, comment='Резерв из подбора прицепа')
             _finish_idempotency(idem_key, 'CustomerOrder', order.id)
