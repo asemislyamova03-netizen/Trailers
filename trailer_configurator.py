@@ -360,12 +360,17 @@ def resolve_otss_modification(config):
         body_execution_id=execution.id,
         is_active=True,
     )
-    if execution.code in ('BOARD', 'PLATFORM'):
-        query = query.filter(TrailerOtssModificationMatrix.board_height_id == (board.id if board else None))
-    else:
-        query = query.filter(TrailerOtssModificationMatrix.board_height_id.is_(None))
 
     rows = query.order_by(TrailerOtssModificationMatrix.sort_order).all()
+    if board:
+        board_rows = [row for row in rows if row.board_height_id == board.id]
+        if board_rows:
+            rows = board_rows
+        else:
+            rows = [row for row in rows if row.board_height_id is None]
+    else:
+        rows = [row for row in rows if row.board_height_id is None]
+
     for row in rows:
         if row.special_option_id and row.special_option_id not in special_ids:
             continue
