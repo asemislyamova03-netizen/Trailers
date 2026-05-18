@@ -58,8 +58,8 @@ def normalize_config(config):
         'board_height_code': config.get('board_height_code') or '',
         'wheel_code': config.get('wheel_code') or '',
         'hub_code': config.get('hub_code') or '',
-        'support_wheel_code': config.get('support_wheel_code') or 'NOOK',
-        'tent_code': config.get('tent_code') or 'NONE',
+        'support_wheel_code': config.get('support_wheel_code') or '',
+        'tent_code': config.get('tent_code') or '',
         'body_execution_code': config.get('body_execution_code') or '',
         'special_options': [code for code in config.get('special_options', []) if code],
     }
@@ -97,18 +97,31 @@ def _is_allowed(group, option_type, option):
     return row is not None
 
 
+def _has_allowed_options(group, option_type):
+    if not group:
+        return False
+    return TrailerAllowedOption.query.filter_by(
+        group_id=group.id,
+        option_type=option_type,
+        is_allowed=True,
+    ).first() is not None
+
+
 def validate_trailer_config(config):
     config, objects = load_config_objects(config)
     errors = []
+    group = objects['group']
 
     required = [
         ('group', 'Не выбрана группа'),
         ('body_size', 'Не выбран размер кузова'),
         ('board_height', 'Не выбрана высота борта'),
-        ('support_wheel', 'Не выбрано опорное колесо'),
-        ('tent', 'Не выбран тент'),
         ('body_execution', 'Не выбран тип кузова'),
     ]
+    if _has_allowed_options(group, 'support_wheel'):
+        required.append(('support_wheel', 'Не выбрано опорное колесо'))
+    if _has_allowed_options(group, 'tent'):
+        required.append(('tent', 'Не выбран тент'))
     for key, message in required:
         if not objects[key]:
             errors.append(message)
@@ -116,7 +129,6 @@ def validate_trailer_config(config):
     if bool(config['wheel_code']) == bool(config['hub_code']):
         errors.append('Нужно выбрать либо колесо, либо ступицу')
 
-    group = objects['group']
     for option_type, key in (
         ('body_size', 'body_size'),
         ('board_height', 'board_height'),
