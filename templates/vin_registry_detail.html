@@ -90,8 +90,14 @@
       <h3 class="h6">Зарезервировать под заказ</h3>
       <form method="post" action="{{ url_for('main.vin_registry_reserve', vin_id=row.id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <label class="form-label">Заказ</label>
-        <select name="customer_order_id" class="form-select mb-2">{% for order in orders %}<option value="{{ order.id }}">{{ order.order_number }} — {{ order.customer.name if order.customer else '' }}</option>{% endfor %}</select>
+        <label class="form-label">Позиция заказа</label>
+        <select name="order_line_id" class="form-select mb-2">
+          {% for option in order_line_options %}
+          {% set line = option.line %}
+          {% set order = option.order %}
+          <option value="{{ line.id }}">{{ order.order_number }} — поз. {{ line.line_no }} — {{ line.article_snapshot or (line.item.article if line.item else '') }} — {{ order.customer.name if order.customer else '' }}</option>
+          {% endfor %}
+        </select>
         <label class="form-label">Код года</label>
         <input name="year_code" class="form-control mb-2" value="{{ row.year_code or 'T' }}" maxlength="1">
         <label class="form-label">Комментарий</label>

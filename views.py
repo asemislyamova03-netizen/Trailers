@@ -4443,6 +4443,30 @@ def _order_vin_modification_code(order: CustomerOrder) -> str:
     return ''
 
 
+def _order_line_vin_modification_code(line: CustomerOrderLine | None, order: CustomerOrder | None = None) -> str:
+    if line and line.vin_modification_code:
+        return line.vin_modification_code
+    if line and line.supply_needs:
+        for need in line.supply_needs:
+            if need.vin_modification_code:
+                return need.vin_modification_code
+    return _order_vin_modification_code(order or (line.order if line else None))
+
+
+def _active_vin_registry_for_order_line(order_line_id: int | None):
+    if not order_line_id:
+        return None
+    return (
+        VinRegistry.query
+        .filter(
+            VinRegistry.order_line_id == order_line_id,
+            VinRegistry.status.in_(['reserved', 'assigned', 'confirmed']),
+        )
+        .order_by(VinRegistry.reserved_at.desc().nullslast(), VinRegistry.id.desc())
+        .first()
+    )
+
+
 def _parse_vin_full(vin_full: str) -> tuple[dict | None, str | None]:
     vin = (vin_full or '').strip().upper()
     if len(vin) != 17:
@@ -7416,8 +7440,17 @@ def vin_registry_detail(vin_id):
         CustomerOrder.documents_issued == False,
         CustomerOrder.is_shipped == False,
     ).order_by(CustomerOrder.created_at.desc()).limit(100).all()
+    order_line_options = []
+    for order in orders:
+        lines = order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()).all()
+        if not lines:
+            continue
+        for line in lines:
+            if _active_vin_registry_for_order_line(line.id):
+                continue
+            order_line_options.append({'order': order, 'line': line})
     trailers = Trailer.query.order_by(Trailer.created_at.desc()).limit(150).all()
-    return render_template('vin_registry_detail.html', row=row, orders=orders, trailers=trailers, events=row.events.order_by(VinRegistryEvent.created_at.desc()).all())
+    return render_template('vin_registry_detail.html', row=row, orders=orders, order_line_options=order_line_options, trailers=trailers, events=row.events.order_by(VinRegistryEvent.created_at.desc()).all())
 
 
 @main_bp.route('/logistics/vin-registry/<int:vin_id>/reserve', methods=['POST'])
@@ -7427,11 +7460,18 @@ def vin_registry_reserve(vin_id):
     if row.status != 'free':
         flash('Резервировать можно только свободный VIN.', 'danger')
         return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
-    order = CustomerOrder.query.get(request.form.get('customer_order_id', type=int))
-    if not order or order.is_shipped or order.documents_issued or order.status in ('cancelled', 'canceled', 'closed', 'done') or _active_vin_registry_for_order(order.id):
+    order_line = CustomerOrderLine.query.get(request.form.get('order_line_id', type=int)) if request.form.get('order_line_id', type=int) else None
+    order = order_line.order if order_line else CustomerOrder.query.get(request.form.get('customer_order_id', type=int))
+    if not order or order.is_shipped or order.documents_issued or order.status in ('cancelled', 'canceled', 'closed', 'done'):
         flash('Этот заказ нельзя связать с VIN.', 'danger')
         return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
-    modification = _order_vin_modification_code(order)
+    if order_line and _active_vin_registry_for_order_line(order_line.id):
+        flash('У выбранной позиции заказа уже есть активный VIN.', 'danger')
+        return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
+    if not order_line and _active_vin_registry_for_order(order.id):
+        flash('У заказа уже есть активный VIN. Для второго VIN выберите конкретную позицию заказа.', 'danger')
+        return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
+    modification = _order_line_vin_modification_code(order_line, order)
     year_code = (request.form.get('year_code') or row.year_code or '').strip().upper()
     if row.vin_full and modification and row.vin_modification_code and row.vin_modification_code != modification:
         flash('VIN-модификация выбранного VIN не соответствует заказу.', 'danger')
@@ -7447,12 +7487,14 @@ def vin_registry_reserve(vin_id):
     old_status = row.status
     row.status = 'reserved'
     row.customer_order_id = order.id
-    active_need = _active_supply_need_for_order(order.id)
+    row.order_line_id = order_line.id if order_line else None
+    active_need = next((need for need in order_line.supply_needs if need.status in ('NEW', 'PLANNED', 'IN_PRODUCTION', 'SENT_TO_PRODUCTION', 'PARTIALLY_DONE')), None) if order_line else _active_supply_need_for_order(order.id)
     row.supply_need_id = active_need.id if active_need else None
     row.reserved_by_user_id = current_user.id
     row.reserved_at = datetime.utcnow()
     row.comment = (request.form.get('comment') or '').strip() or row.comment
-    order.reserved_vin_registry_id = row.id
+    if not order.reserved_vin_registry_id:
+        order.reserved_vin_registry_id = row.id
     _add_vin_event(row, 'reserved', old_status, row.status, comment=row.comment)
     db.session.commit()
     flash('VIN зарезервирован под заказ.', 'success')
@@ -7509,7 +7551,8 @@ def vin_registry_assign(vin_id):
     if trailer.status == 'SOLD' and not (row.customer_order and row.customer_order.trailer_id == trailer.id):
         flash('Проданный прицеп нельзя привязать к этому VIN.', 'danger')
         return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
-    if row.customer_order and row.customer_order.item_id and trailer.item_id != row.customer_order.item_id:
+    expected_item_id = row.order_line.item_id if row.order_line_id and row.order_line else (row.customer_order.item_id if row.customer_order else None)
+    if expected_item_id and trailer.item_id != expected_item_id:
         flash('Прицеп не соответствует номенклатуре заказа.', 'danger')
         return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
     old_status = row.status
