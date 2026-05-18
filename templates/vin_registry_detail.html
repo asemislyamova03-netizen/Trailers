@@ -47,6 +47,42 @@
   </div>
 </div>
 
+{% if current_user.is_admin %}
+<div class="app-card p-3 mb-3">
+  <h2 class="h5">Администрирование VIN</h2>
+  <form method="post" action="{{ url_for('main.vin_registry_admin_edit', vin_id=row.id) }}" class="row g-2 align-items-end">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="col-md-3">
+      <label class="form-label">VIN</label>
+      <input name="vin_full" class="form-control" value="{{ row.vin_full or '' }}" maxlength="17">
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">serial7</label>
+      <input name="serial7" class="form-control" value="{{ row.serial7 }}" maxlength="7">
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Статус</label>
+      <select name="status" class="form-select">
+        {% for status in ['free', 'reserved', 'assigned', 'confirmed', 'void'] %}
+        <option value="{{ status }}" {% if row.status == status %}selected{% endif %}>{{ status|status_label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Комментарий</label>
+      <input name="comment" class="form-control" placeholder="Причина корректировки">
+    </div>
+    <div class="col-md-2 d-grid">
+      <button class="btn btn-orange">Сохранить</button>
+    </div>
+  </form>
+  <form method="post" action="{{ url_for('main.vin_registry_admin_delete', vin_id=row.id) }}" class="mt-2" onsubmit="return confirm('Удалить VIN из реестра?')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="btn btn-sm btn-outline-danger">Удалить VIN</button>
+  </form>
+</div>
+{% endif %}
+
 <div class="row g-3 mb-3">
   {% if row.status == 'free' %}
   <div class="col-lg-4">

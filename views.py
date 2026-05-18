@@ -14,7 +14,7 @@ from flask_login import (
 )
 
 from extensions import db
-from models import Trailer, Item, Warehouse, Customer, SalesContract, User, OTTS, Lead, LeadMessage, CustomerOrder, OrderPayment, OrderEvent, Reservation, SupplyNeed, ProductionRequest, ProductionRequestLine, ProducedUnit, StockMovement, IdempotencyKey, VinRegistry, VinRegistryEvent
+from models import Trailer, Item, Warehouse, Customer, SalesContract, User, OTTS, Lead, LeadMessage, CustomerOrder, CustomerOrderLine, OrderPayment, OrderEvent, Reservation, SupplyNeed, ProductionRequest, ProductionRequestLine, ProducedUnit, StockMovement, IdempotencyKey, VinRegistry, VinRegistryEvent
 from models import (
     TrailerAllowedOption, TrailerBoardHeight, TrailerBoardPriceMatrix, TrailerBodyExecution, TrailerBodySize,
     TrailerDimensionMatrix, TrailerHubOption, TrailerHubPriceMatrix, TrailerOtssModificationMatrix,
@@ -542,6 +542,8 @@ def _sync_order_trailer_links(order: CustomerOrder, old_trailer: Trailer | None,
         for row in VinRegistry.query.filter(VinRegistry.trailer_id == old_trailer.id, VinRegistry.status != 'void').all():
             if row.customer_order_id == order.id:
                 row.customer_order_id = None
+            if row.order_line_id and row.order_line and row.order_line.order_id == order.id:
+                row.order_line_id = None
             if row.docs_issued_order_id == order.id:
                 row.docs_issued_order_id = None
             if contract and row.sales_contract_id == contract.id:
@@ -592,8 +594,10 @@ def _sync_order_trailer_links(order: CustomerOrder, old_trailer: Trailer | None,
 
         row = _ensure_vin_registry_for_trailer(new_trailer)
         if row:
+            order_line = _primary_order_line(order)
             row.trailer_id = new_trailer.id
             row.customer_order_id = order.id
+            row.order_line_id = order_line.id if order_line else row.order_line_id
             row.sales_contract_id = contract.id if contract else row.sales_contract_id
             if order.documents_issued:
                 row.docs_issued_order_id = order.id
@@ -2622,7 +2626,7 @@ def trailer_config_test():
 
 
 @main_bp.route('/manager/trailer-picker', methods=['GET', 'POST'])
-@role_required('director', 'manager', 'logistics')
+@role_required('director', 'manager')
 def manager_trailer_picker():
     from trailer_configurator import build_trailer_configuration_result
 
@@ -2672,11 +2676,13 @@ def manager_trailer_picker():
                 status='waiting_payment',
                 fulfillment_source='stock',
             )
-            db.session.add(order)
-            db.session.flush()
-            trailer.status = 'RESERVED'
-            trailer.lifecycle_status = 'reserved'
-            db.session.add(Reservation(order_id=order.id, trailer_id=trailer.id, item_id=trailer.item_id, source_type='STOCK' if trailer.warehouse_id == order.warehouse_id else 'TRANSFER', status='ACTIVE', priority=10, note='Резерв из подбора прицепа'))
+        db.session.add(order)
+        db.session.flush()
+        order_line = _sync_primary_order_line(order, _order_snapshot(order))
+        db.session.flush()
+        trailer.status = 'RESERVED'
+        trailer.lifecycle_status = 'reserved'
+        db.session.add(Reservation(order_id=order.id, order_line_id=order_line.id, trailer_id=trailer.id, item_id=trailer.item_id, source_type='STOCK' if trailer.warehouse_id == order.warehouse_id else 'TRANSFER', status='ACTIVE', priority=10, note='Резерв из подбора прицепа'))
             add_order_event(order, 'order_created', new_value=order.status, comment='Создан из подбора прицепа')
             add_order_event(order, 'trailer_reserved', new_value=trailer.vin, comment='Резерв из подбора прицепа')
             _finish_idempotency(idem_key, 'CustomerOrder', order.id)
@@ -2707,7 +2713,9 @@ def manager_trailer_picker():
             _apply_snapshot(order, snapshot)
             db.session.add(order)
             db.session.flush()
-            need = SupplyNeed(order_id=order.id, item_id=item.id, warehouse_id=order.warehouse_id, quantity=1, status='NEW', need_type='CUSTOMER_ORDER', priority=10, note='Потребность создана из подбора прицепа')
+            order_line = _sync_primary_order_line(order, snapshot)
+            db.session.flush()
+            need = SupplyNeed(order_id=order.id, order_line_id=order_line.id, item_id=item.id, warehouse_id=order.warehouse_id, quantity=1, status='NEW', need_type='CUSTOMER_ORDER', priority=10, note='Потребность создана из подбора прицепа')
             _apply_snapshot(need, snapshot)
             db.session.add(need)
             add_order_event(order, 'order_created', new_value=order.status, comment='Создан из подбора прицепа')
@@ -4213,6 +4221,39 @@ def _order_snapshot(order: CustomerOrder) -> dict:
     return {key: getattr(order, key, None) for key in SNAPSHOT_FIELD_NAMES}
 
 
+def _primary_order_line(order: CustomerOrder) -> CustomerOrderLine | None:
+    if not order or not order.id:
+        return None
+    return (
+        CustomerOrderLine.query
+        .filter_by(order_id=order.id)
+        .order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc())
+        .first()
+    )
+
+
+def _sync_primary_order_line(order: CustomerOrder, snapshot: dict | None = None) -> CustomerOrderLine:
+    line = _primary_order_line(order)
+    if not line:
+        line = CustomerOrderLine(order_id=order.id, line_no=1)
+        db.session.add(line)
+    item_type = (order.item.item_type if order.item else '') or ''
+    line.line_type = 'COMPONENT' if item_type.upper() == 'COMPONENT' else 'TRAILER'
+    line.fulfillment_source = order.fulfillment_source
+    line.item_id = order.item_id
+    line.quantity = order.quantity or 1
+    line.total_price = order.price
+    if order.price is not None and line.quantity:
+        line.unit_price = Decimal(order.price) / Decimal(line.quantity)
+    elif order.calculated_price is not None:
+        line.unit_price = order.calculated_price
+    else:
+        line.unit_price = None
+    line.status = order.status
+    _apply_snapshot(line, snapshot or _order_snapshot(order))
+    return line
+
+
 def get_order_effective_vin(order: CustomerOrder) -> str:
     if order.trailer and order.trailer.vin:
         return order.trailer.vin
@@ -4373,6 +4414,7 @@ def _add_vin_event(vin: VinRegistry, event_type: str, old_status: str | None = N
         old_status=old_status,
         new_status=new_status,
         customer_order_id=vin.customer_order_id,
+        order_line_id=vin.order_line_id,
         sales_contract_id=vin.sales_contract_id,
         trailer_id=vin.trailer_id,
         user_id=current_user.id if current_user and current_user.is_authenticated else None,
@@ -4678,6 +4720,9 @@ def _sync_editable_order_production_need(order: CustomerOrder, snapshot: dict | 
     if _active_production_line_for_need(need.id):
         return 'Производственная заявка уже запущена; количество в потребности нужно менять в производстве.'
     need.item_id = order.item_id
+    order_line = _primary_order_line(order) or _sync_primary_order_line(order, snapshot or _order_snapshot(order))
+    db.session.flush()
+    need.order_line_id = order_line.id
     need.warehouse_id = order.warehouse_id
     need.quantity = order.quantity
     need.required_by = order.expected_date
@@ -5444,7 +5489,7 @@ def api_available_trailers():
 
 
 @main_bp.route('/api/movement-trailers/search')
-@role_required('director', 'logistics')
+@role_required('director', 'manager')
 def api_movement_trailers_search():
     from_warehouse_id = request.args.get('from_warehouse_id', type=int)
     q = (request.args.get('q') or '').strip()
@@ -5590,6 +5635,8 @@ def order_create():
                 configured_snapshot = _lead_snapshot(source_lead)
         if configured_snapshot:
             _apply_snapshot(order, configured_snapshot)
+        order_line = _sync_primary_order_line(order, configured_snapshot or _order_snapshot(order))
+        db.session.flush()
         _finish_idempotency(idem_key, 'CustomerOrder', order.id)
         add_order_event(order, 'order_created', new_value=order.status, comment=f'Создан из заявки #{order.lead_id}' if order.lead_id else 'Заказ создан')
 
@@ -5611,6 +5658,7 @@ def order_create():
             source_type = 'TRANSFER' if selected_trailer.warehouse_id != order.warehouse_id else 'STOCK'
             reservation = Reservation(
                 order_id=order.id,
+                order_line_id=order_line.id,
                 trailer_id=selected_trailer.id,
                 item_id=order.item_id,
                 source_type=source_type,
@@ -5631,6 +5679,7 @@ def order_create():
                 return _render_order_form(form, 'Новый заказ')
             need = SupplyNeed(
                 order_id=order.id,
+                order_line_id=order_line.id,
                 item_id=order.item_id,
                 warehouse_id=order.warehouse_id,
                 quantity=order.quantity,
@@ -5645,8 +5694,10 @@ def order_create():
             add_order_event(order, 'production_need_created', new_value='NEW', comment='Потребность создана автоматически из заказа клиента')
 
         _refresh_order_status(order)
+        order_line.status = order.status
         if selected_trailer and order.source_warehouse_id and order.warehouse_id and order.source_warehouse_id != order.warehouse_id:
             order.status = 'waiting_transfer'
+            order_line.status = order.status
         db.session.commit()
         flash('Заказ создан', 'success')
         return redirect(url_for('main.order_detail', order_id=order.id))
@@ -5697,8 +5748,11 @@ def order_payment_create(order_id):
             if not can_request:
                 flash(message, 'warning')
             else:
+                order_line = _sync_primary_order_line(order, _order_snapshot(order))
+                db.session.flush()
                 need = SupplyNeed(
                     order_id=order.id,
+                    order_line_id=order_line.id,
                     item_id=order.item_id,
                     warehouse_id=order.warehouse_id,
                     quantity=order.quantity,
@@ -6391,6 +6445,8 @@ def order_edit(order_id):
         order.manager_comment = (form.manager_comment.data or '').strip() or None
         if configured_snapshot:
             _apply_snapshot(order, configured_snapshot)
+        order_line = _sync_primary_order_line(order, configured_snapshot or _order_snapshot(order))
+        db.session.flush()
 
         ok, message = _sync_order_trailer_links(order, old_trailer, selected_trailer, 'STOCK')
         if not ok:
@@ -6404,7 +6460,7 @@ def order_edit(order_id):
             if not can_request:
                 flash(message, 'warning')
                 return _render_order_form(form, 'Редактирование заказа')
-            need = SupplyNeed(order_id=order.id, item_id=order.item_id, warehouse_id=order.warehouse_id, quantity=order.quantity, status='NEW', priority=10, need_type='CUSTOMER_ORDER', required_by=order.expected_date)
+            need = SupplyNeed(order_id=order.id, order_line_id=order_line.id, item_id=order.item_id, warehouse_id=order.warehouse_id, quantity=order.quantity, status='NEW', priority=10, need_type='CUSTOMER_ORDER', required_by=order.expected_date)
             _apply_snapshot(need, configured_snapshot or _order_snapshot(order))
             db.session.add(need)
         elif order.fulfillment_source == 'production':
@@ -6413,6 +6469,7 @@ def order_edit(order_id):
                 flash(warning, 'warning')
 
         _refresh_order_status(order)
+        order_line.status = order.status
         if old_status != order.status:
             add_order_event(order, 'order_status_changed', old_value=old_status, new_value=order.status)
         if old_trailer_id != new_trailer_id and new_trailer_id:
@@ -6870,7 +6927,9 @@ def order_create_production_need(order_id):
     idem_key, duplicate = _reserve_idempotency_key()
     if duplicate:
         return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
-    need = SupplyNeed(order_id=order.id, item_id=order.item_id, warehouse_id=order.warehouse_id, quantity=order.quantity or 1, required_by=order.expected_date, status='NEW', need_type='CUSTOMER_ORDER', priority=10, note='Потребность создана из карточки заказа')
+    order_line = _sync_primary_order_line(order, _order_snapshot(order))
+    db.session.flush()
+    need = SupplyNeed(order_id=order.id, order_line_id=order_line.id, item_id=order.item_id, warehouse_id=order.warehouse_id, quantity=order.quantity or 1, required_by=order.expected_date, status='NEW', need_type='CUSTOMER_ORDER', priority=10, note='Потребность создана из карточки заказа')
     _apply_snapshot(need, {
         'article_snapshot': order.article_snapshot,
         'product_name_snapshot': order.product_name_snapshot,
@@ -6965,6 +7024,8 @@ def order_reserve_vin(order_id):
     row.vin_full = f'{row.prefix}{modification}{year_code}{row.serial7}'
     row.status = 'reserved'
     row.customer_order_id = order.id
+    order_line = _primary_order_line(order)
+    row.order_line_id = order_line.id if order_line else None
     active_need = _active_supply_need_for_order(order.id)
     row.supply_need_id = active_need.id if active_need else (order.supply_needs.order_by(SupplyNeed.created_at.desc()).first().id if order.supply_needs.count() else None)
     row.reserved_by_user_id = current_user.id
@@ -7176,6 +7237,7 @@ def vin_registry_cancel_reservation(vin_id):
     if order and order.reserved_vin_registry_id == row.id:
         order.reserved_vin_registry_id = None
     row.customer_order_id = None
+    row.order_line_id = None
     row.supply_need_id = None
     row.reserved_by_user_id = None
     row.reserved_at = None
@@ -7267,6 +7329,74 @@ def vin_registry_void(vin_id):
     db.session.commit()
     flash('VIN аннулирован.', 'success')
     return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
+
+
+@main_bp.route('/logistics/vin-registry/<int:vin_id>/admin-edit', methods=['POST'])
+@admin_required
+def vin_registry_admin_edit(vin_id):
+    row = VinRegistry.query.get_or_404(vin_id)
+    old_status = row.status
+    old_vin = row.vin_full
+    vin_full = (request.form.get('vin_full') or '').strip().upper()
+    serial7 = (request.form.get('serial7') or '').strip()
+    status = (request.form.get('status') or row.status or 'free').strip()
+    comment = (request.form.get('comment') or '').strip() or None
+
+    if vin_full:
+        parsed, error = _parse_vin_full(vin_full)
+        if error:
+            flash(error, 'danger')
+            return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
+        duplicate = VinRegistry.query.filter(
+            VinRegistry.id != row.id,
+            or_(VinRegistry.vin_full == parsed['vin_full'], VinRegistry.serial7 == parsed['serial7']),
+        ).first()
+        if duplicate:
+            flash('Такой VIN или serial7 уже есть в реестре.', 'danger')
+            return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
+        row.prefix = parsed['prefix']
+        row.vin_modification_code = parsed['vin_modification_code']
+        row.year_code = parsed['year_code']
+        row.serial7 = parsed['serial7']
+        row.vin_full = parsed['vin_full']
+    else:
+        serial, error = _normalize_serial7(serial7)
+        if error:
+            flash(error, 'danger')
+            return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
+        duplicate = VinRegistry.query.filter(VinRegistry.id != row.id, VinRegistry.serial7 == serial).first()
+        if duplicate:
+            flash('Такой serial7 уже есть в реестре.', 'danger')
+            return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
+        row.serial7 = serial
+        row.vin_full = None
+        row.vin_modification_code = None
+        row.year_code = None
+
+    row.status = status
+    row.comment = comment or row.comment
+    if row.trailer and row.vin_full and row.trailer.vin != row.vin_full:
+        row.trailer.vin = row.vin_full
+    _add_vin_event(row, 'admin_edited', old_status, row.status, comment=comment or f'{old_vin or row.serial7} -> {row.vin_full or row.serial7}')
+    db.session.commit()
+    flash('VIN обновлён администратором.', 'success')
+    return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
+
+
+@main_bp.route('/logistics/vin-registry/<int:vin_id>/admin-delete', methods=['POST'])
+@admin_required
+def vin_registry_admin_delete(vin_id):
+    row = VinRegistry.query.get_or_404(vin_id)
+    if row.trailer_id or row.sales_contract_id or row.docs_issued_order_id or row.docs_issued_at:
+        flash('VIN уже связан с прицепом, договором или документами. Удаление заблокировано, используйте корректировку или аннулирование.', 'danger')
+        return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
+    if row.customer_order_id or row.supply_need_id:
+        flash('VIN связан с заказом или заявкой. Сначала снимите резерв.', 'danger')
+        return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
+    db.session.delete(row)
+    db.session.commit()
+    flash('VIN удалён из реестра.', 'success')
+    return redirect(url_for('main.vin_registry_list'))
 
 
 @main_bp.route('/orders/<int:order_id>/issue-documents', methods=['POST'])
@@ -7471,6 +7601,8 @@ def supply_need_create_production_request(need_id):
     db.session.add(ProductionRequestLine(
         production_request_id=pr.id,
         supply_need_id=need.id,
+        order_line_id=need.order_line_id,
+        production_workshop_id=need.production_workshop_id,
         item_id=need.item_id,
         quantity=need.quantity,
         produced_qty=0,
@@ -7490,7 +7622,7 @@ def supply_need_create_production_request(need_id):
 
 
 @main_bp.route('/production-requests')
-@role_required('director', 'logistics')
+@role_required('director', 'manager')
 def production_requests_list():
     status = request.args.get('status', '').strip()
     query = ProductionRequest.query
@@ -7501,7 +7633,7 @@ def production_requests_list():
 
 
 @main_bp.route('/production-requests/new', methods=['GET', 'POST'])
-@role_required('director', 'logistics')
+@role_required('director', 'manager')
 def production_request_create():
     form = ProductionRequestForm()
     form.target_warehouse_id.choices = [(0, '— не выбрано —')] + [(w.id, w.name) for w in Warehouse.query.filter_by(is_active=True).order_by(Warehouse.name).all()]
@@ -7523,7 +7655,7 @@ def production_request_create():
 
 
 @main_bp.route('/production-requests/<int:request_id>', methods=['GET', 'POST'])
-@role_required('director', 'logistics')
+@role_required('director', 'manager')
 def production_request_detail(request_id):
     pr = ProductionRequest.query.get_or_404(request_id)
     form = ProductionRequestLineForm()
@@ -7548,6 +7680,8 @@ def production_request_detail(request_id):
         line = ProductionRequestLine(
             production_request_id=pr.id,
             supply_need_id=selected_need.id if selected_need else None,
+            order_line_id=selected_need.order_line_id if selected_need else None,
+            production_workshop_id=selected_need.production_workshop_id if selected_need else None,
             item_id=line_item_id,
             quantity=line_quantity,
             status=form.status.data,
@@ -7576,7 +7710,7 @@ def production_request_detail(request_id):
 
 
 @main_bp.route('/production-requests/<int:request_id>/edit', methods=['GET', 'POST'])
-@role_required('director', 'logistics')
+@role_required('director', 'manager')
 def production_request_edit(request_id):
     pr = ProductionRequest.query.get_or_404(request_id)
     form = ProductionRequestForm(obj=pr)
@@ -7609,7 +7743,7 @@ def stock_movements_list():
 
 
 @main_bp.route('/stock-movements/new', methods=['GET', 'POST'])
-@role_required('director', 'logistics')
+@role_required('director', 'manager')
 def stock_movement_create():
     form = StockMovementForm()
     _fill_stock_movement_form_choices(form)
@@ -7643,7 +7777,7 @@ def stock_movement_create():
 
 
 @main_bp.route('/stock-movements/batch/new', methods=['GET', 'POST'])
-@role_required('director', 'logistics')
+@role_required('director', 'manager')
 def stock_movement_batch_create():
     form = StockMovementBatchForm()
     _fill_stock_movement_batch_form_choices(form)
@@ -7709,7 +7843,7 @@ def stock_movement_batch_create():
 
 
 @main_bp.route('/stock-movements/<int:movement_id>/edit', methods=['GET', 'POST'])
-@role_required('director', 'logistics')
+@role_required('director', 'manager')
 def stock_movement_edit(movement_id):
     movement = StockMovement.query.get_or_404(movement_id)
     form = StockMovementForm(obj=movement)
@@ -7822,7 +7956,7 @@ def _refresh_production_request_status(production_request: ProductionRequest) ->
 
 
 @main_bp.route('/production/workspace')
-@role_required('production', 'director')
+@role_required('production', 'director', 'manager')
 def production_workspace():
     active_tab = request.args.get('tab', 'todo')
     today_start = datetime.combine(date.today(), time.min)
@@ -7898,7 +8032,15 @@ def production_line_produce_one(line_id):
     line.status = 'ready' if line.produced_qty >= line.quantity else 'partial_ready'
     if line.status == 'ready':
         line.completed_at = datetime.utcnow()
-    produced_unit = ProducedUnit(production_request_line_id=line.id, item_id=line.item_id, target_warehouse_id=line.production_request.target_warehouse_id, produced_at=datetime.utcnow(), status='produced_no_vin')
+    produced_unit = ProducedUnit(
+        production_request_line_id=line.id,
+        order_line_id=line.order_line_id or (line.supply_need.order_line_id if line.supply_need else None),
+        production_workshop_id=line.production_workshop_id or (line.supply_need.production_workshop_id if line.supply_need else None),
+        item_id=line.item_id,
+        target_warehouse_id=line.production_request.target_warehouse_id,
+        produced_at=datetime.utcnow(),
+        status='produced_no_vin',
+    )
     db.session.add(produced_unit)
     db.session.flush()
     _finish_idempotency(idem_key, 'ProducedUnit', produced_unit.id)
@@ -8164,6 +8306,10 @@ def logistics_assign_vin(unit_id):
         vin_registry_row.assigned_at = datetime.utcnow()
         if order and not vin_registry_row.customer_order_id:
             vin_registry_row.customer_order_id = order.id
+        if order and not vin_registry_row.order_line_id:
+            order_line = _primary_order_line(order)
+            if order_line:
+                vin_registry_row.order_line_id = order_line.id
         if line and line.supply_need and not vin_registry_row.supply_need_id:
             vin_registry_row.supply_need_id = line.supply_need.id
         _add_vin_event(vin_registry_row, 'assigned', old_vin_status, vin_registry_row.status, comment='VIN привязан к выпущенному прицепу')

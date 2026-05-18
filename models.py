@@ -53,6 +53,7 @@ class Warehouse(db.Model):
     name = db.Column(db.String(100), unique=True, nullable=False)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     is_production = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    warehouse_kind = db.Column(db.String(30), nullable=False, default='finished_goods', index=True)
 
     trailers = db.relationship('Trailer', back_populates='warehouse')
 
@@ -61,6 +62,27 @@ class Warehouse(db.Model):
 
     def __repr__(self) -> str:
         return f'<Warehouse id={self.id} name={self.name!r}>'
+
+
+class WarehouseStorageArea(db.Model):
+    __tablename__ = 'warehouse_storage_area'
+
+    id = db.Column(db.Integer, primary_key=True)
+    warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=False, index=True)
+    code = db.Column(db.String(40), nullable=False, index=True)
+    name = db.Column(db.String(120), nullable=False)
+    area_type = db.Column(db.String(40), nullable=False, index=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    warehouse = db.relationship('Warehouse', backref='storage_areas')
+
+    __table_args__ = (
+        db.UniqueConstraint('warehouse_id', 'code', name='uq_warehouse_storage_area_code'),
+    )
 
 
 class User(UserMixin, db.Model):
@@ -116,7 +138,7 @@ class User(UserMixin, db.Model):
 
     @property
     def can_manage_production(self) -> bool:
-        return self.role in ('admin', 'director', 'production')
+        return self.role in ('admin', 'director', 'manager', 'production')
 
     @property
     def can_manage_logistics(self) -> bool:
@@ -211,6 +233,45 @@ class Item(db.Model):
 
     def __repr__(self) -> str:
         return f'<Item id={self.id} type={self.item_type} article={self.article!r}>'
+
+
+class ItemBillOfMaterials(db.Model):
+    __tablename__ = 'item_bill_of_materials'
+
+    id = db.Column(db.Integer, primary_key=True)
+    item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=False, index=True)
+    version = db.Column(db.String(40), nullable=False, default='default')
+    name = db.Column(db.String(160), nullable=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    item = db.relationship('Item', foreign_keys=[item_id], backref='bom_headers')
+
+    __table_args__ = (
+        db.UniqueConstraint('item_id', 'version', name='uq_item_bom_version'),
+    )
+
+
+class ItemBillOfMaterialsLine(db.Model):
+    __tablename__ = 'item_bill_of_materials_line'
+
+    id = db.Column(db.Integer, primary_key=True)
+    bom_id = db.Column(db.Integer, db.ForeignKey('item_bill_of_materials.id'), nullable=False, index=True)
+    component_item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=False, index=True)
+    quantity_per_unit = db.Column(db.Numeric(12, 3), nullable=False)
+    unit = db.Column(db.String(20), nullable=False, default='шт')
+    source_area_type = db.Column(db.String(40), nullable=False, default='components', index=True)
+    workshop_id = db.Column(db.Integer, db.ForeignKey('production_workshop.id'), nullable=True, index=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    bom = db.relationship('ItemBillOfMaterials', backref=db.backref('lines', lazy='dynamic', cascade='all, delete-orphan'))
+    component_item = db.relationship('Item', foreign_keys=[component_item_id], backref='bom_component_lines')
+    workshop = db.relationship('ProductionWorkshop', backref='bom_lines')
 
 
 # ---------- ПРИЦЕПЫ (КОНКРЕТНЫЕ ЭКЗЕМПЛЯРЫ С VIN) ----------
@@ -362,6 +423,65 @@ class SalesContract(db.Model):
         db.UniqueConstraint('trailer_id', name='uq_sales_contract_trailer'),
         db.UniqueConstraint('order_id', name='uq_sales_contract_order'),
     )
+
+
+class SalesContractLine(db.Model):
+    __tablename__ = 'sales_contract_line'
+
+    id = db.Column(db.Integer, primary_key=True)
+    sales_contract_id = db.Column(db.Integer, db.ForeignKey('sales_contract.id'), nullable=False, index=True)
+    order_line_id = db.Column(db.Integer, db.ForeignKey('customer_order_line.id'), nullable=True, index=True)
+    trailer_id = db.Column(db.Integer, db.ForeignKey('trailer.id'), nullable=True, index=True)
+    item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=True, index=True)
+    vin_registry_id = db.Column(db.Integer, db.ForeignKey('vin_registry.id'), nullable=True, index=True)
+
+    line_no = db.Column(db.Integer, nullable=False, default=1)
+    quantity = db.Column(db.Integer, nullable=False, default=1)
+    unit_price = db.Column(db.Numeric(12, 2), nullable=True)
+    total_price = db.Column(db.Numeric(12, 2), nullable=True)
+
+    article_snapshot = db.Column(db.String(80), nullable=True, index=True)
+    product_name_snapshot = db.Column(db.String(255), nullable=True)
+    otss_number = db.Column(db.String(120), nullable=True)
+    otss_type = db.Column(db.String(20), nullable=True)
+    otss_modification = db.Column(db.String(20), nullable=True)
+    vin_modification_code = db.Column(db.String(20), nullable=True, index=True)
+    vin_full = db.Column(db.String(50), nullable=True, index=True)
+    note = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    sales_contract = db.relationship('SalesContract', backref=db.backref('lines', lazy='dynamic', cascade='all, delete-orphan'))
+    order_line = db.relationship('CustomerOrderLine', backref='contract_lines')
+    trailer = db.relationship('Trailer', backref='contract_lines')
+    item = db.relationship('Item', backref='contract_lines')
+    vin_registry = db.relationship('VinRegistry', foreign_keys=[vin_registry_id], backref='contract_lines')
+
+    __table_args__ = (
+        db.UniqueConstraint('sales_contract_id', 'line_no', name='uq_sales_contract_line_no'),
+    )
+
+
+class ContractTemplate(db.Model):
+    __tablename__ = 'contract_template'
+
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(60), nullable=False, unique=True, index=True)
+    name = db.Column(db.String(160), nullable=False)
+    template_type = db.Column(db.String(40), nullable=False, default='sale', index=True)
+    product_group_code = db.Column(db.String(20), nullable=True, index=True)
+    otss_number = db.Column(db.String(120), nullable=True, index=True)
+    otss_type = db.Column(db.String(20), nullable=True, index=True)
+    otss_modification = db.Column(db.String(20), nullable=True, index=True)
+    body_execution_code = db.Column(db.String(30), nullable=True, index=True)
+    customer_type = db.Column(db.String(20), nullable=True, index=True)
+    content_path = db.Column(db.String(500), nullable=True)
+    is_default = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
     
 class OTTS(db.Model):
     """
@@ -575,11 +695,140 @@ class CustomerOrder(db.Model):
         return f'<CustomerOrder id={self.id} number={self.order_number} status={self.status}>'
 
 
+class ProductionWorkshop(db.Model):
+    __tablename__ = 'production_workshop'
+
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(40), nullable=False, unique=True, index=True)
+    name = db.Column(db.String(120), nullable=False)
+    workshop_type = db.Column(db.String(40), nullable=False, default='trailer', index=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f'<ProductionWorkshop id={self.id} code={self.code!r}>'
+
+
+class ProductionEmployee(db.Model):
+    __tablename__ = 'production_employee'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    full_name = db.Column(db.String(160), nullable=False, index=True)
+    employee_code = db.Column(db.String(40), nullable=True, unique=True, index=True)
+    phone = db.Column(db.String(50), nullable=True)
+    default_workshop_id = db.Column(db.Integer, db.ForeignKey('production_workshop.id'), nullable=True, index=True)
+    primary_role = db.Column(db.String(60), nullable=True, index=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = db.relationship('User', backref='production_employee_profile')
+    default_workshop = db.relationship('ProductionWorkshop', foreign_keys=[default_workshop_id], backref='default_employees')
+
+
+class ProductionShift(db.Model):
+    __tablename__ = 'production_shift'
+
+    id = db.Column(db.Integer, primary_key=True)
+    employee_id = db.Column(db.Integer, db.ForeignKey('production_employee.id'), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    workshop_id = db.Column(db.Integer, db.ForeignKey('production_workshop.id'), nullable=True, index=True)
+    work_area = db.Column(db.String(60), nullable=False, default='production', index=True)
+    planned_date = db.Column(db.Date, nullable=True, index=True)
+    started_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    ended_at = db.Column(db.DateTime, nullable=True, index=True)
+    status = db.Column(db.String(30), nullable=False, default='open', index=True)
+    note = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    employee = db.relationship('ProductionEmployee', backref='shifts')
+    user = db.relationship('User', backref='production_shifts')
+    workshop = db.relationship('ProductionWorkshop', backref='shifts')
+
+
+class ProductionShiftOutput(db.Model):
+    __tablename__ = 'production_shift_output'
+
+    id = db.Column(db.Integer, primary_key=True)
+    shift_id = db.Column(db.Integer, db.ForeignKey('production_shift.id'), nullable=False, index=True)
+    employee_id = db.Column(db.Integer, db.ForeignKey('production_employee.id'), nullable=False, index=True)
+    workshop_id = db.Column(db.Integer, db.ForeignKey('production_workshop.id'), nullable=True, index=True)
+    item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=True, index=True)
+    order_line_id = db.Column(db.Integer, db.ForeignKey('customer_order_line.id'), nullable=True, index=True)
+    production_request_line_id = db.Column(db.Integer, db.ForeignKey('production_request_line.id'), nullable=True, index=True)
+    output_type = db.Column(db.String(60), nullable=False, default='other', index=True)
+    quantity = db.Column(db.Numeric(12, 3), nullable=False, default=0)
+    defect_quantity = db.Column(db.Numeric(12, 3), nullable=False, default=0)
+    unit = db.Column(db.String(20), nullable=False, default='шт')
+    status = db.Column(db.String(30), nullable=False, default='accepted', index=True)
+    note = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    shift = db.relationship('ProductionShift', backref=db.backref('outputs', lazy='dynamic', cascade='all, delete-orphan'))
+    employee = db.relationship('ProductionEmployee', backref='outputs')
+    workshop = db.relationship('ProductionWorkshop', backref='outputs')
+    item = db.relationship('Item', backref='production_outputs')
+    order_line = db.relationship('CustomerOrderLine', backref='production_outputs')
+    production_request_line = db.relationship('ProductionRequestLine', backref='shift_outputs')
+
+
+class CustomerOrderLine(db.Model):
+    __tablename__ = 'customer_order_line'
+
+    id = db.Column(db.Integer, primary_key=True)
+    order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=False, index=True)
+    line_no = db.Column(db.Integer, nullable=False, default=1)
+    line_type = db.Column(db.String(30), nullable=False, default='TRAILER', index=True)
+    fulfillment_source = db.Column(db.String(30), nullable=True, index=True)
+
+    item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=True, index=True)
+    production_workshop_id = db.Column(db.Integer, db.ForeignKey('production_workshop.id'), nullable=True, index=True)
+
+    quantity = db.Column(db.Integer, nullable=False, default=1)
+    unit_price = db.Column(db.Numeric(12, 2), nullable=True)
+    total_price = db.Column(db.Numeric(12, 2), nullable=True)
+    status = db.Column(db.String(30), nullable=False, default='NEW', index=True)
+    note = db.Column(db.Text, nullable=True)
+
+    article_snapshot = db.Column(db.String(80), nullable=True, index=True)
+    product_name_snapshot = db.Column(db.String(255), nullable=True)
+    config_snapshot_json = db.Column(db.Text, nullable=True)
+    calculated_price = db.Column(db.Numeric(12, 2), nullable=True)
+    price_breakdown_json = db.Column(db.Text, nullable=True)
+    overall_dimensions_text = db.Column(db.String(80), nullable=True)
+    inner_dimensions_text = db.Column(db.String(80), nullable=True)
+    otss_number = db.Column(db.String(120), nullable=True)
+    otss_type = db.Column(db.String(20), nullable=True)
+    otss_modification = db.Column(db.String(20), nullable=True)
+    vin_modification_code = db.Column(db.String(20), nullable=True, index=True)
+
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    order = db.relationship('CustomerOrder', backref=db.backref('lines', lazy='dynamic', cascade='all, delete-orphan'))
+    item = db.relationship('Item', backref='order_lines')
+    production_workshop = db.relationship('ProductionWorkshop', backref='order_lines')
+
+    __table_args__ = (
+        db.UniqueConstraint('order_id', 'line_no', name='uq_customer_order_line_no'),
+    )
+
+    def __repr__(self):
+        return f'<CustomerOrderLine id={self.id} order_id={self.order_id} line_no={self.line_no}>'
+
+
 class OrderPayment(db.Model):
     __tablename__ = 'order_payment'
 
     id = db.Column(db.Integer, primary_key=True)
     order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=False, index=True)
+    payment_stage_id = db.Column(db.Integer, db.ForeignKey('payment_schedule_stage.id'), nullable=True, index=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
     paid_at = db.Column(db.DateTime, nullable=True)
 
@@ -593,6 +842,29 @@ class OrderPayment(db.Model):
     note = db.Column(db.Text, nullable=True)
 
     order = db.relationship('CustomerOrder', backref=db.backref('payments', lazy='dynamic', cascade='all, delete-orphan'))
+    payment_stage = db.relationship('PaymentScheduleStage', foreign_keys=[payment_stage_id], backref='payments')
+
+
+class PaymentScheduleStage(db.Model):
+    __tablename__ = 'payment_schedule_stage'
+
+    id = db.Column(db.Integer, primary_key=True)
+    order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=True, index=True)
+    sales_contract_id = db.Column(db.Integer, db.ForeignKey('sales_contract.id'), nullable=True, index=True)
+    stage_code = db.Column(db.String(40), nullable=False, default='PREPAYMENT', index=True)
+    name = db.Column(db.String(120), nullable=False)
+    due_date = db.Column(db.Date, nullable=True, index=True)
+    percent = db.Column(db.Numeric(5, 2), nullable=True)
+    amount = db.Column(db.Numeric(12, 2), nullable=True)
+    status = db.Column(db.String(30), nullable=False, default='planned', index=True)
+    kaspi_payment_id = db.Column(db.String(120), nullable=True, index=True)
+    kaspi_payment_url = db.Column(db.String(500), nullable=True)
+    note = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    order = db.relationship('CustomerOrder', backref=db.backref('payment_schedule', lazy='dynamic', cascade='all, delete-orphan'))
+    sales_contract = db.relationship('SalesContract', backref=db.backref('payment_schedule', lazy='dynamic', cascade='all, delete-orphan'))
 
 
 class OrderEvent(db.Model):
@@ -621,11 +893,13 @@ class Reservation(db.Model):
     priority = db.Column(db.Integer, nullable=False, default=100)
 
     order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=False, index=True)
+    order_line_id = db.Column(db.Integer, db.ForeignKey('customer_order_line.id'), nullable=True, index=True)
     trailer_id = db.Column(db.Integer, db.ForeignKey('trailer.id'), nullable=True, index=True)
     item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=False, index=True)
     note = db.Column(db.Text, nullable=True)
 
     order = db.relationship('CustomerOrder', backref=db.backref('reservations', lazy='dynamic', cascade='all, delete-orphan'))
+    order_line = db.relationship('CustomerOrderLine', backref='reservations')
     trailer = db.relationship('Trailer', backref='reservations')
     item = db.relationship('Item', backref='reservations')
 
@@ -641,8 +915,10 @@ class SupplyNeed(db.Model):
     priority = db.Column(db.Integer, nullable=False, default=100)
 
     order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=True, index=True)
+    order_line_id = db.Column(db.Integer, db.ForeignKey('customer_order_line.id'), nullable=True, index=True)
     item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=False, index=True)
     warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=True, index=True)
+    production_workshop_id = db.Column(db.Integer, db.ForeignKey('production_workshop.id'), nullable=True, index=True)
 
     quantity = db.Column(db.Integer, nullable=False, default=1)
     required_by = db.Column(db.Date, nullable=True)
@@ -663,8 +939,10 @@ class SupplyNeed(db.Model):
     cancel_reason = db.Column(db.Text, nullable=True)
 
     order = db.relationship('CustomerOrder', backref=db.backref('supply_needs', lazy='dynamic', cascade='all, delete-orphan'))
+    order_line = db.relationship('CustomerOrderLine', backref='supply_needs')
     item = db.relationship('Item', backref='supply_needs')
     warehouse = db.relationship('Warehouse', backref='supply_needs')
+    production_workshop = db.relationship('ProductionWorkshop', backref='supply_needs')
     cancelled_by_user = db.relationship('User', foreign_keys=[cancelled_by_user_id])
 
 
@@ -688,7 +966,9 @@ class ProductionRequestLine(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     production_request_id = db.Column(db.Integer, db.ForeignKey('production_request.id'), nullable=False, index=True)
     supply_need_id = db.Column(db.Integer, db.ForeignKey('supply_need.id'), nullable=True, index=True)
+    order_line_id = db.Column(db.Integer, db.ForeignKey('customer_order_line.id'), nullable=True, index=True)
     item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=False, index=True)
+    production_workshop_id = db.Column(db.Integer, db.ForeignKey('production_workshop.id'), nullable=True, index=True)
 
     quantity = db.Column(db.Integer, nullable=False, default=1)
     produced_qty = db.Column(db.Integer, nullable=False, default=0)
@@ -715,7 +995,9 @@ class ProductionRequestLine(db.Model):
 
     production_request = db.relationship('ProductionRequest', backref=db.backref('lines', lazy='dynamic', cascade='all, delete-orphan'))
     supply_need = db.relationship('SupplyNeed', backref='production_lines')
+    order_line = db.relationship('CustomerOrderLine', backref='production_lines')
     item = db.relationship('Item', backref='production_lines')
+    production_workshop = db.relationship('ProductionWorkshop', backref='production_lines')
     cancelled_by_user = db.relationship('User', foreign_keys=[cancelled_by_user_id])
 
 
@@ -724,7 +1006,9 @@ class ProducedUnit(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     production_request_line_id = db.Column(db.Integer, db.ForeignKey('production_request_line.id'), nullable=False, index=True)
+    order_line_id = db.Column(db.Integer, db.ForeignKey('customer_order_line.id'), nullable=True, index=True)
     item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=False, index=True)
+    production_workshop_id = db.Column(db.Integer, db.ForeignKey('production_workshop.id'), nullable=True, index=True)
     target_warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=True, index=True)
     order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=True, index=True)
     trailer_id = db.Column(db.Integer, db.ForeignKey('trailer.id'), nullable=True, index=True)
@@ -734,7 +1018,9 @@ class ProducedUnit(db.Model):
     note = db.Column(db.Text, nullable=True)
 
     production_request_line = db.relationship('ProductionRequestLine', backref=db.backref('produced_units', lazy='dynamic', cascade='all, delete-orphan'))
+    order_line = db.relationship('CustomerOrderLine', backref='produced_units')
     item = db.relationship('Item', backref='produced_units')
+    production_workshop = db.relationship('ProductionWorkshop', backref='produced_units')
     target_warehouse = db.relationship('Warehouse', backref='produced_units')
     order = db.relationship('CustomerOrder', backref='produced_units')
     trailer = db.relationship('Trailer', backref='produced_unit', uselist=False)
@@ -755,6 +1041,7 @@ class StockMovement(db.Model):
     batch_key = db.Column(db.String(50), nullable=True, index=True)
 
     order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=True, index=True)
+    order_line_id = db.Column(db.Integer, db.ForeignKey('customer_order_line.id'), nullable=True, index=True)
     trailer_id = db.Column(db.Integer, db.ForeignKey('trailer.id'), nullable=True, index=True)
     item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=True, index=True)
     qty = db.Column(db.Integer, nullable=False, default=1)
@@ -764,6 +1051,7 @@ class StockMovement(db.Model):
     note = db.Column(db.Text, nullable=True)
 
     order = db.relationship('CustomerOrder', backref='movements')
+    order_line = db.relationship('CustomerOrderLine', backref='movements')
     trailer = db.relationship('Trailer', backref='movements')
     item = db.relationship('Item', backref='movements')
     from_warehouse = db.relationship('Warehouse', foreign_keys=[from_warehouse_id], backref='out_movements')
@@ -782,6 +1070,7 @@ class VinRegistry(db.Model):
     status = db.Column(db.String(30), nullable=False, default='free', index=True)
 
     customer_order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=True, index=True)
+    order_line_id = db.Column(db.Integer, db.ForeignKey('customer_order_line.id'), nullable=True, index=True)
     supply_need_id = db.Column(db.Integer, db.ForeignKey('supply_need.id'), nullable=True, index=True)
     trailer_id = db.Column(db.Integer, db.ForeignKey('trailer.id'), nullable=True, index=True)
     sales_contract_id = db.Column(db.Integer, db.ForeignKey('sales_contract.id'), nullable=True, index=True)
@@ -804,6 +1093,7 @@ class VinRegistry(db.Model):
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     customer_order = db.relationship('CustomerOrder', foreign_keys=[customer_order_id], backref='vin_registry_rows')
+    order_line = db.relationship('CustomerOrderLine', foreign_keys=[order_line_id], backref='vin_registry_rows')
     docs_issued_order = db.relationship('CustomerOrder', foreign_keys=[docs_issued_order_id])
     supply_need = db.relationship('SupplyNeed', foreign_keys=[supply_need_id], backref='vin_registry_rows')
     trailer = db.relationship('Trailer', foreign_keys=[trailer_id], backref='vin_registry_rows')
@@ -823,6 +1113,7 @@ class VinRegistryEvent(db.Model):
     old_status = db.Column(db.String(30), nullable=True)
     new_status = db.Column(db.String(30), nullable=True)
     customer_order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=True, index=True)
+    order_line_id = db.Column(db.Integer, db.ForeignKey('customer_order_line.id'), nullable=True, index=True)
     sales_contract_id = db.Column(db.Integer, db.ForeignKey('sales_contract.id'), nullable=True, index=True)
     trailer_id = db.Column(db.Integer, db.ForeignKey('trailer.id'), nullable=True, index=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
@@ -831,6 +1122,7 @@ class VinRegistryEvent(db.Model):
 
     vin_registry = db.relationship('VinRegistry', backref=db.backref('events', lazy='dynamic', cascade='all, delete-orphan'))
     customer_order = db.relationship('CustomerOrder', foreign_keys=[customer_order_id])
+    order_line = db.relationship('CustomerOrderLine', foreign_keys=[order_line_id])
     sales_contract = db.relationship('SalesContract', foreign_keys=[sales_contract_id])
     trailer = db.relationship('Trailer', foreign_keys=[trailer_id])
     user = db.relationship('User', foreign_keys=[user_id])
