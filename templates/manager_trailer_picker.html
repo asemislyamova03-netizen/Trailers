@@ -83,31 +83,29 @@
   </div>
 </div>
 
-<form method="get" class="app-card p-3 mb-3">
+<form method="get" class="app-card p-3 mb-3" id="pickerConfigForm">
   <div class="row g-3">
-    <div class="col-md-3"><label class="form-label">Группа</label><select class="form-select" name="group_code">{% for item in config_options.groups %}<option value="{{ item.code }}" {% if config.group_code == item.code %}selected{% endif %}>{{ item.code }} - {{ item.name }}</option>{% endfor %}</select></div>
-    <div class="col-md-3"><label class="form-label">Тип кузова</label><select class="form-select" name="body_execution_code">{% for item in config_options.executions %}<option value="{{ item.code }}" {% if config.body_execution_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
-    <div class="col-md-3"><label class="form-label">Размер кузова</label><select class="form-select" name="body_size_code">{% for item in config_options.body_sizes %}<option value="{{ item.code }}" {% if config.body_size_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
-    <div class="col-md-3"><label class="form-label">Высота борта</label><select class="form-select" name="board_height_code">{% for item in config_options.board_heights %}<option value="{{ item.code }}" {% if config.board_height_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
-    <div class="col-md-3"><label class="form-label">Колёса</label><select class="form-select" name="wheel_code"><option value="">—</option>{% for item in config_options.wheels %}<option value="{{ item.code }}" {% if config.wheel_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
-    <div class="col-md-3"><label class="form-label">Ступица</label><select class="form-select" name="hub_code"><option value="">—</option>{% for item in config_options.hubs %}<option value="{{ item.code }}" {% if config.hub_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
-    <div class="col-md-3"><label class="form-label">Опорное колесо</label><select class="form-select" name="support_wheel_code"><option value="">—</option>{% for item in config_options.support_wheels %}<option value="{{ item.code }}" {% if config.support_wheel_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
-    <div class="col-md-3"><label class="form-label">Тент</label><select class="form-select" name="tent_code"><option value="">—</option>{% for item in config_options.tents %}<option value="{{ item.code }}" {% if config.tent_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
-    {% if config_options.specials %}
-    <div class="col-12">
+    <div class="col-md-3"><label class="form-label">Группа</label><select class="form-select" name="group_code" data-config-field>{% for item in config_options.groups %}<option value="{{ item.code }}" {% if config.group_code == item.code %}selected{% endif %}>{{ item.code }} - {{ item.name }}</option>{% endfor %}</select></div>
+    <div class="col-md-3"><label class="form-label">Тип кузова</label><select class="form-select" name="body_execution_code" data-config-field>{% for item in config_options.executions %}<option value="{{ item.code }}" {% if config.body_execution_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+    <div class="col-md-3"><label class="form-label">Размер кузова</label><select class="form-select" name="body_size_code" data-config-field>{% for item in config_options.body_sizes %}<option value="{{ item.code }}" {% if config.body_size_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+    <div class="col-md-3"><label class="form-label">Высота борта</label><select class="form-select" name="board_height_code" data-config-field>{% for item in config_options.board_heights %}<option value="{{ item.code }}" {% if config.board_height_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+    <div class="col-md-3"><label class="form-label">Колёса</label><select class="form-select" name="wheel_code" data-config-field><option value="">—</option>{% for item in config_options.wheels %}<option value="{{ item.code }}" {% if config.wheel_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+    <div class="col-md-3"><label class="form-label">Ступица</label><select class="form-select" name="hub_code" data-config-field><option value="">—</option>{% for item in config_options.hubs %}<option value="{{ item.code }}" {% if config.hub_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+    <div class="col-md-3"><label class="form-label">Опорное колесо</label><select class="form-select" name="support_wheel_code" data-config-field><option value="">—</option>{% for item in config_options.support_wheels %}<option value="{{ item.code }}" {% if config.support_wheel_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+    <div class="col-md-3"><label class="form-label">Тент</label><select class="form-select" name="tent_code" data-config-field><option value="">—</option>{% for item in config_options.tents %}<option value="{{ item.code }}" {% if config.tent_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
+    <div class="col-12 {{ 'd-none' if not config_options.specials else '' }}" data-special-block>
       <label class="form-label">Спец. параметры</label>
-      <div class="row g-2">
+      <div class="row g-2" data-special-options>
         {% for item in config_options.specials %}
         <div class="col-md-4">
           <div class="form-check">
-            <input class="form-check-input" type="checkbox" name="special_options" value="{{ item.code }}" id="pickerSpecial{{ item.id }}" {% if item.code in config.special_options %}checked{% endif %}>
+            <input class="form-check-input" type="checkbox" name="special_options" value="{{ item.code }}" id="pickerSpecial{{ item.id }}" data-config-field {% if item.code in config.special_options %}checked{% endif %}>
             <label class="form-check-label" for="pickerSpecial{{ item.id }}">{{ item.code }} - {{ item.name }}</label>
           </div>
         </div>
         {% endfor %}
       </div>
     </div>
-    {% endif %}
     <div class="col-12"><button class="btn btn-primary">Рассчитать</button></div>
   </div>
 </form>
@@ -175,16 +173,109 @@
 (function () {
   const customer = document.querySelector('#pickerCustomer');
   const warehouse = document.querySelector('#pickerWarehouse');
+  const configForm = document.querySelector('#pickerConfigForm');
+
+  function escapeHtml(value) {
+    const div = document.createElement('div');
+    div.textContent = value == null ? '' : String(value);
+    return div.innerHTML;
+  }
+
+  function configParams() {
+    const params = new URLSearchParams();
+    configForm.querySelectorAll('[data-config-field]').forEach((field) => {
+      if (field.type === 'checkbox') {
+        if (field.checked) params.append(field.name, field.value || '');
+      } else {
+        params.set(field.name, field.value || '');
+      }
+    });
+    return params;
+  }
+
+  function syncSelectOptions(name, rows, allowBlank = true) {
+    const field = configForm.querySelector(`[data-config-field][name="${name}"]`);
+    if (!field) return false;
+    const current = field.value || '';
+    const options = rows || [];
+    field.innerHTML = `${allowBlank ? '<option value="">—</option>' : ''}${options.map((row) => `<option value="${escapeHtml(row.code)}">${escapeHtml(row.name || row.code)}</option>`).join('')}`;
+    const values = new Set(options.map((row) => String(row.code)));
+    if (values.has(current)) {
+      field.value = current;
+    } else {
+      field.value = allowBlank ? '' : (options[0] ? options[0].code : '');
+    }
+    return field.value !== current;
+  }
+
+  function syncSpecialOptions(rows) {
+    const block = configForm.querySelector('[data-special-block]');
+    const container = configForm.querySelector('[data-special-options]');
+    if (!block || !container) return;
+    const options = rows || [];
+    const selected = new Set(Array.from(container.querySelectorAll('[name="special_options"]:checked')).map((field) => field.value));
+    block.classList.toggle('d-none', options.length === 0);
+    container.innerHTML = options.map((row, index) => {
+      const id = `pickerSpecialDynamic${index}`;
+      const checked = selected.has(String(row.code)) ? ' checked' : '';
+      return `<div class="col-md-4">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="special_options" value="${escapeHtml(row.code)}" id="${id}" data-config-field${checked}>
+          <label class="form-check-label" for="${id}">${escapeHtml(row.code)} - ${escapeHtml(row.name || row.code)}</label>
+        </div>
+      </div>`;
+    }).join('');
+    container.querySelectorAll('[data-config-field]').forEach((field) => field.addEventListener('change', () => { syncForms(); refreshConfigOptions(); }));
+  }
+
+  function syncConfigOptions(options) {
+    if (!options) return false;
+    let changed = false;
+    changed = syncSelectOptions('group_code', options.groups, false) || changed;
+    changed = syncSelectOptions('body_execution_code', options.executions, false) || changed;
+    changed = syncSelectOptions('body_size_code', options.body_sizes) || changed;
+    changed = syncSelectOptions('board_height_code', options.board_heights) || changed;
+    changed = syncSelectOptions('wheel_code', options.wheels) || changed;
+    changed = syncSelectOptions('hub_code', options.hubs) || changed;
+    changed = syncSelectOptions('support_wheel_code', options.support_wheels) || changed;
+    changed = syncSelectOptions('tent_code', options.tents) || changed;
+    syncSpecialOptions(options.specials);
+    return changed;
+  }
+
+  async function refreshConfigOptions(allowRetry = true) {
+    const response = await fetch(`{{ url_for('main.api_trailer_config_preview') }}?${configParams().toString()}`);
+    if (!response.ok) return;
+    const data = await response.json();
+    const changed = syncConfigOptions(data.options || {});
+    syncForms();
+    if (changed && allowRetry) refreshConfigOptions(false);
+  }
+
   function syncForms() {
     document.querySelectorAll('.picker-action-form').forEach((form) => {
       const customerInput = form.querySelector('input[name="customer_id"]');
       const warehouseInput = form.querySelector('input[name="warehouse_id"]');
       if (customerInput) customerInput.value = customer ? customer.value : '';
       if (warehouseInput) warehouseInput.value = warehouse ? warehouse.value : '';
+      configForm.querySelectorAll('[data-config-field]').forEach((field) => {
+        if (field.type === 'checkbox') return;
+        const hidden = form.querySelector(`input[name="${field.name}"]`);
+        if (hidden) hidden.value = field.value || '';
+      });
+      form.querySelectorAll('input[name="special_options"]').forEach((field) => field.remove());
+      configForm.querySelectorAll('[name="special_options"]:checked').forEach((field) => {
+        const hidden = document.createElement('input');
+        hidden.type = 'hidden';
+        hidden.name = 'special_options';
+        hidden.value = field.value;
+        form.appendChild(hidden);
+      });
     });
   }
   if (customer) customer.addEventListener('change', syncForms);
   if (warehouse) warehouse.addEventListener('change', syncForms);
+  if (configForm) configForm.querySelectorAll('[data-config-field]').forEach((field) => field.addEventListener('change', () => { syncForms(); refreshConfigOptions(); }));
   syncForms();
 })();
 </script>
