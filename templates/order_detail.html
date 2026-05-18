@@ -15,6 +15,12 @@
       <a class="btn btn-soft" href="{{ url_for('main.order_edit', order_id=order.id) }}"><i class="bi bi-pencil me-1"></i>Редактировать</a>
       <button class="btn btn-orange" data-bs-toggle="modal" data-bs-target="#paymentModal"><i class="bi bi-cash-coin me-1"></i>Добавить оплату</button>
     {% endif %}
+    {% if current_user.is_admin %}
+      <form method="post" action="{{ url_for('main.order_delete', order_id=order.id) }}" onsubmit="return confirm('Удалить заказ {{ order.order_number }}? Это можно сделать только если по заказу нет резервов, оплат, договора, VIN, производства и перемещений.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-outline-danger"><i class="bi bi-trash me-1"></i>Удалить</button>
+      </form>
+    {% endif %}
   </div>
 </div>
 
@@ -144,6 +150,9 @@
 
       {% if can_manage and order.status != 'cancelled' and not order.documents_issued and not order.is_shipped %}
       <div class="row g-3 mt-2">
+        <div class="col-12">
+          <a class="btn btn-sm btn-primary" href="{{ url_for('main.manager_trailer_picker', order_id=order.id) }}">Добавить другую конфигурацию через подбор</a>
+        </div>
         <div class="col-lg-6">
           <form method="post" action="{{ url_for('main.order_line_add_stock', order_id=order.id) }}" class="border rounded p-3 h-100">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

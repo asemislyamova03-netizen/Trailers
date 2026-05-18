@@ -2630,6 +2630,14 @@ def trailer_config_test():
 def manager_trailer_picker():
     from trailer_configurator import build_trailer_configuration_result
 
+    target_order_id = request.values.get('order_id', type=int)
+    target_order = CustomerOrder.query.get(target_order_id) if target_order_id else None
+    if target_order:
+        _ensure_can_manage_order(target_order)
+        if target_order.status == 'cancelled' or target_order.documents_issued or target_order.is_shipped:
+            flash('Позиции можно менять только до выдачи документов и отгрузки.', 'danger')
+            return redirect(url_for('main.order_detail', order_id=target_order.id))
+
     config = _config_from_request_values(request.values)
     if not config.get('body_size_code'):
         config.update({
@@ -2645,23 +2653,44 @@ def manager_trailer_picker():
     result['config'] = config
     snapshot = _snapshot_from_result(result)
     inventory = _trailer_inventory_rows(result.get('article'), config.get('body_size_code'), config.get('board_height_code'), config.get('group_code'))
+    redirect_params = dict(config)
+    if target_order:
+        redirect_params['order_id'] = target_order.id
 
     if request.method == 'POST':
         action = (request.form.get('action') or '').strip()
-        warehouse_id = request.form.get('warehouse_id', type=int) or (current_user.warehouse_id if current_user.is_manager else None)
-        customer_id = request.form.get('customer_id', type=int)
+        warehouse_id = request.form.get('warehouse_id', type=int) or (target_order.warehouse_id if target_order else None) or (current_user.warehouse_id if current_user.is_manager else None)
+        customer_id = request.form.get('customer_id', type=int) or (target_order.customer_id if target_order else None)
         if action in ('stock_order', 'production_order') and not customer_id:
             flash('Выберите клиента для создания заказа.', 'danger')
-            return redirect(url_for('main.manager_trailer_picker', **config))
+            return redirect(url_for('main.manager_trailer_picker', **redirect_params))
 
         if action == 'stock_order':
             trailer = Trailer.query.get(request.form.get('trailer_id', type=int))
             if not trailer or not _trailer_available_for_sale(trailer):
                 flash('Выбранный прицеп уже недоступен для продажи.', 'danger')
-                return redirect(url_for('main.manager_trailer_picker', **config))
+                return redirect(url_for('main.manager_trailer_picker', **redirect_params))
             idem_key, duplicate = _reserve_idempotency_key()
             if duplicate:
-                return _duplicate_redirect(idem_key, url_for('main.orders_list'))
+                duplicate_url = url_for('main.order_detail', order_id=target_order.id) if target_order else url_for('main.orders_list')
+                return _duplicate_redirect(idem_key, duplicate_url)
+            if target_order:
+                source_type = 'TRANSFER' if target_order.warehouse_id and trailer.warehouse_id != target_order.warehouse_id else 'STOCK'
+                order_line = _create_order_line_from_trailer(target_order, trailer, source_type)
+                if not target_order.item_id:
+                    target_order.item_id = trailer.item_id
+                if not target_order.trailer_id:
+                    target_order.trailer_id = trailer.id
+                    target_order.source_warehouse_id = trailer.warehouse_id
+                target_order.fulfillment_source = target_order.fulfillment_source or ('stock' if source_type == 'STOCK' else 'other_warehouse')
+                _sync_order_totals_from_lines(target_order)
+                _refresh_order_status(target_order)
+                add_order_event(target_order, 'order_line_added', new_value=trailer.vin, comment=f'Добавлена позиция #{order_line.line_no} из подбора прицепа')
+                add_order_event(target_order, 'trailer_reserved', new_value=trailer.vin, comment='Резерв из подбора прицепа')
+                _finish_idempotency(idem_key, 'CustomerOrderLine', order_line.id)
+                db.session.commit()
+                flash('Позиция из наличия добавлена в заказ и зарезервирована.', 'success')
+                return redirect(url_for('main.order_detail', order_id=target_order.id))
             order = CustomerOrder(
                 order_number=_next_number('ORD', CustomerOrder, 'order_number'),
                 customer_id=customer_id,
@@ -2693,18 +2722,40 @@ def manager_trailer_picker():
         if action == 'production_order':
             if result.get('errors'):
                 flash('Исправьте ошибки конфигурации перед созданием заказа.', 'danger')
-                return redirect(url_for('main.manager_trailer_picker', **config))
+                return redirect(url_for('main.manager_trailer_picker', **redirect_params))
             item = get_or_create_configured_item(result)
+            quantity = max(request.form.get('quantity', type=int) or 1, 1)
             idem_key, duplicate = _reserve_idempotency_key()
             if duplicate:
-                return _duplicate_redirect(idem_key, url_for('main.orders_list'))
+                duplicate_url = url_for('main.order_detail', order_id=target_order.id) if target_order else url_for('main.orders_list')
+                return _duplicate_redirect(idem_key, duplicate_url)
+            if target_order:
+                line, need = _create_order_line_from_item_for_production(
+                    target_order,
+                    item,
+                    snapshot,
+                    quantity=quantity,
+                    unit_price=snapshot.get('calculated_price'),
+                    note='Позиция добавлена из подбора прицепа',
+                )
+                if not target_order.item_id:
+                    target_order.item_id = item.id
+                target_order.fulfillment_source = 'production' if not target_order.trailer_id else target_order.fulfillment_source
+                _sync_order_totals_from_lines(target_order)
+                _refresh_order_status(target_order)
+                add_order_event(target_order, 'order_line_added', new_value=item.article or item.name, comment=f'Добавлена позиция #{line.line_no} из подбора прицепа')
+                add_order_event(target_order, 'production_need_created', new_value=need.quantity, comment=f'Потребность создана по позиции #{line.line_no}')
+                _finish_idempotency(idem_key, 'CustomerOrderLine', line.id)
+                db.session.commit()
+                flash('Новая конфигурация добавлена отдельной позицией заказа.', 'success')
+                return redirect(url_for('main.order_detail', order_id=target_order.id))
             order = CustomerOrder(
                 order_number=_next_number('ORD', CustomerOrder, 'order_number'),
                 customer_id=customer_id,
                 item_id=item.id,
                 warehouse_id=warehouse_id,
                 assigned_user_id=current_user.id if current_user.is_manager else None,
-                quantity=1,
+                quantity=quantity,
                 price=snapshot.get('calculated_price'),
                 prepayment_percent=30,
                 status='waiting_production',
@@ -2714,10 +2765,13 @@ def manager_trailer_picker():
             db.session.add(order)
             db.session.flush()
             order_line = _sync_primary_order_line(order, snapshot)
+            order_line.quantity = quantity
+            order_line.total_price = (order_line.unit_price * quantity) if order_line.unit_price is not None else None
             db.session.flush()
-            need = SupplyNeed(order_id=order.id, order_line_id=order_line.id, item_id=item.id, warehouse_id=order.warehouse_id, quantity=1, status='NEW', need_type='CUSTOMER_ORDER', priority=10, note='Потребность создана из подбора прицепа')
+            need = SupplyNeed(order_id=order.id, order_line_id=order_line.id, item_id=item.id, warehouse_id=order.warehouse_id, quantity=quantity, status='NEW', need_type='CUSTOMER_ORDER', priority=10, note='Потребность создана из подбора прицепа')
             _apply_snapshot(need, snapshot)
             db.session.add(need)
+            _sync_order_totals_from_lines(order)
             add_order_event(order, 'order_created', new_value=order.status, comment='Создан из подбора прицепа')
             add_order_event(order, 'production_need_created', new_value='NEW', comment='Потребность создана из подбора прицепа')
             _finish_idempotency(idem_key, 'CustomerOrder', order.id)
@@ -2748,6 +2802,7 @@ def manager_trailer_picker():
 
     return render_template(
         'manager_trailer_picker.html',
+        target_order=target_order,
         config=config,
         result=result,
         inventory=inventory,
@@ -4318,6 +4373,98 @@ def _create_order_line_from_trailer(order: CustomerOrder, trailer: Trailer, sour
         if row.status == 'free':
             row.status = 'assigned'
     return line
+
+
+def _create_order_line_from_item_for_production(
+    order: CustomerOrder,
+    item: Item,
+    snapshot: dict | None = None,
+    quantity: int = 1,
+    unit_price=None,
+    note: str | None = None,
+) -> tuple[CustomerOrderLine, SupplyNeed]:
+    quantity = max(int(quantity or 1), 1)
+    snapshot = snapshot or _line_snapshot_from_item(item)
+    if unit_price is None:
+        unit_price = snapshot.get('calculated_price') if snapshot else None
+    if unit_price is None:
+        unit_price = item.base_price
+    line = CustomerOrderLine(
+        order_id=order.id,
+        line_no=_next_order_line_no(order),
+        line_type='TRAILER' if str(item.item_type or '').upper() == 'TRAILER' else 'COMPONENT',
+        fulfillment_source='production',
+        item_id=item.id,
+        quantity=quantity,
+        unit_price=unit_price,
+        total_price=(unit_price * quantity) if unit_price is not None else None,
+        status='waiting_production',
+        note=note,
+    )
+    _apply_snapshot(line, snapshot)
+    db.session.add(line)
+    db.session.flush()
+    need = SupplyNeed(
+        order_id=order.id,
+        order_line_id=line.id,
+        item_id=item.id,
+        warehouse_id=order.warehouse_id,
+        quantity=quantity,
+        status='NEW',
+        priority=10,
+        need_type='CUSTOMER_ORDER',
+        required_by=order.expected_date,
+        note='Потребность создана по позиции заказа',
+    )
+    _apply_snapshot(need, snapshot)
+    db.session.add(need)
+    return line, need
+
+
+def _order_delete_blockers(order: CustomerOrder) -> list[str]:
+    blockers = []
+    if order.documents_issued:
+        blockers.append('выданы документы')
+    if order.is_shipped:
+        blockers.append('заказ отгружен')
+    if order.trailer_id:
+        blockers.append('привязан VIN/прицеп')
+    if order.reserved_vin_registry_id:
+        blockers.append('зарезервирован VIN')
+    if SalesContract.query.filter_by(order_id=order.id).count():
+        blockers.append('есть договор')
+    if OrderPayment.query.filter_by(order_id=order.id).count():
+        blockers.append('есть оплаты')
+    if Reservation.query.filter_by(order_id=order.id).count():
+        blockers.append('есть резервы')
+    if SupplyNeed.query.filter_by(order_id=order.id).count():
+        blockers.append('есть потребности производства/снабжения')
+    if StockMovement.query.filter_by(order_id=order.id).count():
+        blockers.append('есть перемещения')
+    if ProducedUnit.query.filter_by(order_id=order.id).count():
+        blockers.append('есть выпущенные единицы')
+    if VinRegistry.query.filter(
+        or_(
+            VinRegistry.customer_order_id == order.id,
+            VinRegistry.docs_issued_order_id == order.id,
+        )
+    ).count():
+        blockers.append('есть записи в реестре VIN')
+    if getattr(order, 'payment_schedule', None) is not None and order.payment_schedule.count():
+        blockers.append('есть график оплат')
+
+    line_ids = [line.id for line in order.lines.all()]
+    if line_ids:
+        if ProductionRequestLine.query.filter(ProductionRequestLine.order_line_id.in_(line_ids)).count():
+            blockers.append('есть строки производственного задания')
+        if StockMovement.query.filter(StockMovement.order_line_id.in_(line_ids)).count():
+            blockers.append('есть перемещения по строкам')
+        if ProducedUnit.query.filter(ProducedUnit.order_line_id.in_(line_ids)).count():
+            blockers.append('есть выпущенные единицы по строкам')
+        if VinRegistry.query.filter(VinRegistry.order_line_id.in_(line_ids)).count():
+            blockers.append('есть VIN по строкам')
+
+    return blockers
 
 
 def _create_contract_lines_from_order(contract: SalesContract, order: CustomerOrder) -> None:
@@ -6554,6 +6701,22 @@ def order_detail(order_id):
         future_inbound_movements=future_inbound_movements,
         can_manage=can_manage_order(order),
     )
+
+
+@main_bp.route('/orders/<int:order_id>/delete', methods=['POST'])
+@admin_required
+def order_delete(order_id):
+    order = CustomerOrder.query.get_or_404(order_id)
+    blockers = _order_delete_blockers(order)
+    if blockers:
+        flash('Заказ нельзя удалить: ' + '; '.join(blockers) + '.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+
+    order_number = order.order_number
+    db.session.delete(order)
+    db.session.commit()
+    flash(f'Заказ {order_number} удалён.', 'success')
+    return redirect(url_for('main.orders_list'))
 
 
 @main_bp.route('/orders/<int:order_id>/edit', methods=['GET', 'POST'])

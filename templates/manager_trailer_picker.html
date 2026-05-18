@@ -15,7 +15,7 @@
   {% endfor %}
 {%- endmacro %}
 
-{% macro stock_table(title, rows, config) -%}
+{% macro stock_table(title, rows, config, target_order) -%}
 <div class="app-card p-3">
   <h2 class="h5 mb-3">{{ title }}</h2>
   <div class="table-responsive">
@@ -34,11 +34,12 @@
             <form method="post" class="d-inline picker-action-form">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               {{ config_hidden(config) }}
+              {% if target_order %}<input type="hidden" name="order_id" value="{{ target_order.id }}">{% endif %}
               <input type="hidden" name="action" value="stock_order">
               <input type="hidden" name="trailer_id" value="{{ row.id }}">
-              <input type="hidden" name="customer_id" value="">
-              <input type="hidden" name="warehouse_id" value="">
-              <button class="btn btn-sm btn-orange">Оформить</button>
+              <input type="hidden" name="customer_id" value="{{ target_order.customer_id if target_order else '' }}">
+              <input type="hidden" name="warehouse_id" value="{{ target_order.warehouse_id if target_order else '' }}">
+              <button class="btn btn-sm btn-orange">{{ 'Добавить в заказ' if target_order else 'Оформить' }}</button>
             </form>
           </td>
         </tr>
@@ -55,28 +56,38 @@
 <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
   <div>
     <h1 class="h3 mb-1">Подбор прицепа</h1>
-    <div class="text-muted">Рабочее место менеджера: конфигурация, цена, наличие и заказ.</div>
+    <div class="text-muted">
+      {% if target_order %}
+        Добавление отдельной позиции в заказ {{ target_order.order_number }}.
+      {% else %}
+        Рабочее место менеджера: конфигурация, цена, наличие и заказ.
+      {% endif %}
+    </div>
   </div>
-  <a class="btn btn-soft" href="{{ url_for('main.orders_list') }}">Заказы</a>
+  <a class="btn btn-soft" href="{{ url_for('main.order_detail', order_id=target_order.id) if target_order else url_for('main.orders_list') }}">{{ 'К заказу' if target_order else 'Заказы' }}</a>
 </div>
 
 <div class="app-card p-3 mb-3">
   <div class="row g-3">
     <div class="col-md-6">
       <label class="form-label" for="pickerCustomer">Клиент</label>
-      <select class="form-select" id="pickerCustomer">
-        <option value="">— выберите клиента —</option>
-        {% for customer in customer_options %}
-          <option value="{{ customer.id }}">{{ customer.label }}</option>
-        {% endfor %}
+      <select class="form-select" id="pickerCustomer" {% if target_order %}disabled{% endif %}>
+        {% if target_order %}
+          <option value="{{ target_order.customer_id }}" selected>{{ target_order.customer.name if target_order.customer else ('Клиент #' ~ target_order.customer_id) }}</option>
+        {% else %}
+          <option value="">— выберите клиента —</option>
+          {% for customer in customer_options %}
+            <option value="{{ customer.id }}">{{ customer.label }}</option>
+          {% endfor %}
+        {% endif %}
       </select>
     </div>
     <div class="col-md-6">
       <label class="form-label" for="pickerWarehouse">Склад продажи / назначения</label>
-      <select class="form-select" id="pickerWarehouse">
+      <select class="form-select" id="pickerWarehouse" {% if target_order %}disabled{% endif %}>
         <option value="">— не выбран —</option>
         {% for warehouse in warehouses %}
-          <option value="{{ warehouse.id }}" {% if current_user.warehouse_id == warehouse.id %}selected{% endif %}>{{ warehouse.name }}</option>
+          <option value="{{ warehouse.id }}" {% if (target_order and target_order.warehouse_id == warehouse.id) or (not target_order and current_user.warehouse_id == warehouse.id) %}selected{% endif %}>{{ warehouse.name }}</option>
         {% endfor %}
       </select>
     </div>
@@ -84,6 +95,7 @@
 </div>
 
 <form method="get" class="app-card p-3 mb-3" id="pickerConfigForm">
+  {% if target_order %}<input type="hidden" name="order_id" value="{{ target_order.id }}">{% endif %}
   <div class="row g-3">
     <div class="col-md-3"><label class="form-label">Группа</label><select class="form-select" name="group_code" data-config-field>{% for item in config_options.groups %}<option value="{{ item.code }}" {% if config.group_code == item.code %}selected{% endif %}>{{ item.code }} - {{ item.name }}</option>{% endfor %}</select></div>
     <div class="col-md-3"><label class="form-label">Тип кузова</label><select class="form-select" name="body_execution_code" data-config-field>{% for item in config_options.executions %}<option value="{{ item.code }}" {% if config.body_execution_code == item.code %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></div>
@@ -147,10 +159,14 @@
   <form method="post" class="picker-action-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {{ config_hidden(config) }}
+    {% if target_order %}<input type="hidden" name="order_id" value="{{ target_order.id }}">{% endif %}
     <input type="hidden" name="action" value="production_order">
-    <input type="hidden" name="customer_id" value="">
-    <input type="hidden" name="warehouse_id" value="">
-    <button class="btn btn-orange">Заказать в производство под клиента</button>
+    <input type="hidden" name="customer_id" value="{{ target_order.customer_id if target_order else '' }}">
+    <input type="hidden" name="warehouse_id" value="{{ target_order.warehouse_id if target_order else '' }}">
+    <div class="input-group">
+      <input class="form-control" style="max-width: 110px" type="number" name="quantity" min="1" value="1" aria-label="Количество">
+      <button class="btn btn-orange">{{ 'Добавить позицию в заказ' if target_order else 'Заказать в производство под клиента' }}</button>
+    </div>
   </form>
   <form method="post" class="picker-action-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -162,9 +178,9 @@
 </div>
 
 <div class="row g-3">
-  <div class="col-12">{{ stock_table('Точное наличие', inventory.exact, config) }}</div>
-  <div class="col-12">{{ stock_table('Аналоги по кузову и борту', inventory.body_match, config) }}</div>
-  <div class="col-12">{{ stock_table('Похожие по размеру кузова', inventory.size_match, config) }}</div>
+  <div class="col-12">{{ stock_table('Точное наличие', inventory.exact, config, target_order) }}</div>
+  <div class="col-12">{{ stock_table('Аналоги по кузову и борту', inventory.body_match, config, target_order) }}</div>
+  <div class="col-12">{{ stock_table('Похожие по размеру кузова', inventory.size_match, config, target_order) }}</div>
 </div>
 {% endblock %}
 
