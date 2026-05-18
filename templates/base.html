@@ -35,7 +35,7 @@
             {% if current_user.is_authenticated %}
                 {% if current_user.is_admin %}
                     {{ nav_item('Панель управления', 'bi-speedometer2', 'main.director_dashboard', match='/director') }}
-                    {{ nav_item('Продажи', 'bi-cart-check', 'main.orders_list', match='/orders') }}
+                    {{ nav_item('Заказы', 'bi-receipt', 'main.orders_list', match='/orders') }}
                     {{ nav_item('Подбор прицепа', 'bi-ui-checks-grid', 'main.manager_trailer_picker', match='/manager/trailer-picker') }}
                     {{ nav_item('Диалоги', 'bi-chat-dots', 'main.conversations_list', match='/conversations') }}
                     {{ nav_item('Заявки', 'bi-chat-left-text', 'main.leads_list', match='/leads') }}
@@ -52,6 +52,7 @@
                     {{ nav_item('Склады', 'bi-buildings', 'main.warehouses_list', match='/warehouses') }}
                     {{ nav_item('Прицепы', 'bi-box-seam', 'main.trailers_list', match='/trailers') }}
                     {{ nav_item('Клиенты', 'bi-person-lines-fill', 'main.customers_list', match='/customers') }}
+                    {{ nav_item('Договоры', 'bi-file-earmark-text', 'main.contracts_list', match='/contracts') }}
                     {{ nav_item('Пользователи', 'bi-people', 'main.users_list', match='/users') }}
                 {% elif current_user.is_manager %}
                     {{ nav_item('Рабочий стол', 'bi-speedometer2', 'main.manager_workspace', match='/manager') }}
