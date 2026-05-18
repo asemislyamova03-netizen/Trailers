@@ -95,7 +95,7 @@
           {% for option in order_line_options %}
           {% set line = option.line %}
           {% set order = option.order %}
-          <option value="{{ line.id }}">{{ order.order_number }} — поз. {{ line.line_no }} — {{ line.article_snapshot or (line.item.article if line.item else '') }} — {{ order.customer.name if order.customer else '' }}</option>
+          <option value="{{ line.id }}">{{ order.order_number }} — поз. {{ line.line_no }} — {{ line.article_snapshot or (line.item.article if line.item else '') }} — VIN {{ option.reserved_count }}/{{ line.quantity or 1 }} — {{ order.customer.name if order.customer else '' }}</option>
           {% endfor %}
         </select>
         <label class="form-label">Код года</label>

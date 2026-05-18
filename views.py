@@ -4467,6 +4467,25 @@ def _active_vin_registry_for_order_line(order_line_id: int | None):
     )
 
 
+def _active_vin_registry_count_for_order_line(order_line_id: int | None) -> int:
+    if not order_line_id:
+        return 0
+    return (
+        VinRegistry.query
+        .filter(
+            VinRegistry.order_line_id == order_line_id,
+            VinRegistry.status.in_(['reserved', 'assigned', 'confirmed']),
+        )
+        .count()
+    )
+
+
+def _order_line_vin_capacity_left(line: CustomerOrderLine | None) -> int:
+    if not line:
+        return 0
+    return max((line.quantity or 1) - _active_vin_registry_count_for_order_line(line.id), 0)
+
+
 def _parse_vin_full(vin_full: str) -> tuple[dict | None, str | None]:
     vin = (vin_full or '').strip().upper()
     if len(vin) != 17:
@@ -7446,9 +7465,11 @@ def vin_registry_detail(vin_id):
         if not lines:
             continue
         for line in lines:
-            if _active_vin_registry_for_order_line(line.id):
+            reserved_count = _active_vin_registry_count_for_order_line(line.id)
+            capacity_left = max((line.quantity or 1) - reserved_count, 0)
+            if capacity_left <= 0:
                 continue
-            order_line_options.append({'order': order, 'line': line})
+            order_line_options.append({'order': order, 'line': line, 'reserved_count': reserved_count, 'capacity_left': capacity_left})
     trailers = Trailer.query.order_by(Trailer.created_at.desc()).limit(150).all()
     return render_template('vin_registry_detail.html', row=row, orders=orders, order_line_options=order_line_options, trailers=trailers, events=row.events.order_by(VinRegistryEvent.created_at.desc()).all())
 
@@ -7465,8 +7486,8 @@ def vin_registry_reserve(vin_id):
     if not order or order.is_shipped or order.documents_issued or order.status in ('cancelled', 'canceled', 'closed', 'done'):
         flash('Этот заказ нельзя связать с VIN.', 'danger')
         return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
-    if order_line and _active_vin_registry_for_order_line(order_line.id):
-        flash('У выбранной позиции заказа уже есть активный VIN.', 'danger')
+    if order_line and _order_line_vin_capacity_left(order_line) <= 0:
+        flash('По выбранной позиции уже зарезервированы все VIN по количеству.', 'danger')
         return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
     if not order_line and _active_vin_registry_for_order(order.id):
         flash('У заказа уже есть активный VIN. Для второго VIN выберите конкретную позицию заказа.', 'danger')
