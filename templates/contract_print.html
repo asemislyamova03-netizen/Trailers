@@ -328,22 +328,38 @@
       <th style="width:24%;">VIN код</th>
       <th style="width:34%;">Характеристики</th>
     </tr>
-    <tr>
-      <td>1.</td>
-      <td>{{ item_name }}</td>
-      <td>{{ vin }}</td>
-      <td>
-        Прицеп к легковому автомобилю.<br>
-        Производство РК.<br>
-        {% if year_str %}Год выпуска {{ year_str }} г.<br>{% endif %}
-        {% if axle_count %}Количество осей – {{ axle_count }}.<br>{% endif %}
-        {% if size_external %}Габаритные размеры: {{ size_external }}.<br>{% endif %}
-        {% if size_body %}Размеры кузова: {{ size_body }}.<br>{% endif %}
-        {% if full_mass_kg %}Полная масса: {{ full_mass_kg }} кг.<br>{% endif %}
-        {% if payload %}Грузоподъёмность: {{ payload }} кг.<br>{% endif %}
-        {% if modification_code %}Модификация – {{ modification_code }}.{% endif %}
-      </td>
-    </tr>
+    {% if contract_lines %}
+      {% for line in contract_lines %}
+      <tr>
+        <td>{{ loop.index }}.</td>
+        <td>{{ line.product_name_snapshot or (line.item.name if line.item else item_name) }}</td>
+        <td>{{ line.vin_full or '' }}</td>
+        <td>
+          Производство РК.<br>
+          {% if line.otss_modification %}Модификация ОТТС – {{ line.otss_modification }}.<br>{% endif %}
+          {% if line.vin_modification_code %}VIN-модификация – {{ line.vin_modification_code }}.<br>{% endif %}
+          {% if line.otss_number %}ОТТС: {{ line.otss_number }}{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    {% else %}
+      <tr>
+        <td>1.</td>
+        <td>{{ item_name }}</td>
+        <td>{{ vin }}</td>
+        <td>
+          Прицеп к легковому автомобилю.<br>
+          Производство РК.<br>
+          {% if year_str %}Год выпуска {{ year_str }} г.<br>{% endif %}
+          {% if axle_count %}Количество осей – {{ axle_count }}.<br>{% endif %}
+          {% if size_external %}Габаритные размеры: {{ size_external }}.<br>{% endif %}
+          {% if size_body %}Размеры кузова: {{ size_body }}.<br>{% endif %}
+          {% if full_mass_kg %}Полная масса: {{ full_mass_kg }} кг.<br>{% endif %}
+          {% if payload %}Грузоподъёмность: {{ payload }} кг.<br>{% endif %}
+          {% if modification_code %}Модификация – {{ modification_code }}.{% endif %}
+        </td>
+      </tr>
+    {% endif %}
   </table>
 
   <p>Товаросопроводительные документы:</p>
@@ -442,13 +458,25 @@
       <th style="width:20%;">Цена за 1 ед. (тенге, с НДС)</th>
       <th style="width:20%;">Сумма (тенге, с НДС)</th>
     </tr>
-    <tr>
-      <td>1.</td>
-      <td>{{ item_name }}</td>
-      <td>1 шт.</td>
-      <td>{{ price_str }}</td>
-      <td>{{ price_str }}</td>
-    </tr>
+    {% if contract_lines %}
+      {% for line in contract_lines %}
+      <tr>
+        <td>{{ loop.index }}.</td>
+        <td>{{ line.product_name_snapshot or (line.item.name if line.item else item_name) }}</td>
+        <td>{{ line.quantity or 1 }} шт.</td>
+        <td>{{ "{:,.0f}".format(line.unit_price or 0).replace(",", " ") }}</td>
+        <td>{{ "{:,.0f}".format(line.total_price or 0).replace(",", " ") }}</td>
+      </tr>
+      {% endfor %}
+    {% else %}
+      <tr>
+        <td>1.</td>
+        <td>{{ item_name }}</td>
+        <td>1 шт.</td>
+        <td>{{ price_str }}</td>
+        <td>{{ price_str }}</td>
+      </tr>
+    {% endif %}
     <tr>
       <td colspan="4" style="text-align:right;"><strong>Итого:</strong></td>
       <td><strong>{{ price_str }}</strong></td>

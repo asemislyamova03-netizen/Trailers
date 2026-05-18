@@ -81,6 +81,89 @@
     </div>
 
     <div class="app-card p-4 mt-4">
+      <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-3">
+        <div>
+          <h2 class="h5 mb-1">Позиции заказа</h2>
+          <div class="text-muted small">Каждая позиция может иметь свой VIN, резерв или потребность в производство.</div>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead><tr><th>№</th><th>Артикул / наименование</th><th>Исполнение</th><th>Кол-во</th><th>VIN / резерв</th><th>Статус</th><th class="text-end">Сумма</th></tr></thead>
+          <tbody>
+          {% for row in order_line_rows %}
+            {% set line = row.line %}
+            <tr>
+              <td>{{ line.line_no }}</td>
+              <td>
+                <div class="fw-semibold">{{ line.article_snapshot or (line.item.article if line.item else '') }}</div>
+                <div class="small text-muted">{{ line.product_name_snapshot or (line.item.name if line.item else '') }}</div>
+              </td>
+              <td>{{ line.fulfillment_source|status_label }}</td>
+              <td>{{ line.quantity or 1 }}</td>
+              <td>
+                {% if row.vin_row %}
+                  <div class="fw-semibold">{{ row.vin_row.vin_full or row.vin_row.serial7 }}</div>
+                  <span class="badge text-bg-{{ row.vin_row.status|status_badge_class }}">{{ row.vin_row.status|status_label }}</span>
+                {% elif row.trailer %}
+                  <div class="fw-semibold">{{ row.trailer.vin }}</div>
+                  <span class="badge text-bg-secondary">резерв</span>
+                {% elif row.supply_need %}
+                  <span class="badge text-bg-info">производство #{{ row.supply_need.id }}</span>
+                {% else %}
+                  <span class="text-muted">не выбран</span>
+                {% endif %}
+              </td>
+              <td><span class="badge text-bg-{{ line.status|status_badge_class }}">{{ line.status|status_label }}</span></td>
+              <td class="text-end">{{ line.total_price|money if line.total_price is not none else '' }}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="7" class="text-muted">Позиции ещё не созданы.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% if can_manage and order.status != 'cancelled' and not order.documents_issued and not order.is_shipped %}
+      <div class="row g-3 mt-2">
+        <div class="col-lg-6">
+          <form method="post" action="{{ url_for('main.order_line_add_stock', order_id=order.id) }}" class="border rounded p-3 h-100">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="form_token" value="{{ form_token() }}">
+            <h3 class="h6">Добавить из наличия</h3>
+            <select name="trailer_id" class="form-select mb-2" required>
+              <option value="">Выберите VIN</option>
+              {% for trailer in add_line_stock_trailers %}
+              <option value="{{ trailer.id }}">{{ trailer.vin }} · {{ trailer.item.article if trailer.item else '' }} · {{ trailer.warehouse.name if trailer.warehouse else '' }}</option>
+              {% endfor %}
+            </select>
+            <button class="btn btn-sm btn-orange">Добавить и зарезервировать</button>
+          </form>
+        </div>
+        <div class="col-lg-6">
+          <form method="post" action="{{ url_for('main.order_line_add_production', order_id=order.id) }}" class="border rounded p-3 h-100">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="form_token" value="{{ form_token() }}">
+            <h3 class="h6">Добавить в производство</h3>
+            <select name="item_id" class="form-select mb-2" required>
+              <option value="">Выберите номенклатуру</option>
+              {% for item in add_line_items %}
+              <option value="{{ item.id }}">{{ item.article or 'без артикула' }} · {{ item.name }}</option>
+              {% endfor %}
+            </select>
+            <div class="row g-2">
+              <div class="col-4"><input name="quantity" class="form-control" type="number" min="1" value="1"></div>
+              <div class="col-8"><input name="unit_price" class="form-control" placeholder="Цена за 1 ед."></div>
+            </div>
+            <input name="note" class="form-control my-2" placeholder="Комментарий">
+            <button class="btn btn-sm btn-soft">Добавить потребность</button>
+          </form>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="app-card p-4 mt-4">
       <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
         <div>
           <h2 class="h5 mb-3">VIN и документы</h2>
