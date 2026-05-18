@@ -793,6 +793,8 @@ def date_format(value):
 @main_bp.route('/home')
 @login_required
 def role_home():
+    if current_user.is_admin:
+        return redirect(url_for('main.orders_list'))
     if current_user.is_production:
         return redirect(url_for('main.production_workspace'))
     if current_user.is_logistics:

@@ -34,7 +34,6 @@
         <nav class="sidebar-nav">
             {% if current_user.is_authenticated %}
                 {% if current_user.is_admin %}
-                    {{ nav_item('Панель управления', 'bi-speedometer2', 'main.director_dashboard', match='/director') }}
                     {{ nav_item('Заказы', 'bi-receipt', 'main.orders_list', match='/orders') }}
                     {{ nav_item('Подбор прицепа', 'bi-ui-checks-grid', 'main.manager_trailer_picker', match='/manager/trailer-picker') }}
                     {{ nav_item('Диалоги', 'bi-chat-dots', 'main.conversations_list', match='/conversations') }}
