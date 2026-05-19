@@ -98,7 +98,7 @@
       </div>
       <div class="table-responsive">
         <table class="table table-sm align-middle">
-          <thead><tr><th>№</th><th>Артикул / наименование</th><th>Исполнение</th><th>Кол-во</th><th>VIN</th><th>Производство</th><th>Статус</th><th class="text-end">Сумма</th></tr></thead>
+          <thead><tr><th>№</th><th>Артикул / наименование</th><th>Исполнение</th><th>Кол-во</th><th>VIN</th><th>Производство</th><th>Статус</th><th class="text-end">Сумма</th><th></th></tr></thead>
           <tbody>
           {% for row in order_line_rows %}
             {% set line = row.line %}
@@ -140,9 +140,48 @@
               </td>
               <td><span class="badge text-bg-{{ line.status|status_badge_class }}">{{ line.status|status_label }}</span></td>
               <td class="text-end">{{ line.total_price|money if line.total_price is not none else '' }}</td>
+              <td class="text-end">
+                {% if can_manage and not order.documents_issued and not order.is_shipped and order.status != 'cancelled' %}
+                  {% if row.can_delete %}
+                    <form method="post" action="{{ url_for('main.order_line_delete', order_id=order.id, line_id=line.id) }}" onsubmit="return confirm('Удалить позицию #{{ line.line_no }}?');">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <input type="hidden" name="form_token" value="{{ form_token() }}">
+                      <button class="btn btn-sm btn-outline-danger">Удалить</button>
+                    </form>
+                  {% else %}
+                    <span class="small text-muted" title="{{ row.delete_message }}">не удалить</span>
+                  {% endif %}
+                {% endif %}
+              </td>
             </tr>
+            {% if can_manage and not order.documents_issued and not order.is_shipped and order.status != 'cancelled' %}
+            <tr>
+              <td></td>
+              <td colspan="8">
+                <form method="post" action="{{ url_for('main.order_line_update', order_id=order.id, line_id=line.id) }}" class="row g-2 align-items-end">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="form_token" value="{{ form_token() }}">
+                  <div class="col-md-2">
+                    <label class="form-label small mb-1">Кол-во</label>
+                    <input class="form-control form-control-sm" name="quantity" type="number" min="1" value="{{ line.quantity or 1 }}" {% if not row.can_edit_quantity %}readonly title="{{ row.edit_quantity_message }}"{% endif %}>
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-label small mb-1">Цена за 1 ед.</label>
+                    <input class="form-control form-control-sm" name="unit_price" value="{{ line.unit_price if line.unit_price is not none else '' }}">
+                  </div>
+                  <div class="col-md-5">
+                    <label class="form-label small mb-1">Комментарий по позиции</label>
+                    <input class="form-control form-control-sm" name="note" value="{{ line.note or '' }}">
+                  </div>
+                  <div class="col-md-2">
+                    <button class="btn btn-sm btn-soft w-100">Сохранить строку</button>
+                  </div>
+                </form>
+              </td>
+            </tr>
+            {% endif %}
           {% else %}
-            <tr><td colspan="7" class="text-muted">Позиции ещё не созданы.</td></tr>
+            <tr><td colspan="9" class="text-muted">Позиции ещё не созданы.</td></tr>
           {% endfor %}
           </tbody>
         </table>

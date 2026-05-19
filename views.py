@@ -4362,13 +4362,84 @@ def _sync_order_totals_from_lines(order: CustomerOrder) -> None:
         return
     order.quantity = sum(line.quantity or 0 for line in lines) or 1
     totals = [line.total_price for line in lines if line.total_price is not None]
-    if totals:
-        order.price = sum(totals)
+    order.price = sum(totals) if totals else None
+    first_line = lines[0]
+    order.item_id = first_line.item_id
+    order.fulfillment_source = first_line.fulfillment_source
+    first_reservation = next((row for row in first_line.reservations if row.status == 'ACTIVE'), None)
+    if first_reservation and first_reservation.trailer_id:
+        order.trailer_id = first_reservation.trailer_id
+        order.source_warehouse_id = first_reservation.trailer.warehouse_id if first_reservation.trailer else order.source_warehouse_id
 
 
 def _next_order_line_no(order: CustomerOrder) -> int:
     max_no = db.session.query(sa.func.max(CustomerOrderLine.line_no)).filter(CustomerOrderLine.order_id == order.id).scalar()
     return int(max_no or 0) + 1
+
+
+def _line_active_supply_needs(line: CustomerOrderLine) -> list[SupplyNeed]:
+    return [
+        need for need in line.supply_needs
+        if need.status not in ('CANCELLED', 'cancelled', 'DONE', 'done', 'closed', 'void')
+    ]
+
+
+def _order_line_operation_blockers(line: CustomerOrderLine) -> list[str]:
+    blockers = []
+    if any(row.status == 'ACTIVE' for row in line.reservations):
+        blockers.append('есть активный резерв')
+    if line.vin_registry_rows:
+        blockers.append('есть VIN')
+    if _line_active_supply_needs(line):
+        blockers.append('есть производственная потребность')
+    if line.production_lines:
+        blockers.append('есть производственное задание')
+    if line.produced_units:
+        blockers.append('есть выпуск')
+    if line.movements:
+        blockers.append('есть перемещение')
+    if line.contract_lines:
+        blockers.append('есть строка договора')
+    if line.production_outputs:
+        blockers.append('есть производственные результаты')
+    return blockers
+
+
+def _order_line_quantity_blockers(line: CustomerOrderLine) -> list[str]:
+    blockers = []
+    if any(row.status == 'ACTIVE' for row in line.reservations):
+        blockers.append('есть активный резерв')
+    if line.vin_registry_rows:
+        blockers.append('есть VIN')
+    if line.production_lines:
+        blockers.append('есть производственное задание')
+    if line.produced_units:
+        blockers.append('есть выпуск')
+    if line.movements:
+        blockers.append('есть перемещение')
+    if line.contract_lines:
+        blockers.append('есть строка договора')
+    return blockers
+
+
+def _can_delete_order_line(line: CustomerOrderLine) -> tuple[bool, str]:
+    if not line.order or line.order.documents_issued or line.order.is_shipped or line.order.status == 'cancelled':
+        return False, 'Позиции можно удалять только до выдачи документов и отгрузки.'
+    if line.order.lines.count() <= 1:
+        return False, 'Нельзя удалить последнюю позицию заказа.'
+    blockers = _order_line_operation_blockers(line)
+    if blockers:
+        return False, 'Нельзя удалить позицию: ' + ', '.join(blockers) + '.'
+    return True, ''
+
+
+def _can_edit_order_line_quantity(line: CustomerOrderLine) -> tuple[bool, str]:
+    if not line.order or line.order.documents_issued or line.order.is_shipped or line.order.status == 'cancelled':
+        return False, 'Позиции можно менять только до выдачи документов и отгрузки.'
+    blockers = _order_line_quantity_blockers(line)
+    if blockers:
+        return False, 'Количество нельзя изменить: ' + ', '.join(blockers) + '.'
+    return True, ''
 
 
 def _line_snapshot_from_item(item: Item | None) -> dict:
@@ -6564,6 +6635,8 @@ def order_detail(order_id):
         production_qty = sum(need.quantity or 0 for need in active_needs)
         vin_count = len(vin_rows)
         shortage_qty = max((line.quantity or 1) - production_qty, 0) if line.fulfillment_source == 'production' else 0
+        can_edit_qty, edit_qty_message = _can_edit_order_line_quantity(line)
+        can_delete_line, delete_message = _can_delete_order_line(line)
         order_line_rows.append({
             'line': line,
             'vin_rows': vin_rows,
@@ -6574,6 +6647,10 @@ def order_detail(order_id):
             'production_qty': production_qty,
             'shortage_qty': shortage_qty,
             'trailer': (vin_rows[0].trailer if vin_rows and vin_rows[0].trailer else (active_reservation.trailer if active_reservation else None)),
+            'can_edit_quantity': can_edit_qty,
+            'edit_quantity_message': edit_qty_message,
+            'can_delete': can_delete_line,
+            'delete_message': delete_message,
         })
     add_line_stock_trailers = [
         trailer for trailer in (
@@ -6884,6 +6961,73 @@ def order_edit(order_id):
         return redirect(url_for('main.order_detail', order_id=order.id))
 
     return _render_order_form(form, 'Редактирование заказа')
+
+
+@main_bp.route('/orders/<int:order_id>/lines/<int:line_id>/update', methods=['POST'])
+@login_required
+def order_line_update(order_id, line_id):
+    order = CustomerOrder.query.get_or_404(order_id)
+    _ensure_can_manage_order(order)
+    line = CustomerOrderLine.query.filter_by(id=line_id, order_id=order.id).first_or_404()
+    if order.status == 'cancelled' or order.documents_issued or order.is_shipped:
+        flash('Позиции можно менять только до выдачи документов и отгрузки.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+
+    quantity = max(request.form.get('quantity', type=int) or 1, 1)
+    unit_price_raw = (request.form.get('unit_price') or '').strip()
+    try:
+        unit_price = Decimal(unit_price_raw.replace(',', '.')) if unit_price_raw else None
+    except Exception:
+        flash('Цена указана неверно.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+
+    if quantity != (line.quantity or 1):
+        can_edit_qty, message = _can_edit_order_line_quantity(line)
+        if not can_edit_qty:
+            flash(message, 'danger')
+            return redirect(url_for('main.order_detail', order_id=order.id))
+        old_qty = line.quantity or 1
+        line.quantity = quantity
+        active_needs = _line_active_supply_needs(line)
+        if len(active_needs) == 1 and active_needs[0].status in ('NEW', 'PLANNED', 'planned'):
+            active_needs[0].quantity = quantity
+        add_order_event(order, 'comment_added', old_value=str(old_qty), new_value=str(quantity), comment=f'Изменено количество позиции #{line.line_no}')
+
+    old_price = line.unit_price
+    line.unit_price = unit_price
+    line.total_price = (unit_price * (line.quantity or 1)) if unit_price is not None else None
+    line.note = (request.form.get('note') or '').strip() or None
+    _sync_order_totals_from_lines(order)
+    _refresh_order_status(order)
+    add_order_event(order, 'comment_added', old_value=str(old_price or ''), new_value=str(unit_price or ''), comment=f'Обновлена позиция #{line.line_no}')
+    db.session.commit()
+    flash('Позиция заказа обновлена.', 'success')
+    return redirect(url_for('main.order_detail', order_id=order.id))
+
+
+@main_bp.route('/orders/<int:order_id>/lines/<int:line_id>/delete', methods=['POST'])
+@login_required
+def order_line_delete(order_id, line_id):
+    order = CustomerOrder.query.get_or_404(order_id)
+    _ensure_can_manage_order(order)
+    line = CustomerOrderLine.query.filter_by(id=line_id, order_id=order.id).first_or_404()
+    can_delete, message = _can_delete_order_line(line)
+    if not can_delete:
+        flash(message, 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    old_line_no = line.line_no
+    old_label = line.article_snapshot or (line.item.article if line.item else '') or f'#{old_line_no}'
+    db.session.delete(line)
+    db.session.flush()
+    remaining_lines = order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()).all()
+    for idx, row in enumerate(remaining_lines, start=1):
+        row.line_no = idx
+    _sync_order_totals_from_lines(order)
+    _refresh_order_status(order)
+    add_order_event(order, 'comment_added', old_value=old_label, comment=f'Удалена позиция заказа #{old_line_no}')
+    db.session.commit()
+    flash('Позиция заказа удалена.', 'success')
+    return redirect(url_for('main.order_detail', order_id=order.id))
 
 
 @main_bp.route('/orders/<int:order_id>/lines/add-stock', methods=['POST'])
