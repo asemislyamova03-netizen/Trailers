@@ -67,8 +67,8 @@
     <li class="nav-item"><button class="nav-link" data-manager-tab="issue" data-bs-toggle="tab" data-bs-target="#issue-tab" type="button">К выдаче</button></li>
     <li class="nav-item"><button class="nav-link" data-manager-tab="production" data-bs-toggle="tab" data-bs-target="#production-tab" type="button">В производстве</button></li>
     <li class="nav-item dropdown">
-      <button class="nav-link dropdown-toggle" data-bs-toggle="dropdown" type="button">Ещё</button>
-      <ul class="dropdown-menu">
+      <button class="nav-link dropdown-toggle" data-bs-toggle="dropdown" data-bs-display="static" type="button">Ещё</button>
+      <ul class="dropdown-menu dropdown-menu-end manager-more-menu">
         <li><button class="dropdown-item" data-manager-tab="inbound" data-bs-toggle="tab" data-bs-target="#inbound-tab" type="button">В пути / к приёмке</button></li>
         <li><button class="dropdown-item" data-manager-tab="movements" data-bs-toggle="tab" data-bs-target="#movements-tab" type="button">Перемещения</button></li>
         <li><button class="dropdown-item" data-manager-tab="payments" data-bs-toggle="tab" data-bs-target="#payments-tab" type="button">Оплаты</button></li>
@@ -447,6 +447,11 @@
       const url = new URL(window.location.href);
       url.searchParams.set('tab', button.dataset.managerTab);
       window.history.replaceState({}, '', url);
+      const dropdown = button.closest('.dropdown');
+      if (dropdown && window.bootstrap) {
+        const toggle = dropdown.querySelector('[data-bs-toggle="dropdown"]');
+        if (toggle) window.bootstrap.Dropdown.getOrCreateInstance(toggle).hide();
+      }
     });
   });
 })();

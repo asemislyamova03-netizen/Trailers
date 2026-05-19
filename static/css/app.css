@@ -411,6 +411,13 @@ a { text-decoration: none; }
   border-color: var(--sidebar-bg);
 }
 
+.manager-more-menu {
+  min-width: 220px;
+  max-width: min(280px, calc(100vw - 32px));
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+}
+
 .chart-box {
   height: 280px;
   position: relative;
