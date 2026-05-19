@@ -977,7 +977,13 @@ def _prefill_trailer_item_change_form(form: TrailerItemChangeForm, item: Item | 
 def _item_base_matches_locked_item(item: Item, locked_item: Item | None) -> bool:
     if not locked_item:
         return True
-    return item.size_body == locked_item.size_body and item.axle_count == locked_item.axle_count
+    item_config = _config_from_item(item)
+    locked_config = _config_from_item(locked_item)
+    return (
+        (item_config.get('group_code') or '') == (locked_config.get('group_code') or '')
+        and (item_config.get('body_size_code') or '') == (locked_config.get('body_size_code') or '')
+        and item.axle_count == locked_item.axle_count
+    )
 
 
 def _default_trailer_config_values() -> dict:
