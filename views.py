@@ -9992,38 +9992,109 @@ def director_report(section='sales'):
             query = query.filter(CustomerOrder.assigned_user_id == manager_id)
         return query
 
+    def contract_report_records():
+        contracts = (
+            SalesContract.query
+            .outerjoin(CustomerOrder, CustomerOrder.id == SalesContract.order_id)
+            .outerjoin(Trailer, Trailer.id == SalesContract.trailer_id)
+            .outerjoin(Customer, Customer.id == SalesContract.customer_id)
+            .order_by(SalesContract.contract_date.desc().nullslast(), SalesContract.id.desc())
+            .all()
+        )
+        result = []
+        search_lower = search.lower()
+        for contract in contracts:
+            order = contract.order
+            if order and order.status == 'cancelled':
+                continue
+            sale_dt = None
+            if order and order.documents_issued_at:
+                sale_dt = order.documents_issued_at
+            elif contract.contract_date:
+                sale_dt = datetime.combine(contract.contract_date, time.min)
+            elif contract.created_at:
+                sale_dt = contract.created_at
+            if not sale_dt or sale_dt < period_start or sale_dt > period_end:
+                continue
+
+            trailer = contract.trailer or (order.trailer if order else None)
+            warehouse = (order.warehouse if order and order.warehouse else (trailer.warehouse if trailer else None))
+            manager = order.assigned_user if order else None
+            if current_user.is_manager:
+                allowed_by_order = order and (
+                    order.assigned_user_id == current_user.id
+                    or (current_user.warehouse_id and order.warehouse_id == current_user.warehouse_id)
+                )
+                allowed_by_trailer = trailer and current_user.warehouse_id and trailer.warehouse_id == current_user.warehouse_id
+                if not (allowed_by_order or allowed_by_trailer):
+                    continue
+            if warehouse_id and (not warehouse or warehouse.id != warehouse_id):
+                continue
+            if manager_id and (not manager or manager.id != manager_id):
+                continue
+
+            lines = contract.lines.order_by(SalesContractLine.line_no.asc(), SalesContractLine.id.asc()).all()
+            item = trailer.item if trailer else (order.item if order else None)
+            vin_text = get_order_effective_vin(order) if order else (trailer.vin if trailer else '')
+            article_text = ' '.join(
+                filter(None, [
+                    item.article if item else None,
+                    *(line.article_snapshot or (line.item.article if line.item else '') for line in lines),
+                ])
+            )
+            haystack = ' '.join(
+                str(value or '')
+                for value in (
+                    contract.contract_number,
+                    contract.customer.name if contract.customer else '',
+                    vin_text,
+                    article_text,
+                    warehouse.name if warehouse else '',
+                )
+            ).lower()
+            if search_lower and search_lower not in haystack:
+                continue
+
+            quantity = sum(line.quantity or 0 for line in lines)
+            if quantity <= 0:
+                quantity = order.quantity if order and order.quantity else 1
+            revenue = float(contract.price if contract.price is not None else (order.price if order else 0) or 0)
+            result.append({
+                'date': sale_dt,
+                'contract': contract,
+                'order': order,
+                'trailer': trailer,
+                'warehouse': warehouse,
+                'manager': manager,
+                'item': item,
+                'lines': lines,
+                'quantity': quantity,
+                'revenue': revenue,
+            })
+        return result
+
     cards = []
     rows = []
     problem_rows = []
     analytics_rows = []
 
     if section in ('sales', 'finance', 'dynamics', 'branches', 'types'):
-        sales_query = (
-            order_scope(CustomerOrder.query)
-            .filter(
-                CustomerOrder.documents_issued == True,
-                CustomerOrder.documents_issued_at >= period_start,
-                CustomerOrder.documents_issued_at <= period_end,
-                CustomerOrder.status != 'cancelled',
-            )
-            .order_by(CustomerOrder.documents_issued_at.desc())
-        )
-        rows = sales_query.all()
-        sold_quantity = sum(order.quantity or 1 for order in rows)
-        revenue = sum(float(order.price or 0) for order in rows)
+        rows = contract_report_records()
+        sold_quantity = sum(row['quantity'] or 0 for row in rows)
+        revenue = sum(row['revenue'] or 0 for row in rows)
         cards = [
             {'title': 'Выручка', 'value': money(revenue), 'caption': 'юридические продажи за период'},
-            {'title': 'Продано', 'value': sold_quantity, 'caption': 'шт. по заказам'},
+            {'title': 'Продано', 'value': sold_quantity, 'caption': 'шт. по договорам'},
             {'title': 'Средний чек', 'value': money(revenue / len(rows) if rows else 0), 'caption': 'по закрытым продажам'},
             {'title': 'Резервы', 'value': order_scope(CustomerOrder.query).filter(CustomerOrder.status.in_(['reserved', 'waiting_payment', 'prepaid', 'ready_to_ship'])).count(), 'caption': 'активные заказы'},
         ]
         if section in ('sales', 'dynamics'):
             buckets = defaultdict(lambda: {'orders': 0, 'quantity': 0, 'revenue': 0.0})
-            for order in rows:
-                key = order.documents_issued_at.strftime('%Y-%m') if order.documents_issued_at else 'без даты'
+            for row in rows:
+                key = row['date'].strftime('%Y-%m') if row.get('date') else 'без даты'
                 buckets[key]['orders'] += 1
-                buckets[key]['quantity'] += order.quantity or 1
-                buckets[key]['revenue'] += float(order.price or 0)
+                buckets[key]['quantity'] += row['quantity'] or 0
+                buckets[key]['revenue'] += row['revenue'] or 0
             analytics_rows = [
                 {
                     'label': key,
@@ -10036,11 +10107,11 @@ def director_report(section='sales'):
             ]
         elif section == 'branches':
             buckets = defaultdict(lambda: {'orders': 0, 'quantity': 0, 'revenue': 0.0})
-            for order in rows:
-                key = order.warehouse.name if order.warehouse else 'Без филиала'
+            for row in rows:
+                key = row['warehouse'].name if row.get('warehouse') else 'Без филиала'
                 buckets[key]['orders'] += 1
-                buckets[key]['quantity'] += order.quantity or 1
-                buckets[key]['revenue'] += float(order.price or 0)
+                buckets[key]['quantity'] += row['quantity'] or 0
+                buckets[key]['revenue'] += row['revenue'] or 0
             analytics_rows = sorted(
                 ({'label': key, **value, 'average': value['revenue'] / value['orders'] if value['orders'] else 0} for key, value in buckets.items()),
                 key=lambda row: row['revenue'],
@@ -10048,19 +10119,21 @@ def director_report(section='sales'):
             )
         elif section == 'types':
             buckets = defaultdict(lambda: {'orders': 0, 'quantity': 0, 'revenue': 0.0})
-            for order in rows:
-                order_lines = order.lines.order_by(CustomerOrderLine.line_no.asc()).all()
-                if order_lines:
-                    for line in order_lines:
+            for row in rows:
+                lines = row.get('lines') or []
+                if lines:
+                    line_count = len(lines)
+                    for line in lines:
                         label = _article_group_code(line.article_snapshot or (line.item.article if line.item else None)) or 'Без типа'
                         buckets[label]['orders'] += 1
                         buckets[label]['quantity'] += line.quantity or 1
-                        buckets[label]['revenue'] += float(line.total_price or 0)
+                        buckets[label]['revenue'] += float(line.total_price if line.total_price is not None else ((row['revenue'] or 0) / line_count if line_count else 0))
                 else:
-                    label = _article_group_code(order.article_snapshot or (order.item.article if order.item else None)) or 'Без типа'
+                    item = row.get('item')
+                    label = _article_group_code(item.article if item else None) or 'Без типа'
                     buckets[label]['orders'] += 1
-                    buckets[label]['quantity'] += order.quantity or 1
-                    buckets[label]['revenue'] += float(order.price or 0)
+                    buckets[label]['quantity'] += row['quantity'] or 0
+                    buckets[label]['revenue'] += row['revenue'] or 0
             analytics_rows = sorted(
                 ({'label': key, **value, 'average': value['revenue'] / value['orders'] if value['orders'] else 0} for key, value in buckets.items()),
                 key=lambda row: row['quantity'],
@@ -10116,29 +10189,25 @@ def director_report(section='sales'):
             {'title': 'В пути', 'value': len([t for t in trailers if t.status == 'IN_TRANSIT' or t.lifecycle_status == 'in_transit']), 'caption': 'логистика'},
         ]
         if section == 'turnover':
-            sold_query = order_scope(CustomerOrder.query).filter(
-                CustomerOrder.documents_issued == True,
-                CustomerOrder.documents_issued_at >= period_start,
-                CustomerOrder.documents_issued_at <= period_end,
-                CustomerOrder.status != 'cancelled',
-            )
-            sold_orders = sold_query.all()
+            sold_records = contract_report_records()
             period_days = max((date_to - date_from).days + 1, 1)
             stock_buckets = defaultdict(lambda: {'stock': 0, 'sold': 0, 'revenue': 0.0})
             for trailer in trailers:
                 label = _article_group_code(trailer.item.article if trailer.item else None) or 'Без типа'
                 stock_buckets[label]['stock'] += 1
-            for order in sold_orders:
-                order_lines = order.lines.order_by(CustomerOrderLine.line_no.asc()).all()
-                if order_lines:
-                    for line in order_lines:
+            for record in sold_records:
+                lines = record.get('lines') or []
+                if lines:
+                    line_count = len(lines)
+                    for line in lines:
                         label = _article_group_code(line.article_snapshot or (line.item.article if line.item else None)) or 'Без типа'
                         stock_buckets[label]['sold'] += line.quantity or 1
-                        stock_buckets[label]['revenue'] += float(line.total_price or 0)
+                        stock_buckets[label]['revenue'] += float(line.total_price if line.total_price is not None else ((record['revenue'] or 0) / line_count if line_count else 0))
                 else:
-                    label = _article_group_code(order.article_snapshot or (order.item.article if order.item else None)) or 'Без типа'
-                    stock_buckets[label]['sold'] += order.quantity or 1
-                    stock_buckets[label]['revenue'] += float(order.price or 0)
+                    item = record.get('item')
+                    label = _article_group_code(item.article if item else None) or 'Без типа'
+                    stock_buckets[label]['sold'] += record['quantity'] or 0
+                    stock_buckets[label]['revenue'] += record['revenue'] or 0
             analytics_rows = []
             for label, value in stock_buckets.items():
                 avg_stock = value['stock']
@@ -10310,17 +10379,10 @@ def director_report(section='sales'):
 
     chart_data = {'labels': [], 'revenue': [], 'quantity': [], 'average': [], 'stock': [], 'turnover': []}
     if section == 'sales':
-        buckets = defaultdict(lambda: {'orders': 0, 'quantity': 0, 'revenue': 0.0})
-        for order in rows:
-            key = order.documents_issued_at.strftime('%Y-%m') if order.documents_issued_at else 'без даты'
-            buckets[key]['orders'] += 1
-            buckets[key]['quantity'] += order.quantity or 1
-            buckets[key]['revenue'] += float(order.price or 0)
-        for key, value in sorted(buckets.items()):
-            chart_data['labels'].append(key)
-            chart_data['revenue'].append(round(value['revenue'], 2))
-            chart_data['quantity'].append(value['quantity'])
-            chart_data['average'].append(round(value['revenue'] / value['orders'], 2) if value['orders'] else 0)
+        chart_data['labels'] = [row['label'] for row in analytics_rows]
+        chart_data['revenue'] = [round(row['revenue'], 2) for row in analytics_rows]
+        chart_data['quantity'] = [row['quantity'] for row in analytics_rows]
+        chart_data['average'] = [round(row['average'], 2) for row in analytics_rows]
     elif section in ('dynamics', 'branches', 'types'):
         chart_data['labels'] = [row['label'] for row in analytics_rows]
         chart_data['revenue'] = [round(row['revenue'], 2) for row in analytics_rows]
