@@ -4263,6 +4263,20 @@ def _kaspi_ms(value: date | None, end_of_day: bool = False) -> int | None:
     return int(dt.timestamp() * 1000)
 
 
+def _parse_kaspi_filter_date(value) -> date | None:
+    text = (value or '').strip() if isinstance(value, str) else value
+    if not text:
+        return None
+    if isinstance(text, date):
+        return text
+    for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%d.%m.%Y'):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    raise ValueError('Дата должна быть в формате YYYY-MM-DD, MM/DD/YYYY или DD.MM.YYYY.')
+
+
 def _kaspi_customer_name(attrs: dict) -> str:
     customer = attrs.get('customer') or {}
     parts = [
@@ -5951,8 +5965,8 @@ def kaspi_order_import():
         if current_user.is_manager:
             form.assigned_user_id.data = current_user.id
             list_form.assigned_user_id.data = current_user.id
-        list_form.date_from.data = date.today() - timedelta(days=7)
-        list_form.date_to.data = date.today()
+        list_form.date_from.data = (date.today() - timedelta(days=7)).isoformat()
+        list_form.date_to.data = date.today().isoformat()
 
     client = KaspiShopClient(
         token=current_app.config.get('KASPI_SHOP_TOKEN'),
@@ -6002,15 +6016,25 @@ def kaspi_order_import_list():
         base_url=current_app.config.get('KASPI_SHOP_API_BASE_URL'),
     )
     if not list_form.validate_on_submit():
-        flash('Проверьте параметры списка Kaspi.', 'danger')
+        details = []
+        for field_name, errors in list_form.errors.items():
+            details.append(f'{getattr(list_form, field_name).label.text}: {", ".join(errors)}')
+        flash('Проверьте параметры списка Kaspi: ' + '; '.join(details), 'danger')
+        return render_template('kaspi_order_import.html', form=form, list_form=list_form, kaspi_configured=client.is_configured)
+
+    try:
+        date_from = _parse_kaspi_filter_date(list_form.date_from.data)
+        date_to = _parse_kaspi_filter_date(list_form.date_to.data)
+    except ValueError as exc:
+        flash(str(exc), 'danger')
         return render_template('kaspi_order_import.html', form=form, list_form=list_form, kaspi_configured=client.is_configured)
 
     try:
         payload = client.list_orders(
             state=list_form.state.data,
             status=(list_form.status.data or None),
-            creation_from_ms=_kaspi_ms(list_form.date_from.data),
-            creation_to_ms=_kaspi_ms(list_form.date_to.data, end_of_day=True),
+            creation_from_ms=_kaspi_ms(date_from),
+            creation_to_ms=_kaspi_ms(date_to, end_of_day=True),
             page_number=list_form.page_number.data or 0,
             page_size=list_form.page_size.data or 20,
         )

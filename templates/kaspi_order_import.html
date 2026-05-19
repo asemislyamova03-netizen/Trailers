@@ -49,11 +49,13 @@
     </div>
     <div class="col-md-3">
       {{ list_form.date_from.label(class="form-label") }}
-      {{ list_form.date_from(class="form-control") }}
+      {{ list_form.date_from(class="form-control", placeholder="2026-05-01") }}
+      {% for error in list_form.date_from.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
     </div>
     <div class="col-md-3">
       {{ list_form.date_to.label(class="form-label") }}
-      {{ list_form.date_to(class="form-control") }}
+      {{ list_form.date_to(class="form-control", placeholder="2026-05-19") }}
+      {% for error in list_form.date_to.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
     </div>
     <div class="col-md-2">
       {{ list_form.page_number.label(class="form-label") }}
