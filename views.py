@@ -7667,7 +7667,11 @@ def vin_registry_list():
             CustomerOrder.order_number.ilike(like),
             Customer.name.ilike(like),
         ))
-    rows = query.order_by(VinRegistry.created_at.desc(), VinRegistry.id.desc()).limit(300).all()
+    rows = query.order_by(
+        VinRegistry.serial7.desc().nullslast(),
+        VinRegistry.vin_full.desc().nullslast(),
+        VinRegistry.id.desc(),
+    ).limit(300).all()
     return render_template('vin_registry_list.html', rows=rows, filters={'status': status, 'year': year, 'modification': modification, 'serial7': serial, 'docs': docs, 'q': q})
 
 
