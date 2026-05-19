@@ -27,7 +27,7 @@ from forms import (
     CustomerForm, SalesContractForm, LoginForm, UserForm, OTTSForm, LeadForm, CustomerOrderForm, OrderPaymentForm,
     SupplyNeedForm, ProductionRequestForm, ProductionRequestLineForm, StockMovementForm, StockMovementBatchForm,
     AssignVinForm, SendTrailerForm, StockReplenishmentForm, TrailerItemChangeForm, ContractTemplateForm,
-    KaspiOrderImportForm
+    KaspiOrderImportForm, KaspiOrderListImportForm
 )
 from collections import defaultdict
 import sqlalchemy as sa
@@ -4237,6 +4237,13 @@ def _fill_kaspi_import_form_choices(form: KaspiOrderImportForm) -> None:
     form.assigned_user_id.choices = [(0, '— не назначен —')] + [(u.id, u.full_name or u.username) for u in users]
 
 
+def _fill_kaspi_list_import_form_choices(form: KaspiOrderListImportForm) -> None:
+    warehouses = Warehouse.query.filter_by(is_active=True).order_by(Warehouse.name).all()
+    form.warehouse_id.choices = [(0, '— не выбран —')] + [(w.id, w.name) for w in warehouses]
+    users = User.query.order_by(User.full_name, User.username).all()
+    form.assigned_user_id.choices = [(0, '— не назначен —')] + [(u.id, u.full_name or u.username) for u in users]
+
+
 def _kaspi_dt(value) -> datetime | None:
     if value in (None, ''):
         return None
@@ -4247,6 +4254,13 @@ def _kaspi_dt(value) -> datetime | None:
     if ts > 10_000_000_000:
         ts = ts / 1000
     return datetime.fromtimestamp(ts)
+
+
+def _kaspi_ms(value: date | None, end_of_day: bool = False) -> int | None:
+    if not value:
+        return None
+    dt = datetime.combine(value, time.max if end_of_day else time.min)
+    return int(dt.timestamp() * 1000)
 
 
 def _kaspi_customer_name(attrs: dict) -> str:
@@ -4280,6 +4294,16 @@ def _kaspi_entry_summary(entries: list[dict]) -> str:
         attrs = entry.get('attributes') or {}
         category = attrs.get('category') or {}
         product = attrs.get('product') or {}
+        codes = [
+            attrs.get('code'),
+            attrs.get('merchantProductCode'),
+            attrs.get('sku'),
+            attrs.get('article'),
+            product.get('code'),
+            product.get('merchantProductCode'),
+            product.get('sku'),
+        ]
+        code_text = next((str(code).strip() for code in codes if code), '')
         title = (
             product.get('name')
             or product.get('title')
@@ -4290,7 +4314,8 @@ def _kaspi_entry_summary(entries: list[dict]) -> str:
         )
         qty = attrs.get('quantity') or 1
         total = attrs.get('totalPrice')
-        lines.append(f'{title} — {qty} шт. — {total or 0} ₸')
+        prefix = f'[{code_text}] ' if code_text else ''
+        lines.append(f'{prefix}{title} — {qty} шт. — {total or 0} ₸')
     return '\n'.join(lines)
 
 
@@ -4332,6 +4357,86 @@ def _find_item_for_kaspi_entries(entries: list[dict]) -> Item | None:
             if found:
                 return found
     return None
+
+
+def _existing_kaspi_lead(order_data: dict, fallback_code: str | None = None) -> Lead | None:
+    attrs = order_data.get('attributes') or {}
+    order_id = str(order_data.get('id') or '').strip()
+    order_code = str(attrs.get('code') or fallback_code or '').strip()
+    conditions = []
+    if order_id:
+        conditions.append(Lead.external_lead_id == order_id)
+    if order_code:
+        conditions.append(Lead.external_chat_id == order_code)
+    if not conditions:
+        return None
+    return (
+        Lead.query
+        .filter(Lead.source_channel == 'KASPI', or_(*conditions))
+        .order_by(Lead.id.desc())
+        .first()
+    )
+
+
+def _create_kaspi_lead(order_data: dict, entries: list[dict], warehouse_id: int | None, assigned_user_id: int | None, fallback_code: str | None = None) -> Lead:
+    attrs = order_data.get('attributes') or {}
+    order_id = order_data.get('id')
+    order_code = attrs.get('code') or fallback_code or order_id
+    selected_item = _find_item_for_kaspi_entries(entries)
+    message_text = _kaspi_order_text(order_data, entries)
+    source_payload = {
+        'order': order_data,
+        'entries': entries,
+    }
+    created_at = _kaspi_dt(attrs.get('creationDate')) or datetime.utcnow()
+    address = attrs.get('deliveryAddress') or {}
+    lead = Lead(
+        created_at=created_at,
+        updated_at=datetime.utcnow(),
+        status='NEW',
+        conversation_status='new',
+        priority='NORMAL',
+        channel='kaspi',
+        source_channel='KASPI',
+        source_name='Kaspi Магазин',
+        source_platform='kaspi_shop',
+        source_account='KASPI_SHOP_TOKEN',
+        external_chat_id=str(order_code) if order_code else None,
+        external_lead_id=str(order_id) if order_id else str(order_code),
+        source_payload=json.dumps(source_payload, ensure_ascii=False),
+        customer_name=_kaspi_customer_name(attrs),
+        phone=_kaspi_customer_phone(attrs),
+        text=message_text,
+        customer_city=address.get('town') if isinstance(address, dict) else None,
+        interest_text=_kaspi_entry_summary(entries) or None,
+        desired_item_id=selected_item.id if selected_item else None,
+        desired_model=selected_item.name if selected_item else None,
+        article_snapshot=selected_item.article if selected_item else None,
+        product_name_snapshot=selected_item.name if selected_item else None,
+        calculated_price=attrs.get('totalPrice'),
+        warehouse_id=warehouse_id or None,
+        assigned_user_id=assigned_user_id or None,
+        comment='Импортировано из Kaspi Магазина. Токен хранится только в переменных окружения сервера.',
+        last_message_at=datetime.utcnow(),
+        last_message_text=message_text[:500],
+        unread_count=1,
+    )
+    db.session.add(lead)
+    db.session.flush()
+    db.session.add(LeadMessage(
+        lead_id=lead.id,
+        created_at=datetime.utcnow(),
+        direction='IN',
+        sender_type='client',
+        channel='KASPI',
+        external_message_id=f'kaspi-order-{order_id or order_code}',
+        sender_name=lead.customer_name,
+        sender_contact=lead.phone,
+        text=message_text,
+        payload_json=json.dumps(source_payload, ensure_ascii=False),
+        is_read=False,
+    ))
+    return lead
 
 
 def _order_future_availability(item_id: int | None, warehouse_id: int | None):
@@ -5836,12 +5941,18 @@ def kaspi_order_import():
         abort(403)
 
     form = KaspiOrderImportForm()
+    list_form = KaspiOrderListImportForm(prefix='list')
     _fill_kaspi_import_form_choices(form)
+    _fill_kaspi_list_import_form_choices(list_form)
     if request.method == 'GET':
         if current_user.warehouse_id:
             form.warehouse_id.data = current_user.warehouse_id
+            list_form.warehouse_id.data = current_user.warehouse_id
         if current_user.is_manager:
             form.assigned_user_id.data = current_user.id
+            list_form.assigned_user_id.data = current_user.id
+        list_form.date_from.data = date.today() - timedelta(days=7)
+        list_form.date_to.data = date.today()
 
     client = KaspiShopClient(
         token=current_app.config.get('KASPI_SHOP_TOKEN'),
@@ -5850,90 +5961,81 @@ def kaspi_order_import():
 
     if form.validate_on_submit():
         order_code = (form.order_code.data or '').strip()
-        existing = Lead.query.filter(
-            Lead.source_channel == 'KASPI',
-            or_(Lead.external_chat_id == order_code, Lead.external_lead_id == order_code),
-        ).order_by(Lead.id.desc()).first()
-        if existing:
-            flash('Этот заказ Kaspi уже есть в заявках.', 'info')
-            return redirect(url_for('main.lead_detail', lead_id=existing.id))
 
         try:
             order_data = client.get_order_by_code(order_code)
             if not order_data:
                 flash('Kaspi не вернул заказ с таким номером.', 'warning')
-                return render_template('kaspi_order_import.html', form=form, kaspi_configured=client.is_configured)
+                return render_template('kaspi_order_import.html', form=form, list_form=list_form, kaspi_configured=client.is_configured)
             order_id = order_data.get('id')
-            attrs = order_data.get('attributes') or {}
             entries = client.get_order_entries(order_id) if order_id else []
         except KaspiClientError as exc:
             flash(str(exc), 'danger')
-            return render_template('kaspi_order_import.html', form=form, kaspi_configured=client.is_configured)
+            return render_template('kaspi_order_import.html', form=form, list_form=list_form, kaspi_configured=client.is_configured)
 
-        existing = Lead.query.filter_by(source_channel='KASPI', external_lead_id=str(order_id)).first() if order_id else None
+        existing = _existing_kaspi_lead(order_data, order_code)
         if existing:
             flash('Этот заказ Kaspi уже есть в заявках.', 'info')
             return redirect(url_for('main.lead_detail', lead_id=existing.id))
 
-        selected_item = _find_item_for_kaspi_entries(entries)
-        message_text = _kaspi_order_text(order_data, entries)
-        source_payload = {
-            'order': order_data,
-            'entries': entries,
-        }
-        created_at = _kaspi_dt(attrs.get('creationDate')) or datetime.utcnow()
-        address = attrs.get('deliveryAddress') or {}
-        lead = Lead(
-            created_at=created_at,
-            updated_at=datetime.utcnow(),
-            status='NEW',
-            conversation_status='new',
-            priority='NORMAL',
-            channel='kaspi',
-            source_channel='KASPI',
-            source_name='Kaspi Магазин',
-            source_platform='kaspi_shop',
-            source_account='KASPI_SHOP_TOKEN',
-            external_chat_id=attrs.get('code') or order_code,
-            external_lead_id=str(order_id) if order_id else order_code,
-            source_payload=json.dumps(source_payload, ensure_ascii=False),
-            customer_name=_kaspi_customer_name(attrs),
-            phone=_kaspi_customer_phone(attrs),
-            text=message_text,
-            customer_city=address.get('town') if isinstance(address, dict) else None,
-            interest_text=_kaspi_entry_summary(entries) or None,
-            desired_item_id=selected_item.id if selected_item else None,
-            desired_model=selected_item.name if selected_item else None,
-            article_snapshot=selected_item.article if selected_item else None,
-            product_name_snapshot=selected_item.name if selected_item else None,
-            calculated_price=attrs.get('totalPrice'),
-            warehouse_id=form.warehouse_id.data or None,
-            assigned_user_id=form.assigned_user_id.data or None,
-            comment='Импортировано из Kaspi Магазина. Токен хранится только в переменных окружения сервера.',
-            last_message_at=datetime.utcnow(),
-            last_message_text=message_text[:500],
-            unread_count=1,
-        )
-        db.session.add(lead)
-        db.session.flush()
-        db.session.add(LeadMessage(
-            lead_id=lead.id,
-            created_at=datetime.utcnow(),
-            direction='IN',
-            sender_type='client',
-            channel='KASPI',
-            external_message_id=f'kaspi-order-{order_id or order_code}',
-            sender_name=lead.customer_name,
-            sender_contact=lead.phone,
-            text=message_text,
-            payload_json=json.dumps(source_payload, ensure_ascii=False),
-            is_read=False,
-        ))
+        lead = _create_kaspi_lead(order_data, entries, form.warehouse_id.data, form.assigned_user_id.data, order_code)
         db.session.commit()
         flash('Заказ Kaspi импортирован как заявка и входящее сообщение.', 'success')
         return redirect(url_for('main.lead_detail', lead_id=lead.id))
 
-    return render_template('kaspi_order_import.html', form=form, kaspi_configured=client.is_configured)
+    return render_template('kaspi_order_import.html', form=form, list_form=list_form, kaspi_configured=client.is_configured)
+
+
+@main_bp.route('/integrations/kaspi/orders/import-list', methods=['POST'])
+@login_required
+def kaspi_order_import_list():
+    _block_production_commercial_access()
+    if not (current_user.is_admin or current_user.is_director or current_user.is_manager):
+        abort(403)
+
+    form = KaspiOrderImportForm()
+    list_form = KaspiOrderListImportForm(prefix='list')
+    _fill_kaspi_import_form_choices(form)
+    _fill_kaspi_list_import_form_choices(list_form)
+    client = KaspiShopClient(
+        token=current_app.config.get('KASPI_SHOP_TOKEN'),
+        base_url=current_app.config.get('KASPI_SHOP_API_BASE_URL'),
+    )
+    if not list_form.validate_on_submit():
+        flash('Проверьте параметры списка Kaspi.', 'danger')
+        return render_template('kaspi_order_import.html', form=form, list_form=list_form, kaspi_configured=client.is_configured)
+
+    try:
+        payload = client.list_orders(
+            state=list_form.state.data,
+            status=(list_form.status.data or None),
+            creation_from_ms=_kaspi_ms(list_form.date_from.data),
+            creation_to_ms=_kaspi_ms(list_form.date_to.data, end_of_day=True),
+            page_number=list_form.page_number.data or 0,
+            page_size=list_form.page_size.data or 20,
+        )
+    except KaspiClientError as exc:
+        flash(str(exc), 'danger')
+        return render_template('kaspi_order_import.html', form=form, list_form=list_form, kaspi_configured=client.is_configured)
+
+    imported = 0
+    skipped = 0
+    for order_data in payload.get('data') or []:
+        if _existing_kaspi_lead(order_data):
+            skipped += 1
+            continue
+        order_id = order_data.get('id')
+        try:
+            entries = client.get_order_entries(order_id) if order_id else []
+        except KaspiClientError:
+            entries = []
+        _create_kaspi_lead(order_data, entries, list_form.warehouse_id.data, list_form.assigned_user_id.data)
+        imported += 1
+    db.session.commit()
+    total = (payload.get('meta') or {}).get('totalCount')
+    tail = f' Всего по фильтру Kaspi: {total}.' if total is not None else ''
+    flash(f'Импортировано заявок Kaspi: {imported}. Пропущено дублей: {skipped}.{tail}', 'success')
+    return redirect(url_for('main.leads_list', channel='KASPI'))
 
 
 @main_bp.route('/leads/new', methods=['GET', 'POST'])

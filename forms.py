@@ -599,6 +599,43 @@ class KaspiOrderImportForm(FlaskForm):
     submit = SubmitField('Импортировать в заявки')
 
 
+class KaspiOrderListImportForm(FlaskForm):
+    state = SelectField(
+        'Состояние',
+        choices=[
+            ('NEW', 'Новые'),
+            ('SIGN_REQUIRED', 'Нужно подписать'),
+            ('PICKUP', 'Самовывоз'),
+            ('DELIVERY', 'Ваша доставка'),
+            ('KASPI_DELIVERY', 'Kaspi Доставка'),
+            ('ARCHIVE', 'Архив'),
+        ],
+        validators=[DataRequired()],
+        default='NEW',
+    )
+    status = SelectField(
+        'Статус',
+        choices=[
+            ('', '— любой —'),
+            ('APPROVED_BY_BANK', 'Продавец должен принять'),
+            ('ACCEPTED_BY_MERCHANT', 'Принят'),
+            ('COMPLETED', 'Завершен'),
+            ('CANCELLED', 'Отменен'),
+            ('CANCELLING', 'В процессе отмены'),
+            ('KASPI_DELIVERY_RETURN_REQUESTED', 'Ожидает возврата'),
+            ('RETURNED', 'Возвращен'),
+        ],
+        validators=[Optional()],
+    )
+    date_from = DateField('С даты', format='%Y-%m-%d', validators=[Optional()])
+    date_to = DateField('По дату', format='%Y-%m-%d', validators=[Optional()])
+    page_number = IntegerField('Страница', validators=[DataRequired(), NumberRange(min=0)], default=0)
+    page_size = IntegerField('Кол-во', validators=[DataRequired(), NumberRange(min=1, max=100)], default=20)
+    warehouse_id = SelectField('Склад / филиал', coerce=int, validators=[Optional()])
+    assigned_user_id = SelectField('Ответственный', coerce=int, validators=[Optional()])
+    submit = SubmitField('Импортировать список')
+
+
 class SupplyNeedForm(IdempotentFlaskForm):
     need_type = SelectField(
         'Тип потребности',

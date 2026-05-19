@@ -13,6 +13,7 @@
 {% endif %}
 
 <div class="app-card p-4">
+  <h2 class="h5 mb-3">Один заказ по номеру</h2>
   <form method="post" class="row g-3">
     {{ form.hidden_tag() }}
     <div class="col-md-4">
@@ -35,9 +36,51 @@
 </div>
 
 <div class="app-card p-4 mt-4">
+  <h2 class="h5 mb-3">Список заказов за период</h2>
+  <form method="post" action="{{ url_for('main.kaspi_order_import_list') }}" class="row g-3">
+    {{ list_form.hidden_tag() }}
+    <div class="col-md-3">
+      {{ list_form.state.label(class="form-label") }}
+      {{ list_form.state(class="form-select") }}
+    </div>
+    <div class="col-md-3">
+      {{ list_form.status.label(class="form-label") }}
+      {{ list_form.status(class="form-select") }}
+    </div>
+    <div class="col-md-3">
+      {{ list_form.date_from.label(class="form-label") }}
+      {{ list_form.date_from(class="form-control") }}
+    </div>
+    <div class="col-md-3">
+      {{ list_form.date_to.label(class="form-label") }}
+      {{ list_form.date_to(class="form-control") }}
+    </div>
+    <div class="col-md-2">
+      {{ list_form.page_number.label(class="form-label") }}
+      {{ list_form.page_number(class="form-control") }}
+    </div>
+    <div class="col-md-2">
+      {{ list_form.page_size.label(class="form-label") }}
+      {{ list_form.page_size(class="form-control") }}
+    </div>
+    <div class="col-md-4">
+      {{ list_form.warehouse_id.label(class="form-label") }}
+      {{ list_form.warehouse_id(class="form-select") }}
+    </div>
+    <div class="col-md-4">
+      {{ list_form.assigned_user_id.label(class="form-label") }}
+      {{ list_form.assigned_user_id(class="form-select") }}
+    </div>
+    <div class="col-12">
+      {{ list_form.submit(class="btn btn-orange") }}
+    </div>
+  </form>
+</div>
+
+<div class="app-card p-4 mt-4">
   <h2 class="h5">Как это работает</h2>
   <div class="text-muted">
-    Заказ Kaspi импортируется как заявка и входящее сообщение в диалогах. CRM-заказ создается отдельно менеджером после проверки клиента, номенклатуры и наличия.
+    Заказ Kaspi импортируется как заявка и входящее сообщение в диалогах. CRM-заказ создается отдельно менеджером после проверки клиента, номенклатуры и наличия. Артикул Kaspi может отличаться от внутренней номенклатуры, поэтому совпадение выполняется только по точному коду; если совпадения нет, товар остается текстом в заявке.
   </div>
 </div>
 {% endblock %}
