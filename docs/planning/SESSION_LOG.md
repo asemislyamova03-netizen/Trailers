@@ -36,6 +36,20 @@
 
 Дата: 2026-05-19
 Проект: trailers
+Модуль: session close / Kaspi / reports / production / orders
+Что делали: Закрывали рабочую сессию 19.05.2026 и фиксировали итог по доработкам дня.
+Что сделано: За день доработаны роли менеджера/логиста/производства, построчная логика документов и отгрузки, редактирование строк заказа, мобильное отображение производства и VIN-реестра, изменение комплектации, отчеты с графиками/агрегацией/историческими договорами, выбор шаблонов договоров, фильтр направления и предупреждения по аномальным договорам, первый слой Kaspi-интеграции через `Lead`/`LeadMessage`. По Kaspi подтверждено, что текущий сервер имеет интернет, но `kaspi.kz` с его IP уходит в timeout; принято решение завтра пробовать на хостинге организации.
+Какие файлы изменены: `app.py`, `forms.py`, `kaspi_client.py`, `views.py`, `static/css/app.css`, `templates/base.html`, `templates/assign_vin_form.html`, `templates/contract_template_form.html`, `templates/contract_templates_list.html`, `templates/contracts_list.html`, `templates/director_report.html`, `templates/kaspi_order_import.html`, `templates/lead_detail.html`, `templates/leads_list.html`, `templates/manager_workspace.html`, `templates/order_detail.html`, `templates/production_workspace.html`, `templates/stock_replenishment_list.html`, `templates/supply_needs_list.html`, `templates/trailer_item_form.html`, `templates/vin_registry_detail.html`, `templates/vin_registry_list.html`, `docs/planning/CURRENT_STATE.md`, `docs/planning/NEXT_ACTIONS.md`, `docs/planning/SESSION_LOG.md`.
+Где остановились: Кодовые изменения закоммичены и запушены; локально отслеживаемые файлы чистые. На текущем сервере Kaspi API проверить нельзя из-за timeout до `kaspi.kz`.
+Что осталось: Подготовить перенос/проверку на хостинге организации, перенести базу и env-переменные, проверить доступ к `kaspi.kz`, затем тестировать импорт Kaspi-заказов в заявки и диалоги.
+Блокеры: Текущий сервер/IP не получает ответ от `kaspi.kz`; реальные Kaspi-заказы и соответствие артикулов Kaspi внутренней номенклатуре требуют проверки на рабочем хостинге.
+Следующий шаг: Завтра начать с backup текущего сервера и развертывания/проверки проекта на хостинге организации.
+С чего начать следующую сессию: На текущем сервере сделать архив `trailers.db` и проекта, затем на новом хостинге выполнить `git clone`, перенести базу, задать `KASPI_SHOP_TOKEN` и проверить `curl -I --max-time 15 https://kaspi.kz`.
+
+---
+
+Дата: 2026-05-19
+Проект: trailers
 Модуль: integrations / Kaspi / leads
 Что делали: Начали безопасную интеграцию Kaspi Магазина с заявками и диалогами.
 Что сделано: Добавлен клиент Kaspi Shop API с токеном из переменной окружения `KASPI_SHOP_TOKEN`; добавлен раздел `Kaspi` для менеджера/директора/админа; заказ Kaspi импортируется по коду или списком за период/состояние как заявка `Lead` и входящее сообщение `LeadMessage`, чтобы дальше попадать в общий контур диалогов. CRM-заказ автоматически не создаётся.
