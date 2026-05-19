@@ -73,12 +73,15 @@
         <option value="PENDING" {% if status_filter == 'PENDING' %}selected{% endif %}>Оплата на проверке</option>
       </select>
     </div>
-    <div class="col-md-2">
+    <div class="col-md-3">
       <label class="form-label">Поиск</label>
-      <div class="input-group">
-        <input name="q" value="{{ search }}" class="form-control" placeholder="VIN, модель, партия">
-        <button class="btn btn-orange" type="submit">ОК</button>
-      </div>
+      <input name="q" value="{{ search }}" class="form-control" placeholder="VIN, модель, партия">
+    </div>
+    <div class="col-md-2">
+      <button class="btn btn-orange w-100" type="submit">Сформировать</button>
+    </div>
+    <div class="col-md-2">
+      <a class="btn btn-soft w-100" href="{{ url_for('main.director_report', section=section) }}">Сбросить</a>
     </div>
   </form>
 </div>
