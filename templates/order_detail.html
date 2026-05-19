@@ -428,10 +428,11 @@
             <form method="post" action="{{ url_for('main.order_mark_invoice_sent', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-soft">Счёт отправлен</button></form>
             <form method="post" action="{{ url_for('main.order_mark_contract_ready', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-soft">Договор готов</button></form>
             <form method="post" action="{{ url_for('main.order_mark_documents_ready', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-soft">Документы готовы</button></form>
-            <form method="post" action="{{ url_for('main.order_issue_documents', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-orange" {% if not order_contract or order.remaining_amount > 0 or not get_order_effective_vin(order) %}disabled{% endif %}>Документы выданы</button></form>
-            {% if get_order_effective_vin(order) and not order_contract %}<form method="post" action="{{ url_for('main.order_contract_create', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-outline-primary">Создать договор</button></form>{% endif %}
+            <form method="post" action="{{ url_for('main.order_issue_documents', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-orange" {% if not order_contract or order.remaining_amount > 0 or document_blockers %}disabled{% endif %}>Документы выданы</button></form>
+            {% if not document_blockers and not order_contract %}<form method="post" action="{{ url_for('main.order_contract_create', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-outline-primary">Создать договор</button></form>{% endif %}
           </div>
           {% if not order_contract %}<div class="text-muted small mt-2">Для выдачи документов сначала создайте договор.</div>{% endif %}
+          {% if document_blockers %}<div class="text-muted small mt-2">Для документов: {{ document_blockers|join('; ') }}.</div>{% endif %}
           {% else %}
           <div class="text-muted">Документальный статус закрыт. Дальше доступна только физическая отгрузка, если она ещё не выполнена.</div>
           {% endif %}
@@ -475,7 +476,52 @@
       </div>
       <div class="col-lg-4"><div class="app-card p-3 h-100"><h3 class="h6">Перемещения</h3><table class="table table-sm"><tbody>{% for m in movements %}<tr><td>{{ m.movement_type }}</td><td>{{ m.from_warehouse.name if m.from_warehouse else '' }} → {{ m.to_warehouse.name if m.to_warehouse else 'клиент' }}</td><td>{{ m.status|status_label }}</td></tr>{% else %}<tr><td class="text-muted">Перемещений нет</td></tr>{% endfor %}</tbody></table></div></div>
     </div>
-    {% if can_manage and order.trailer_id and not order.is_shipped and order.status != 'cancelled' %}
+    {% if can_manage and order.documents_issued and not order.is_shipped and order.status != 'cancelled' %}
+    <div class="app-card p-3 mt-4">
+      <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-3">
+        <div>
+          <strong>Физическая отгрузка по позициям</strong>
+          <div class="text-muted small">Каждая строка закрывается отдельно. Заказ станет отгруженным, когда закрыты все позиции.</div>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead><tr><th>Позиция</th><th>VIN</th><th>Статус</th><th class="text-end">Действие</th></tr></thead>
+          <tbody>
+          {% for row in order_line_rows %}
+            {% set line = row.line %}
+            <tr>
+              <td>
+                <div class="fw-semibold">#{{ line.line_no }} {{ line.article_snapshot or (line.item.article if line.item else '') }}</div>
+                <div class="small text-muted">{{ line.product_name_snapshot or (line.item.name if line.item else '') }}</div>
+              </td>
+              <td>
+                {% for vin in row.vin_rows %}
+                  <div>{{ vin.vin_full or vin.serial7 }}</div>
+                {% else %}
+                  <span class="text-muted">не выбран</span>
+                {% endfor %}
+              </td>
+              <td><span class="badge text-bg-{{ line.status|status_badge_class }}">{{ line.status|status_label }}</span></td>
+              <td class="text-end">
+                {% if row.can_ship %}
+                <form method="post" action="{{ url_for('main.order_line_ship', order_id=order.id, line_id=line.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="form_token" value="{{ form_token() }}">
+                  <button class="btn btn-sm btn-success">Отгрузить позицию</button>
+                </form>
+                {% else %}
+                <span class="small text-muted">{{ row.ship_message }}</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+    {% if can_manage and order.trailer_id and not order_line_rows and not order.is_shipped and order.status != 'cancelled' %}
     <div class="app-card p-3 mt-4">
       <form method="post" action="{{ url_for('main.order_ship', order_id=order.id) }}" class="d-flex justify-content-between align-items-center flex-wrap gap-2">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

@@ -4442,6 +4442,85 @@ def _can_edit_order_line_quantity(line: CustomerOrderLine) -> tuple[bool, str]:
     return True, ''
 
 
+def _active_vin_rows_for_order_line(line: CustomerOrderLine) -> list[VinRegistry]:
+    return (
+        VinRegistry.query
+        .filter(
+            VinRegistry.order_line_id == line.id,
+            VinRegistry.status.in_(['reserved', 'assigned', 'confirmed']),
+        )
+        .order_by(VinRegistry.confirmed_at.desc().nullslast(), VinRegistry.assigned_at.desc().nullslast(), VinRegistry.reserved_at.desc().nullslast(), VinRegistry.id.desc())
+        .all()
+    )
+
+
+def _trailers_for_order_line(line: CustomerOrderLine) -> list[Trailer]:
+    trailers = []
+    seen_ids = set()
+    for row in _active_vin_rows_for_order_line(line):
+        if row.trailer and row.trailer.id not in seen_ids:
+            trailers.append(row.trailer)
+            seen_ids.add(row.trailer.id)
+    for reservation in line.reservations:
+        if reservation.status == 'ACTIVE' and reservation.trailer and reservation.trailer.id not in seen_ids:
+            trailers.append(reservation.trailer)
+            seen_ids.add(reservation.trailer.id)
+    for contract_line in line.contract_lines:
+        if contract_line.trailer and contract_line.trailer.id not in seen_ids:
+            trailers.append(contract_line.trailer)
+            seen_ids.add(contract_line.trailer.id)
+    return trailers
+
+
+def _trailer_for_order_line(line: CustomerOrderLine) -> Trailer | None:
+    trailers = _trailers_for_order_line(line)
+    return trailers[0] if trailers else None
+
+
+def _order_lines_document_blockers(order: CustomerOrder) -> list[str]:
+    blockers = []
+    lines = order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()).all()
+    if not lines:
+        blockers.append('нет позиций заказа')
+        return blockers
+    for line in lines:
+        vin_count = len(_active_vin_rows_for_order_line(line))
+        if line.line_type == 'TRAILER' and vin_count < (line.quantity or 1):
+            blockers.append(f'по позиции #{line.line_no} не хватает VIN: {vin_count}/{line.quantity or 1}')
+    return blockers
+
+
+def _order_line_can_ship(line: CustomerOrderLine) -> tuple[bool, str]:
+    order = line.order
+    if not order or not order.documents_issued or order.status == 'cancelled':
+        return False, 'Сначала должны быть выданы документы.'
+    if line.status == 'shipped':
+        return False, 'Позиция уже отгружена.'
+    if line.line_type == 'TRAILER':
+        trailers = _trailers_for_order_line(line)
+        if len(trailers) < (line.quantity or 1):
+            return False, 'По позиции нет привязанного прицепа/VIN.'
+        for trailer in trailers:
+            if trailer.status != 'SOLD':
+                return False, 'Прицеп ещё не переведён в SOLD.'
+            if not current_user.is_admin and order.warehouse_id and trailer.warehouse_id != order.warehouse_id:
+                return False, 'Прицеп ещё не на складе выдачи.'
+            if _trailer_is_customer_shipped(trailer):
+                return False, 'Прицеп уже отгружен клиенту.'
+    return True, ''
+
+
+def _refresh_order_shipment_state(order: CustomerOrder) -> None:
+    lines = order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()).all()
+    if lines and all(line.status == 'shipped' for line in lines):
+        order.is_shipped = True
+        order.shipped_at = order.shipped_at or datetime.utcnow()
+        order.status = 'shipped'
+        contract = SalesContract.query.filter_by(order_id=order.id).first()
+        if contract:
+            contract.is_shipped = True
+
+
 def _line_snapshot_from_item(item: Item | None) -> dict:
     if not item:
         return {}
@@ -6637,6 +6716,7 @@ def order_detail(order_id):
         shortage_qty = max((line.quantity or 1) - production_qty, 0) if line.fulfillment_source == 'production' else 0
         can_edit_qty, edit_qty_message = _can_edit_order_line_quantity(line)
         can_delete_line, delete_message = _can_delete_order_line(line)
+        can_ship_line, ship_message = _order_line_can_ship(line)
         order_line_rows.append({
             'line': line,
             'vin_rows': vin_rows,
@@ -6651,6 +6731,8 @@ def order_detail(order_id):
             'edit_quantity_message': edit_qty_message,
             'can_delete': can_delete_line,
             'delete_message': delete_message,
+            'can_ship': can_ship_line,
+            'ship_message': ship_message,
         })
     add_line_stock_trailers = [
         trailer for trailer in (
@@ -6667,6 +6749,7 @@ def order_detail(order_id):
     ]
     add_line_items = Item.query.filter_by(is_active=True).order_by(Item.article.asc().nullslast(), Item.name.asc()).limit(150).all()
     order_contract = SalesContract.query.filter_by(order_id=order.id).first()
+    document_blockers = _order_lines_document_blockers(order)
     order_vin_row = _active_vin_registry_for_order(order.id)
     future_production_lines = []
     future_produced_unit_rows = []
@@ -6816,6 +6899,7 @@ def order_detail(order_id):
         add_line_stock_trailers=add_line_stock_trailers,
         add_line_items=add_line_items,
         order_contract=order_contract,
+        document_blockers=document_blockers,
         order_vin_row=order_vin_row,
         future_production_lines=future_production_lines,
         future_produced_unit_rows=future_produced_unit_rows,
@@ -7329,6 +7413,66 @@ def order_ship(order_id):
     add_order_event(order, 'shipped', new_value=order.trailer.vin if order.trailer else order.trailer_id)
     db.session.commit()
     flash('Прицеп физически отгружен клиенту.', 'success')
+    return redirect(url_for('main.order_detail', order_id=order.id))
+
+
+@main_bp.route('/orders/<int:order_id>/lines/<int:line_id>/ship', methods=['POST'])
+@login_required
+def order_line_ship(order_id, line_id):
+    order = CustomerOrder.query.get_or_404(order_id)
+    _ensure_can_manage_order(order)
+    line = CustomerOrderLine.query.filter_by(id=line_id, order_id=order.id).first_or_404()
+    if not can_ship_order(order) or order.status == 'cancelled':
+        abort(403)
+    contract = SalesContract.query.filter_by(order_id=order.id).first()
+    if not order.documents_issued or not contract:
+        flash('Сначала выдайте документы и зафиксируйте юридическую продажу.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    can_ship_line, ship_message = _order_line_can_ship(line)
+    if not can_ship_line:
+        flash(ship_message or 'Позицию пока нельзя отгрузить.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
+
+    trailers = _trailers_for_order_line(line)
+    line.status = 'shipped'
+    for reservation in line.reservations:
+        if reservation.status == 'ACTIVE':
+            reservation.status = 'CLOSED'
+    first_movement_id = None
+    for trailer in trailers:
+        trailer.lifecycle_status = 'customer_shipped'
+        shipment = StockMovement(
+            movement_type='customer_shipment',
+            status='arrived',
+            order_id=order.id,
+            order_line_id=line.id,
+            trailer_id=trailer.id,
+            from_warehouse_id=order.warehouse_id,
+            departure_date=date.today(),
+            arrival_date=date.today(),
+            received_at=datetime.utcnow(),
+            note=f'Отгрузка клиенту по заказу №{order.order_number}, позиция #{line.line_no}',
+        )
+        db.session.add(shipment)
+        db.session.flush()
+        if first_movement_id is None:
+            first_movement_id = shipment.id
+    _refresh_order_shipment_state(order)
+    if first_movement_id:
+        _finish_idempotency(idem_key, 'StockMovement', first_movement_id)
+    else:
+        _finish_idempotency(idem_key, 'CustomerOrderLine', line.id)
+    add_order_event(
+        order,
+        'shipped',
+        new_value=', '.join(trailer.vin for trailer in trailers if trailer.vin) or f'позиция #{line.line_no}',
+        comment=f'Физическая отгрузка позиции #{line.line_no}',
+    )
+    db.session.commit()
+    flash('Позиция заказа физически отгружена клиенту.', 'success')
     return redirect(url_for('main.order_detail', order_id=order.id))
 
 
@@ -8119,19 +8263,9 @@ def order_issue_documents(order_id):
     if order.is_shipped:
         flash('Заказ уже физически отгружен.', 'warning')
         return redirect(url_for('main.order_detail', order_id=order.id))
-    effective_vin = get_order_effective_vin(order)
-    vin_row = (
-        VinRegistry.query
-        .filter(
-            VinRegistry.customer_order_id == order.id,
-            VinRegistry.status.in_(['reserved', 'assigned', 'confirmed']),
-        )
-        .order_by(VinRegistry.reserved_at.desc().nullslast(), VinRegistry.id.desc())
-        .first()
-    )
-    vin_was_reserved = bool(vin_row and vin_row.status == 'reserved')
-    if not effective_vin:
-        flash('Нельзя выдать документы: сначала нужен конкретный прицеп/VIN или зарезервированный VIN.', 'danger')
+    document_blockers = _order_lines_document_blockers(order)
+    if document_blockers:
+        flash('Нельзя выдать документы: ' + '; '.join(document_blockers) + '.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
     contract = SalesContract.query.filter_by(order_id=order.id).first()
     if not contract:
@@ -8153,26 +8287,47 @@ def order_issue_documents(order_id):
     order.documents_issued = True
     order.documents_issued_at = datetime.utcnow()
     order.status = 'sold_not_shipped'
+    vin_was_reserved = False
+    issued_vin_rows = []
+    for line in order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()).all():
+        if line.line_type == 'TRAILER':
+            line.status = 'sold_not_shipped'
+        for trailer in _trailers_for_order_line(line):
+            trailer.status = 'SOLD'
+        line_vin_rows = _active_vin_rows_for_order_line(line)
+        for vin_row in line_vin_rows:
+            old_vin_status = vin_row.status
+            vin_was_reserved = vin_was_reserved or vin_row.status == 'reserved'
+            vin_row.docs_issued_at = datetime.utcnow()
+            vin_row.docs_issued_order_id = order.id
+            vin_row.sales_contract_id = contract.id
+            issued_vin_rows.append(vin_row)
+            _add_vin_event(vin_row, 'docs_issued', old_vin_status, vin_row.status, comment='Документы выданы по заказу')
+        contract_lines = [row for row in line.contract_lines if row.sales_contract_id == contract.id]
+        for contract_line in contract_lines:
+            if not contract_line.trailer_id:
+                trailer = _trailer_for_order_line(line)
+                if trailer:
+                    contract_line.trailer_id = trailer.id
+                    contract_line.vin_full = trailer.vin
+            if not contract_line.vin_registry_id and line_vin_rows:
+                contract_line.vin_registry_id = line_vin_rows[0].id
+                contract_line.vin_full = line_vin_rows[0].vin_full
     if order.trailer:
         order.trailer.status = 'SOLD'
-    if vin_row:
-        old_vin_status = vin_row.status
-        vin_row.docs_issued_at = datetime.utcnow()
-        vin_row.docs_issued_order_id = order.id
-        _add_vin_event(vin_row, 'docs_issued', old_vin_status, vin_row.status, comment='Документы выданы по заказу')
     contract.is_paid = True
     contract.is_shipped = False
     comment = 'Юридическая продажа зафиксирована'
-    if vin_row:
-        comment = 'Юридическая продажа зафиксирована по зарезервированному VIN'
+    if issued_vin_rows:
+        comment = 'Юридическая продажа зафиксирована по VIN позиций заказа'
     add_order_event(order, 'documents_issued', old_value=old_document_status, new_value='documents_issued', comment=comment)
     if old_order_status != order.status:
         add_order_event(order, 'order_status_changed', old_value=old_order_status, new_value=order.status)
     _finish_idempotency(idem_key, 'CustomerOrder', order.id)
     db.session.commit()
-    if vin_was_reserved and not order.trailer:
+    if vin_was_reserved:
         flash('VIN зарезервирован, но ещё не подтверждён производством. Проверьте, что производство нанесёт именно этот VIN.', 'warning')
-    flash('Документы выданы. Прицеп юридически продан, но ещё не отгружен клиенту.', 'success')
+    flash('Документы выданы. Позиции заказа юридически проданы, но ещё не отгружены клиенту.', 'success')
     return redirect(url_for('main.order_detail', order_id=order.id))
 
 
