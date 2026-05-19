@@ -4,9 +4,15 @@
 <section class="hero-dashboard">
   <div>
     <h1>{{ title }}</h1>
-    <p>Подробная директорская таблица с фильтрами. Главная панель остаётся краткой, детали вынесены сюда.</p>
+    <p>Сводка по продажам, выручке, среднему чеку, филиалам, типам прицепов и складу.</p>
   </div>
-  <a href="{{ url_for('main.director_dashboard') }}" class="btn btn-soft"><i class="bi bi-arrow-left me-1"></i>Панель</a>
+  {% if current_user.is_director %}
+    <a href="{{ url_for('main.director_dashboard') }}" class="btn btn-soft"><i class="bi bi-arrow-left me-1"></i>Панель</a>
+  {% elif current_user.is_manager %}
+    <a href="{{ url_for('main.manager_workspace') }}" class="btn btn-soft"><i class="bi bi-arrow-left me-1"></i>Рабочий стол</a>
+  {% else %}
+    <a href="{{ url_for('main.vin_registry_list') }}" class="btn btn-soft"><i class="bi bi-arrow-left me-1"></i>VIN</a>
+  {% endif %}
 </section>
 
 <div class="app-card p-3 mb-4">
@@ -114,6 +120,45 @@
         </tr>
       {% else %}
         <tr><td colspan="8" class="text-muted p-4">Нет продаж за выбранный период</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif section in ['dynamics', 'branches', 'types'] %}
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead><tr><th>{{ 'Период' if section == 'dynamics' else ('Филиал' if section == 'branches' else 'Тип / группа') }}</th><th>Заказов</th><th>Продано, шт.</th><th>Выручка</th><th>Средний чек</th></tr></thead>
+      <tbody>
+      {% for row in analytics_rows %}
+        <tr>
+          <td class="fw-semibold">{{ row.label }}</td>
+          <td>{{ row.orders }}</td>
+          <td>{{ row.quantity }}</td>
+          <td>{{ row.revenue|money }}</td>
+          <td>{{ row.average|money }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="text-muted p-4">Нет данных за выбранный период</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif section == 'turnover' %}
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead><tr><th>Тип / группа</th><th>Остаток, шт.</th><th>Продано, шт.</th><th>Выручка</th><th>Оборачиваемость</th><th>Дней запаса</th></tr></thead>
+      <tbody>
+      {% for row in analytics_rows %}
+        <tr>
+          <td class="fw-semibold">{{ row.label }}</td>
+          <td>{{ row.stock }}</td>
+          <td>{{ row.quantity }}</td>
+          <td>{{ row.revenue|money }}</td>
+          <td>{{ '%.2f'|format(row.turnover) }}</td>
+          <td>{{ row.days_on_stock if row.days_on_stock is not none else '—' }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="text-muted p-4">Нет данных по оборачиваемости</td></tr>
       {% endfor %}
       </tbody>
     </table>

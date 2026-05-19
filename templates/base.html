@@ -63,6 +63,7 @@
                     {{ nav_item('Мой склад', 'bi-box-seam', href=url_for('main.trailers_list', status='IN_STOCK'), match='/trailers') }}
                     {{ nav_item('Пополнение склада', 'bi-box-arrow-in-down', 'main.stock_replenishment_list', match='/stock-replenishment') }}
                     {{ nav_item('Оплаты', 'bi-cash-coin', 'main.orders_list') }}
+                    {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', match='/reports') }}
                     {{ nav_item('Клиенты', 'bi-person-lines-fill', 'main.customers_list', match='/customers') }}
                     {{ nav_item('Договоры', 'bi-file-earmark-text', 'main.contracts_list', match='/contracts') }}
                 {% elif current_user.is_production %}
@@ -71,6 +72,7 @@
                     {{ nav_item('Выпущено', 'bi-check2-circle', 'main.production_workspace') }}
                 {% elif current_user.is_logistics %}
                     {{ nav_item('Реестр VIN', 'bi-upc', 'main.vin_registry_list', match='/logistics/vin-registry') }}
+                    {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', match='/reports') }}
                 {% elif current_user.is_director %}
                     {{ nav_item('Панель', 'bi-speedometer2', 'main.director_dashboard', match='/director') }}
                     {{ nav_item('Диалоги', 'bi-chat-dots', 'main.conversations_list', match='/conversations') }}

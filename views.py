@@ -14,7 +14,7 @@ from flask_login import (
 )
 
 from extensions import db
-from models import Trailer, Item, Warehouse, Customer, SalesContract, SalesContractLine, User, OTTS, Lead, LeadMessage, CustomerOrder, CustomerOrderLine, OrderPayment, OrderEvent, Reservation, SupplyNeed, ProductionRequest, ProductionRequestLine, ProducedUnit, StockMovement, IdempotencyKey, VinRegistry, VinRegistryEvent
+from models import Trailer, Item, Warehouse, Customer, SalesContract, SalesContractLine, ContractTemplate, User, OTTS, Lead, LeadMessage, CustomerOrder, CustomerOrderLine, OrderPayment, OrderEvent, Reservation, SupplyNeed, ProductionRequest, ProductionRequestLine, ProducedUnit, StockMovement, IdempotencyKey, VinRegistry, VinRegistryEvent
 from models import (
     TrailerAllowedOption, TrailerBoardHeight, TrailerBoardPriceMatrix, TrailerBodyExecution, TrailerBodySize,
     TrailerDimensionMatrix, TrailerHubOption, TrailerHubPriceMatrix, TrailerOtssModificationMatrix,
@@ -3162,6 +3162,85 @@ def get_next_contract_number() -> str:
 
 # ========= ДОГОВОРЫ / ПРОДАЖИ =========
 
+def _article_group_code(article: str | None) -> str | None:
+    if not article:
+        return None
+    return str(article).split('-', 1)[0].strip() or None
+
+
+def _contract_line_config(line: SalesContractLine | None) -> dict:
+    if not line:
+        return {}
+    source = line.order_line.config_snapshot_json if line.order_line and line.order_line.config_snapshot_json else None
+    if not source and line.item and getattr(line.item, 'config_snapshot_json', None):
+        source = line.item.config_snapshot_json
+    if not source:
+        return {}
+    try:
+        data = json.loads(source)
+    except (TypeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _select_contract_template(contract: SalesContract, contract_lines: list[SalesContractLine]) -> ContractTemplate | None:
+    first_line = contract_lines[0] if contract_lines else None
+    config = _contract_line_config(first_line)
+    item = first_line.item if first_line and first_line.item else (contract.trailer.item if contract.trailer else None)
+    group_code = (
+        config.get('group_code')
+        or _article_group_code(first_line.article_snapshot if first_line else None)
+        or _article_group_code(item.article if item else None)
+    )
+    raw_customer_type = contract.customer.customer_type if contract.customer and contract.customer.customer_type else None
+    customer_type = getattr(raw_customer_type, 'value', raw_customer_type) if raw_customer_type else None
+    markers = {
+        'product_group_code': group_code,
+        'otss_number': (first_line.otss_number if first_line else None) or (contract.order.otss_number if contract.order else None),
+        'otss_type': (first_line.otss_type if first_line else None) or (contract.order.otss_type if contract.order else None),
+        'otss_modification': (first_line.otss_modification if first_line else None) or (contract.order.otss_modification if contract.order else None),
+        'body_execution_code': config.get('body_execution_code'),
+        'customer_type': customer_type,
+    }
+    templates = ContractTemplate.query.filter_by(template_type='sale', is_active=True).all()
+    best_template = None
+    best_score = -1
+    for template in templates:
+        score = 0
+        mismatch = False
+        for field, value in markers.items():
+            template_value = getattr(template, field, None)
+            if template_value:
+                if value and str(template_value) == str(value):
+                    score += 2
+                else:
+                    mismatch = True
+                    break
+        if mismatch:
+            continue
+        if template.is_default:
+            score += 1
+        score += int(template.sort_order or 0)
+        if score > best_score:
+            best_template = template
+            best_score = score
+    return best_template
+
+
+def _contract_template_render_name(template: ContractTemplate | None) -> str:
+    if not template or not template.content_path:
+        return 'contract_print.html'
+    path = template.content_path.replace('\\', '/').strip()
+    parts = [part for part in path.split('/') if part]
+    if not path.endswith('.html') or path.startswith('/') or '..' in parts:
+        return 'contract_print.html'
+    try:
+        current_app.jinja_env.get_template(path)
+    except Exception:
+        return 'contract_print.html'
+    return path
+
+
 def _build_contract_context(contract_id: int) -> dict:
     contract = SalesContract.query.get_or_404(contract_id)
     _ensure_can_access_contract(contract)
@@ -3170,6 +3249,7 @@ def _build_contract_context(contract_id: int) -> dict:
     effective_vin = get_order_effective_vin(contract.order) if contract.order else (trailer.vin if trailer else '')
     item = trailer.item if trailer else (contract.order.item if contract.order else None)
     contract_lines = contract.lines.order_by(SalesContractLine.line_no.asc(), SalesContractLine.id.asc()).all()
+    contract_template = _select_contract_template(contract, contract_lines)
 
     size_external = getattr(item, 'size_external', None)
     size_body     = getattr(item, 'size_body', None)
@@ -3212,6 +3292,8 @@ def _build_contract_context(contract_id: int) -> dict:
         warehouse_name=warehouse_name,  # <-- это используешь в шаблоне
         effective_vin=effective_vin,
         contract_lines=contract_lines,
+        contract_template=contract_template,
+        contract_template_name=_contract_template_render_name(contract_template),
     )
 
 @main_bp.route('/contracts')
@@ -3483,7 +3565,7 @@ def contract_delete(contract_id):
 @login_required
 def contract_print(contract_id):
     ctx = _build_contract_context(contract_id)
-    return render_template('contract_print.html', **ctx)
+    return render_template(ctx.get('contract_template_name') or 'contract_print.html', **ctx)
 
 
 @main_bp.route('/contracts/<int:contract_id>/pdf')
@@ -3492,7 +3574,7 @@ def contract_pdf(contract_id):
     ctx = _build_contract_context(contract_id)
     if HTML is not None:
         from flask import make_response, request
-        html = render_template('contract_print.html', **ctx)
+        html = render_template(ctx.get('contract_template_name') or 'contract_print.html', **ctx)
         pdf = HTML(string=html, base_url=request.host_url).write_pdf()
 
         contract = ctx['contract']
@@ -3510,7 +3592,7 @@ def _contract_pdf_bytes(contract_id: int) -> bytes:
     # ВАЖНО: для SIGEX нужно именно bytes документа.
     # Тут подразумевается, что WeasyPrint установлен и HTML != None как у тебя.
     ctx = _build_contract_context(contract_id)
-    html = render_template('contract_print.html', **ctx)
+    html = render_template(ctx.get('contract_template_name') or 'contract_print.html', **ctx)
 
     if HTML is None:
         raise RuntimeError("WeasyPrint (HTML) is not available. Install/configure WeasyPrint on server.")
@@ -5688,8 +5770,14 @@ def conversations_list():
         .order_by(Lead.unread_count.desc(), Lead.last_message_at.desc().nullslast(), Lead.created_at.desc())
         .all()
     )
-    warehouses = Warehouse.query.filter_by(is_active=True).order_by(Warehouse.name).all()
-    managers = User.query.filter(User.role == 'manager').order_by(User.full_name, User.username).all()
+    warehouses_query = Warehouse.query.filter_by(is_active=True)
+    if current_user.is_manager and current_user.warehouse_id:
+        warehouses_query = warehouses_query.filter(Warehouse.id == current_user.warehouse_id)
+    warehouses = warehouses_query.order_by(Warehouse.name).all()
+    managers_query = User.query.filter(User.role == 'manager')
+    if current_user.is_manager:
+        managers_query = managers_query.filter(User.id == current_user.id)
+    managers = managers_query.order_by(User.full_name, User.username).all()
     return render_template(
         'conversations_list.html',
         conversations=conversations,
@@ -9768,10 +9856,16 @@ def director_dashboard():
 
 @main_bp.route('/director/reports')
 @main_bp.route('/director/reports/<section>')
-@role_required('director')
+@main_bp.route('/reports')
+@main_bp.route('/reports/<section>')
+@role_required('director', 'manager', 'logistics')
 def director_report(section='sales'):
     sections = {
         'sales': 'Продажи',
+        'dynamics': 'Динамика',
+        'branches': 'Филиалы',
+        'types': 'Типы прицепов',
+        'turnover': 'Оборачиваемость',
         'stock': 'Склад',
         'production': 'Производство',
         'movements': 'Перемещения',
@@ -9814,6 +9908,11 @@ def director_report(section='sales'):
     period_end = datetime.combine(date_to, time.max)
 
     def order_scope(query):
+        if current_user.is_manager:
+            query = query.filter(or_(
+                CustomerOrder.assigned_user_id == current_user.id,
+                CustomerOrder.warehouse_id == current_user.warehouse_id,
+            ))
         if warehouse_id:
             query = query.filter(CustomerOrder.warehouse_id == warehouse_id)
         if manager_id:
@@ -9823,8 +9922,9 @@ def director_report(section='sales'):
     cards = []
     rows = []
     problem_rows = []
+    analytics_rows = []
 
-    if section in ('sales', 'finance'):
+    if section in ('sales', 'finance', 'dynamics', 'branches', 'types'):
         sales_query = (
             order_scope(CustomerOrder.query)
             .filter(
@@ -9835,14 +9935,64 @@ def director_report(section='sales'):
             )
             .order_by(CustomerOrder.documents_issued_at.desc())
         )
-        rows = [order for order in sales_query.all() if get_order_effective_vin(order)]
+        rows = sales_query.all()
+        sold_quantity = sum(order.quantity or 1 for order in rows)
         revenue = sum(float(order.price or 0) for order in rows)
         cards = [
             {'title': 'Выручка', 'value': money(revenue), 'caption': 'юридические продажи за период'},
-            {'title': 'Продано', 'value': len(rows), 'caption': 'прицепов'},
+            {'title': 'Продано', 'value': sold_quantity, 'caption': 'шт. по заказам'},
             {'title': 'Средний чек', 'value': money(revenue / len(rows) if rows else 0), 'caption': 'по закрытым продажам'},
             {'title': 'Резервы', 'value': order_scope(CustomerOrder.query).filter(CustomerOrder.status.in_(['reserved', 'waiting_payment', 'prepaid', 'ready_to_ship'])).count(), 'caption': 'активные заказы'},
         ]
+        if section == 'dynamics':
+            buckets = defaultdict(lambda: {'orders': 0, 'quantity': 0, 'revenue': 0.0})
+            for order in rows:
+                key = order.documents_issued_at.strftime('%Y-%m') if order.documents_issued_at else 'без даты'
+                buckets[key]['orders'] += 1
+                buckets[key]['quantity'] += order.quantity or 1
+                buckets[key]['revenue'] += float(order.price or 0)
+            analytics_rows = [
+                {
+                    'label': key,
+                    'orders': value['orders'],
+                    'quantity': value['quantity'],
+                    'revenue': value['revenue'],
+                    'average': value['revenue'] / value['orders'] if value['orders'] else 0,
+                }
+                for key, value in sorted(buckets.items())
+            ]
+        elif section == 'branches':
+            buckets = defaultdict(lambda: {'orders': 0, 'quantity': 0, 'revenue': 0.0})
+            for order in rows:
+                key = order.warehouse.name if order.warehouse else 'Без филиала'
+                buckets[key]['orders'] += 1
+                buckets[key]['quantity'] += order.quantity or 1
+                buckets[key]['revenue'] += float(order.price or 0)
+            analytics_rows = sorted(
+                ({'label': key, **value, 'average': value['revenue'] / value['orders'] if value['orders'] else 0} for key, value in buckets.items()),
+                key=lambda row: row['revenue'],
+                reverse=True,
+            )
+        elif section == 'types':
+            buckets = defaultdict(lambda: {'orders': 0, 'quantity': 0, 'revenue': 0.0})
+            for order in rows:
+                order_lines = order.lines.order_by(CustomerOrderLine.line_no.asc()).all()
+                if order_lines:
+                    for line in order_lines:
+                        label = _article_group_code(line.article_snapshot or (line.item.article if line.item else None)) or 'Без типа'
+                        buckets[label]['orders'] += 1
+                        buckets[label]['quantity'] += line.quantity or 1
+                        buckets[label]['revenue'] += float(line.total_price or 0)
+                else:
+                    label = _article_group_code(order.article_snapshot or (order.item.article if order.item else None)) or 'Без типа'
+                    buckets[label]['orders'] += 1
+                    buckets[label]['quantity'] += order.quantity or 1
+                    buckets[label]['revenue'] += float(order.price or 0)
+            analytics_rows = sorted(
+                ({'label': key, **value, 'average': value['revenue'] / value['orders'] if value['orders'] else 0} for key, value in buckets.items()),
+                key=lambda row: row['quantity'],
+                reverse=True,
+            )
         if section == 'finance':
             rows = (
                 OrderPayment.query
@@ -9864,8 +10014,10 @@ def director_report(section='sales'):
                 {'title': 'Отменено', 'value': len([p for p in rows if p.status == 'CANCELED']), 'caption': 'CANCELED'},
             ]
 
-    elif section == 'stock':
+    elif section in ('stock', 'turnover'):
         query = Trailer.query.join(Item, Item.id == Trailer.item_id)
+        if current_user.is_manager and current_user.warehouse_id:
+            query = query.filter(Trailer.warehouse_id == current_user.warehouse_id)
         if warehouse_id:
             query = query.filter(Trailer.warehouse_id == warehouse_id)
         if search:
@@ -9890,9 +10042,57 @@ def director_report(section='sales'):
             {'title': 'Продано, не отгружено', 'value': len([t for t in trailers if t.status == 'SOLD' and not _trailer_is_customer_shipped(t)]), 'caption': 'контроль выдачи'},
             {'title': 'В пути', 'value': len([t for t in trailers if t.status == 'IN_TRANSIT' or t.lifecycle_status == 'in_transit']), 'caption': 'логистика'},
         ]
+        if section == 'turnover':
+            sold_query = order_scope(CustomerOrder.query).filter(
+                CustomerOrder.documents_issued == True,
+                CustomerOrder.documents_issued_at >= period_start,
+                CustomerOrder.documents_issued_at <= period_end,
+                CustomerOrder.status != 'cancelled',
+            )
+            sold_orders = sold_query.all()
+            period_days = max((date_to - date_from).days + 1, 1)
+            stock_buckets = defaultdict(lambda: {'stock': 0, 'sold': 0, 'revenue': 0.0})
+            for trailer in trailers:
+                label = _article_group_code(trailer.item.article if trailer.item else None) or 'Без типа'
+                stock_buckets[label]['stock'] += 1
+            for order in sold_orders:
+                order_lines = order.lines.order_by(CustomerOrderLine.line_no.asc()).all()
+                if order_lines:
+                    for line in order_lines:
+                        label = _article_group_code(line.article_snapshot or (line.item.article if line.item else None)) or 'Без типа'
+                        stock_buckets[label]['sold'] += line.quantity or 1
+                        stock_buckets[label]['revenue'] += float(line.total_price or 0)
+                else:
+                    label = _article_group_code(order.article_snapshot or (order.item.article if order.item else None)) or 'Без типа'
+                    stock_buckets[label]['sold'] += order.quantity or 1
+                    stock_buckets[label]['revenue'] += float(order.price or 0)
+            analytics_rows = []
+            for label, value in stock_buckets.items():
+                avg_stock = value['stock']
+                sold_qty = value['sold']
+                turnover = sold_qty / avg_stock if avg_stock else 0
+                days_on_stock = round(period_days / turnover, 1) if turnover else None
+                analytics_rows.append({
+                    'label': label,
+                    'stock': avg_stock,
+                    'quantity': sold_qty,
+                    'revenue': value['revenue'],
+                    'turnover': turnover,
+                    'days_on_stock': days_on_stock,
+                })
+            analytics_rows.sort(key=lambda row: row['turnover'], reverse=True)
+            rows = trailers
+            cards = [
+                {'title': 'Остаток', 'value': len(trailers), 'caption': 'прицепов в выборке'},
+                {'title': 'Продано', 'value': sum(row['quantity'] for row in analytics_rows), 'caption': 'за период'},
+                {'title': 'Оборачиваемость', 'value': round((sum(row['quantity'] for row in analytics_rows) / len(trailers)) if trailers else 0, 2), 'caption': 'продано / остаток'},
+                {'title': 'Период', 'value': period_days, 'caption': 'дней'},
+            ]
 
     elif section == 'production':
         query = ProductionRequestLine.query.join(ProductionRequest, ProductionRequest.id == ProductionRequestLine.production_request_id)
+        if current_user.is_manager and current_user.warehouse_id:
+            query = query.filter(ProductionRequest.target_warehouse_id == current_user.warehouse_id)
         if warehouse_id:
             query = query.filter(ProductionRequest.target_warehouse_id == warehouse_id)
         if status_filter != 'all':
@@ -9911,6 +10111,8 @@ def director_report(section='sales'):
 
     elif section == 'movements':
         query = StockMovement.query.filter(StockMovement.created_at >= period_start, StockMovement.created_at <= period_end)
+        if current_user.is_manager and current_user.warehouse_id:
+            query = query.filter(or_(StockMovement.from_warehouse_id == current_user.warehouse_id, StockMovement.to_warehouse_id == current_user.warehouse_id))
         if warehouse_id:
             query = query.filter(or_(StockMovement.from_warehouse_id == warehouse_id, StockMovement.to_warehouse_id == warehouse_id))
         if status_filter != 'all':
@@ -10050,6 +10252,7 @@ def director_report(section='sales'):
         cards=cards,
         rows=rows,
         problem_rows=problem_rows,
+        analytics_rows=analytics_rows,
     )
 
 
