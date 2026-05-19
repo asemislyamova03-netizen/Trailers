@@ -630,7 +630,7 @@ class KaspiOrderListImportForm(FlaskForm):
     date_from = StringField('С даты', validators=[Optional(), Length(max=20)])
     date_to = StringField('По дату', validators=[Optional(), Length(max=20)])
     page_number = IntegerField('Страница', validators=[DataRequired(), NumberRange(min=0)], default=0)
-    page_size = IntegerField('Кол-во', validators=[DataRequired(), NumberRange(min=1, max=100)], default=20)
+    page_size = IntegerField('Кол-во', validators=[DataRequired(), NumberRange(min=1, max=5)], default=5)
     warehouse_id = SelectField('Склад / филиал', coerce=int, validators=[Optional()])
     assigned_user_id = SelectField('Ответственный', coerce=int, validators=[Optional()])
     submit = SubmitField('Импортировать список')

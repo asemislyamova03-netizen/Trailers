@@ -6036,7 +6036,7 @@ def kaspi_order_import_list():
             creation_from_ms=_kaspi_ms(date_from),
             creation_to_ms=_kaspi_ms(date_to, end_of_day=True),
             page_number=list_form.page_number.data or 0,
-            page_size=list_form.page_size.data or 20,
+            page_size=min(list_form.page_size.data or 5, 5),
         )
     except KaspiClientError as exc:
         flash(str(exc), 'danger')

@@ -6,7 +6,7 @@ class KaspiClientError(Exception):
 
 
 class KaspiShopClient:
-    def __init__(self, token: str | None, base_url: str = 'https://kaspi.kz/shop/api/v2', timeout: int = 60):
+    def __init__(self, token: str | None, base_url: str = 'https://kaspi.kz/shop/api/v2', timeout: int = 12):
         self.token = (token or '').strip()
         self.base_url = (base_url or '').rstrip('/')
         self.timeout = timeout
@@ -28,6 +28,8 @@ class KaspiShopClient:
         try:
             response = requests.get(url, headers=self._headers(), params=params or {}, timeout=self.timeout)
             response.raise_for_status()
+        except requests.Timeout as exc:
+            raise KaspiClientError('Kaspi не ответил за отведенное время. Попробуйте меньший период или позже.') from exc
         except requests.RequestException as exc:
             raise KaspiClientError(f'Ошибка запроса Kaspi: {exc}') from exc
         try:
