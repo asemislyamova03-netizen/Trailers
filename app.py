@@ -25,6 +25,8 @@ def create_app():
     app.config['SIGEX_BASE_URL'] = os.getenv('SIGEX_BASE_URL', 'https://sigex.kz:10443')
     app.config['SIGEX_MTLS_CRT'] = os.getenv('SIGEX_MTLS_CRT')
     app.config['SIGEX_MTLS_KEY'] = os.getenv('SIGEX_MTLS_KEY')
+    app.config['KASPI_SHOP_API_BASE_URL'] = os.getenv('KASPI_SHOP_API_BASE_URL', 'https://kaspi.kz/shop/api/v2')
+    app.config['KASPI_SHOP_TOKEN'] = os.getenv('KASPI_SHOP_TOKEN')
     # ------------------------------
     csrf.init_app(app)
 

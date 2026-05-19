@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Kaspi импорт{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="h3 mb-0">Kaspi импорт</h1>
+  <a class="btn btn-soft" href="{{ url_for('main.leads_list', channel='KASPI') }}">Заявки Kaspi</a>
+</div>
+
+{% if not kaspi_configured %}
+<div class="alert alert-warning">
+  На сервере не задан `KASPI_SHOP_TOKEN`. Импорт будет работать после добавления токена в переменные окружения и перезапуска сервиса.
+</div>
+{% endif %}
+
+<div class="app-card p-4">
+  <form method="post" class="row g-3">
+    {{ form.hidden_tag() }}
+    <div class="col-md-4">
+      {{ form.order_code.label(class="form-label") }}
+      {{ form.order_code(class="form-control", placeholder="Например, 123456789") }}
+      {% for error in form.order_code.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+    </div>
+    <div class="col-md-4">
+      {{ form.warehouse_id.label(class="form-label") }}
+      {{ form.warehouse_id(class="form-select") }}
+    </div>
+    <div class="col-md-4">
+      {{ form.assigned_user_id.label(class="form-label") }}
+      {{ form.assigned_user_id(class="form-select") }}
+    </div>
+    <div class="col-12">
+      {{ form.submit(class="btn btn-orange") }}
+    </div>
+  </form>
+</div>
+
+<div class="app-card p-4 mt-4">
+  <h2 class="h5">Как это работает</h2>
+  <div class="text-muted">
+    Заказ Kaspi импортируется как заявка и входящее сообщение в диалогах. CRM-заказ создается отдельно менеджером после проверки клиента, номенклатуры и наличия.
+  </div>
+</div>
+{% endblock %}

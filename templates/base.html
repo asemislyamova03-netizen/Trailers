@@ -38,6 +38,7 @@
                     {{ nav_item('Подбор прицепа', 'bi-ui-checks-grid', 'main.manager_trailer_picker', match='/manager/trailer-picker') }}
                     {{ nav_item('Диалоги', 'bi-chat-dots', 'main.conversations_list', match='/conversations') }}
                     {{ nav_item('Заявки', 'bi-chat-left-text', 'main.leads_list', match='/leads') }}
+                    {{ nav_item('Kaspi', 'bi-bag-check', 'main.kaspi_order_import', match='/integrations/kaspi') }}
                     {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', match='/production') }}
                     {{ nav_item('Логистика', 'bi-truck', 'main.logistics_workspace', match='/logistics') }}
                     {{ nav_item('Реестр VIN', 'bi-upc', 'main.vin_registry_list', match='/logistics/vin-registry') }}
@@ -58,6 +59,7 @@
                     {{ nav_item('Рабочий стол', 'bi-speedometer2', 'main.manager_workspace', match='/manager') }}
                     {{ nav_item('Диалоги', 'bi-chat-dots', 'main.conversations_list', match='/conversations') }}
                     {{ nav_item('Заявки', 'bi-chat-left-text', 'main.leads_list', match='/leads') }}
+                    {{ nav_item('Kaspi', 'bi-bag-check', 'main.kaspi_order_import', match='/integrations/kaspi') }}
                     {{ nav_item('Заказы', 'bi-receipt', 'main.orders_list', match='/orders') }}
                     {{ nav_item('Подбор прицепа', 'bi-ui-checks-grid', 'main.manager_trailer_picker', match='/manager/trailer-picker') }}
                     {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', match='/production') }}
@@ -75,6 +77,7 @@
                 {% elif current_user.is_director %}
                     {{ nav_item('Панель', 'bi-speedometer2', 'main.director_dashboard', match='/director') }}
                     {{ nav_item('Диалоги', 'bi-chat-dots', 'main.conversations_list', match='/conversations') }}
+                    {{ nav_item('Kaspi', 'bi-bag-check', 'main.kaspi_order_import', match='/integrations/kaspi') }}
                     {{ nav_item('Заказы', 'bi-receipt', 'main.orders_list', match='/orders') }}
                     {{ nav_item('Подбор прицепа', 'bi-ui-checks-grid', 'main.manager_trailer_picker', match='/manager/trailer-picker') }}
                     {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', match='/production') }}

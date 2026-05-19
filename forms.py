@@ -592,6 +592,13 @@ class OrderPaymentForm(IdempotentFlaskForm):
     submit = SubmitField('Сохранить')
 
 
+class KaspiOrderImportForm(FlaskForm):
+    order_code = StringField('Номер заказа Kaspi', validators=[DataRequired(), Length(max=120)])
+    warehouse_id = SelectField('Склад / филиал', coerce=int, validators=[Optional()])
+    assigned_user_id = SelectField('Ответственный', coerce=int, validators=[Optional()])
+    submit = SubmitField('Импортировать в заявки')
+
+
 class SupplyNeedForm(IdempotentFlaskForm):
     need_type = SelectField(
         'Тип потребности',

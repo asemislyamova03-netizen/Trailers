@@ -14,6 +14,9 @@
     <div><b>Телефон:</b> {{ lead.phone or '' }}</div>
     <div><b>Канал:</b> {{ lead.channel or lead.source_channel }}</div>
     <div><b>Источник:</b> {{ lead.source_name or lead.source_platform or '' }}</div>
+    {% if lead.source_channel == 'KASPI' %}
+    <div><b>Kaspi заказ:</b> {{ lead.external_chat_id or lead.external_lead_id }}</div>
+    {% endif %}
     <div><b>Статус:</b> {{ lead.status }}</div>
     <div><b>Ответственный:</b> {{ lead.assigned_user.full_name if lead.assigned_user else '' }}</div>
   </div></div>

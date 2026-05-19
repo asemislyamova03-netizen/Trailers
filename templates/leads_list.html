@@ -3,7 +3,12 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
   <h1 class="h3 mb-0">Заявки</h1>
-  <a class="btn btn-primary" href="{{ url_for('main.lead_create') }}">Новая заявка</a>
+  <div class="d-flex gap-2">
+    {% if current_user.is_admin or current_user.is_director or current_user.is_manager %}
+    <a class="btn btn-soft" href="{{ url_for('main.kaspi_order_import') }}">Импорт Kaspi</a>
+    {% endif %}
+    <a class="btn btn-primary" href="{{ url_for('main.lead_create') }}">Новая заявка</a>
+  </div>
 </div>
 <form class="row g-2 mb-3">
   <div class="col-md-3"><input class="form-control" name="q" value="{{ q }}" placeholder="Клиент, телефон, модель"></div>
