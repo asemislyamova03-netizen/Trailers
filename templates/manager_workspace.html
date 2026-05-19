@@ -243,7 +243,7 @@
         <div class="app-card">
             <div class="card-header">Готово на складе выпуска, ждёт отправки</div>
             <div class="table-responsive"><table class="table table-hover align-middle">
-                <thead><tr><th>VIN</th><th>Тип</th><th>Модель</th><th>Склад выпуска</th><th>Склад назначения</th><th>Заказ</th><th>Статус</th></tr></thead>
+                <thead><tr><th>VIN</th><th>Тип</th><th>Модель</th><th>Склад выпуска</th><th>Склад назначения</th><th>Заказ</th><th>Статус</th><th></th></tr></thead>
                 <tbody>{% for row in ready_at_production_rows %}
                     <tr>
                         <td class="fw-semibold">{{ row.unit.trailer.vin if row.unit and row.unit.trailer else '' }}</td>
@@ -253,8 +253,25 @@
                         <td>{{ row.target_warehouse.name if row.target_warehouse else '' }}</td>
                         <td>{% if row.order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=row.order.id) }}">{{ row.order.order_number }}</a>{% else %}<span class="text-muted">на склад</span>{% endif %}</td>
                         <td><span class="badge text-bg-{{ row.unit.trailer.status|status_badge_class if row.unit and row.unit.trailer else 'secondary' }}">{{ row.unit.trailer.status|status_label if row.unit and row.unit.trailer else '' }}</span></td>
+                        <td class="text-end">
+                            {% if row.unit and row.unit.trailer and row.target_warehouse and current_user.warehouse_id == row.target_warehouse.id %}
+                                <form method="post" action="{{ url_for('main.logistics_send_trailer') }}" class="d-inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <input type="hidden" name="form_token" value="{{ form_token() }}">
+                                    <input type="hidden" name="trailer_id" value="{{ row.unit.trailer.id }}">
+                                    <input type="hidden" name="to_warehouse_id" value="{{ row.target_warehouse.id }}">
+                                    <input type="hidden" name="order_id" value="{{ row.order.id if row.order else 0 }}">
+                                    <input type="hidden" name="note" value="Перемещение готового прицепа на склад менеджера">
+                                    <button class="btn btn-sm btn-orange">Переместить на мой склад</button>
+                                </form>
+                            {% elif row.target_warehouse %}
+                                <span class="badge text-bg-secondary">не мой склад</span>
+                            {% else %}
+                                <span class="badge text-bg-warning">склад не задан</span>
+                            {% endif %}
+                        </td>
                     </tr>
-                {% else %}<tr><td colspan="7" class="text-muted p-3">Готовых к отправке прицепов нет</td></tr>{% endfor %}</tbody>
+                {% else %}<tr><td colspan="8" class="text-muted p-3">Готовых к отправке прицепов нет</td></tr>{% endfor %}</tbody>
             </table></div>
         </div>
     </div>

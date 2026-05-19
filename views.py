@@ -8955,9 +8955,10 @@ def produced_unit_change_item(unit_id):
 
 
 @main_bp.route('/logistics/send-trailer', methods=['POST'])
-@role_required('logistics')
+@role_required('manager', 'director')
 def logistics_send_trailer():
     form = SendTrailerForm()
+    back_url = url_for('main.manager_workspace', tab='ready-transfer') if current_user.is_manager else url_for('main.logistics_workspace')
     production_warehouse = _default_production_warehouse()
     ready_query = Trailer.query.filter(
         Trailer.warehouse_id == production_warehouse.id,
@@ -8969,24 +8970,24 @@ def logistics_send_trailer():
     form.order_id.choices = [(0, '— без заказа —')] + [(o.id, o.order_number) for o in CustomerOrder.query.all()]
     if not form.validate_on_submit() or not production_warehouse:
         flash('Не удалось отправить прицеп. Проверьте производственный склад и данные формы.', 'danger')
-        return redirect(url_for('main.logistics_workspace'))
+        return redirect(back_url)
     trailer = Trailer.query.get_or_404(form.trailer_id.data)
     to_warehouse = Warehouse.query.get(form.to_warehouse_id.data)
     if not trailer.vin:
         flash('Нельзя отправить прицеп без VIN.', 'danger')
-        return redirect(url_for('main.logistics_workspace'))
+        return redirect(back_url)
     if not trailer.warehouse_id:
         flash('У прицепа не задан текущий склад.', 'danger')
-        return redirect(url_for('main.logistics_workspace'))
+        return redirect(back_url)
     if not to_warehouse:
         flash('Склад назначения не задан.', 'danger')
-        return redirect(url_for('main.logistics_workspace'))
+        return redirect(back_url)
     if trailer.warehouse_id == to_warehouse.id:
         flash('Нельзя отправить прицеп на тот же склад.', 'danger')
-        return redirect(url_for('main.logistics_workspace'))
+        return redirect(back_url)
     if trailer.warehouse_id != production_warehouse.id or trailer.status not in ('IN_STOCK', 'RESERVED', 'SOLD') or (trailer.lifecycle_status or '') in ('in_transit', 'customer_shipped'):
         flash('Этот прицеп нельзя отправить со склада выпуска.', 'danger')
-        return redirect(url_for('main.logistics_workspace'))
+        return redirect(back_url)
     context = _trailer_production_context(trailer)
     order_id = form.order_id.data or None
     order = CustomerOrder.query.get(order_id) if order_id else None
@@ -8994,19 +8995,28 @@ def logistics_send_trailer():
         order = context['order']
     if not order and trailer.status == 'SOLD':
         order = _find_order_for_sold_trailer(trailer)
+    if current_user.is_manager:
+        if not current_user.warehouse_id:
+            flash('У менеджера не задан склад.', 'danger')
+            return redirect(back_url)
+        if order and not can_manage_order(order):
+            abort(403)
     target_warehouse = order.warehouse if order and order.warehouse_id else context.get('target_warehouse')
+    if current_user.is_manager and target_warehouse and target_warehouse.id != current_user.warehouse_id:
+        flash(f'Этот прицеп предназначен для склада: {target_warehouse.name}.', 'danger')
+        return redirect(back_url)
     if not target_warehouse or target_warehouse.id == production_warehouse.id:
         flash('Для этого прицепа склад назначения не задан или совпадает со складом выпуска.', 'danger')
-        return redirect(url_for('main.logistics_workspace'))
+        return redirect(back_url)
     if target_warehouse.id != form.to_warehouse_id.data:
         flash(f'Для этого прицепа склад назначения: {target_warehouse.name}.', 'danger')
-        return redirect(url_for('main.logistics_workspace'))
+        return redirect(back_url)
     if _active_movement_for_trailer(trailer.id):
         flash('Этот прицеп уже находится в активном перемещении.', 'warning')
-        return redirect(url_for('main.logistics_workspace'))
+        return redirect(back_url)
     idem_key, duplicate = _reserve_idempotency_key()
     if duplicate:
-        return _duplicate_redirect(idem_key, url_for('main.logistics_workspace'))
+        return _duplicate_redirect(idem_key, back_url)
     if order:
         order_id = order.id
     note = (form.note.data or '').strip() or None
@@ -9039,7 +9049,7 @@ def logistics_send_trailer():
         flash('Прицеп продан, но не отгружен клиенту. Создано перемещение до склада выдачи.', 'success')
     else:
         flash('Прицеп отправлен на склад.', 'success')
-    return redirect(url_for('main.logistics_workspace'))
+    return redirect(back_url)
 
 
 @main_bp.route('/stock-movements/<int:movement_id>/receive', methods=['POST'])
