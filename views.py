@@ -9614,6 +9614,9 @@ def director_dashboard():
     elif period == 'week':
         date_from = today - timedelta(days=today.weekday())
         date_to = today
+    elif period == 'year':
+        date_from = today.replace(month=1, day=1)
+        date_to = today
     elif period == 'custom':
         try:
             date_from = datetime.strptime(request.args.get('date_from') or '', '%Y-%m-%d').date()
