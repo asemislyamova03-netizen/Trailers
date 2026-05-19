@@ -65,6 +65,9 @@
           <div class="small mb-2">{% for part in config_parts %}<span class="badge text-bg-light me-1 mb-1">{{ part }}</span>{% endfor %}</div>
         {% endif %}
         {% if vin_row and vin_row.docs_issued_at %}<div class="alert alert-danger py-2 small">Документы уже выданы. Нанести именно этот VIN.</div>{% endif %}
+        {% if not current_user.is_production %}
+          <div class="alert alert-info py-2 small">Просмотр для менеджера. Выпуск отмечает только производственный пользователь.</div>
+        {% endif %}
         <div class="production-notes small mb-2">
           {% if line.production_request.note %}<div><strong>Заявка:</strong> {{ line.production_request.note }}</div>{% endif %}
           {% if line.note %}<div><strong>Позиция:</strong> {{ line.note }}</div>{% endif %}
@@ -78,19 +81,19 @@
           {% if line.status in ['planned', 'PLANNED', 'draft', 'DRAFT', 'waiting_production'] %}
           <form method="post" action="{{ url_for('main.production_line_start', line_id=line.id) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button class="btn btn-sm btn-primary-app">Взять в работу</button>
+            <button class="btn btn-sm btn-primary-app" {% if not current_user.is_production %}disabled{% endif %}>Взять в работу</button>
           </form>
           {% endif %}
           <form method="post" action="{{ url_for('main.production_line_produce_one', line_id=line.id) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button class="btn btn-sm btn-success">Выпущено 1 шт.</button>
+            <button class="btn btn-sm btn-success" {% if not current_user.is_production %}disabled{% endif %}>Выпущено 1 шт.</button>
           </form>
           {% endif %}
         </div>
         <form method="post" action="{{ url_for('main.production_line_comment', line_id=line.id, tab=active_tab) }}" class="mt-2">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <textarea name="production_comment" class="form-control form-control-sm" rows="2" placeholder="Проблема / комментарий">{{ line.production_comment or '' }}</textarea>
-          <button class="btn btn-sm btn-outline-secondary mt-2">Сохранить</button>
+          <textarea name="production_comment" class="form-control form-control-sm" rows="2" placeholder="Проблема / комментарий" {% if not current_user.is_production %}disabled{% endif %}>{{ line.production_comment or '' }}</textarea>
+          <button class="btn btn-sm btn-outline-secondary mt-2" {% if not current_user.is_production %}disabled{% endif %}>Сохранить</button>
         </form>
       </div>
     </div>

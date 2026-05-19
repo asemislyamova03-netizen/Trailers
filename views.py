@@ -1173,6 +1173,15 @@ def manager_workspace():
         .order_by(ProductionRequest.created_at.desc(), ProductionRequestLine.id.desc())
         .all()
     )
+    pending_production_needs = (
+        SupplyNeed.query
+        .filter(
+            SupplyNeed.status == 'NEW',
+            or_(SupplyNeed.warehouse_id == warehouse_id, SupplyNeed.warehouse_id.is_(None)),
+        )
+        .order_by(SupplyNeed.required_by.asc().nullslast(), SupplyNeed.priority.asc(), SupplyNeed.created_at.asc())
+        .all()
+    )
     production_qty_left = sum(max((line.quantity or 0) - (line.produced_qty or 0), 0) for line in production_for_warehouse)
     produced_units_for_warehouse = (
         ProducedUnit.query
@@ -1357,6 +1366,7 @@ def manager_workspace():
         outgoing_movements=outgoing_movements,
         ready_to_ship_orders=ready_to_ship_orders,
         planned_ship_orders=planned_ship_orders,
+        pending_production_needs=pending_production_needs,
         production_for_warehouse=production_for_warehouse,
         production_qty_left=production_qty_left,
         produced_units_for_warehouse=produced_units_for_warehouse,
@@ -6136,7 +6146,7 @@ def order_payment_cancel(order_id, payment_id):
 
 
 @main_bp.route('/supply-needs')
-@role_required('manager', 'director', 'logistics')
+@role_required('manager', 'director')
 def supply_needs_list():
     status = request.args.get('status', '').strip()
     query = SupplyNeed.query.join(Item, Item.id == SupplyNeed.item_id)
@@ -6178,7 +6188,7 @@ def _stock_replenishment_stats(need: SupplyNeed):
 
 
 @main_bp.route('/stock-replenishment')
-@role_required('manager', 'director', 'logistics')
+@role_required('manager', 'director')
 def stock_replenishment_list():
     status = request.args.get('status', '').strip()
     query = SupplyNeed.query.filter(SupplyNeed.need_type.in_(['STOCK_REPLENISHMENT', 'WAREHOUSE_STOCK']))
@@ -7686,7 +7696,7 @@ def vin_registry_detail(vin_id):
 
 
 @main_bp.route('/logistics/vin-registry/<int:vin_id>/reserve', methods=['POST'])
-@role_required('logistics', 'director')
+@role_required('manager', 'director')
 def vin_registry_reserve(vin_id):
     row = VinRegistry.query.get_or_404(vin_id)
     if row.status != 'free':
@@ -7734,7 +7744,7 @@ def vin_registry_reserve(vin_id):
 
 
 @main_bp.route('/logistics/vin-registry/<int:vin_id>/cancel-reservation', methods=['POST'])
-@role_required('logistics', 'director')
+@role_required('manager', 'director')
 def vin_registry_cancel_reservation(vin_id):
     row = VinRegistry.query.get_or_404(vin_id)
     if row.status != 'reserved':
@@ -7767,7 +7777,7 @@ def vin_registry_cancel_reservation(vin_id):
 
 
 @main_bp.route('/logistics/vin-registry/<int:vin_id>/assign', methods=['POST'])
-@role_required('logistics', 'director')
+@role_required('manager', 'director')
 def vin_registry_assign(vin_id):
     row = VinRegistry.query.get_or_404(vin_id)
     if row.status not in ('free', 'reserved') or not row.vin_full:
@@ -7822,7 +7832,7 @@ def vin_registry_confirm(vin_id):
 
 
 @main_bp.route('/logistics/vin-registry/<int:vin_id>/void', methods=['POST'])
-@role_required('logistics', 'director')
+@role_required('manager', 'director')
 def vin_registry_void(vin_id):
     row = VinRegistry.query.get_or_404(vin_id)
     reason = (request.form.get('comment') or '').strip()
@@ -8033,7 +8043,7 @@ def order_cancel(order_id):
 
 
 @main_bp.route('/supply-needs/new', methods=['GET', 'POST'])
-@role_required('manager', 'director', 'logistics')
+@role_required('manager', 'director')
 def supply_need_create():
     form = SupplyNeedForm()
     _fill_supply_need_form_choices(form)
@@ -8063,7 +8073,7 @@ def supply_need_create():
 
 
 @main_bp.route('/supply-needs/<int:need_id>/edit', methods=['GET', 'POST'])
-@role_required('manager', 'director', 'logistics')
+@role_required('manager', 'director')
 def supply_need_edit(need_id):
     need = SupplyNeed.query.get_or_404(need_id)
     form = SupplyNeedForm(obj=need)
@@ -8088,9 +8098,11 @@ def supply_need_edit(need_id):
 
 
 @main_bp.route('/supply-needs/<int:need_id>/create-production-request', methods=['POST'])
-@role_required('admin', 'director', 'logistics')
+@role_required('director', 'manager')
 def supply_need_create_production_request(need_id):
     need = SupplyNeed.query.get_or_404(need_id)
+    if current_user.is_manager and current_user.warehouse_id and need.warehouse_id not in (None, current_user.warehouse_id):
+        abort(403)
     if need.status != 'NEW':
         flash('Заявку на производство можно создать только из новой потребности.', 'warning')
         return redirect(request.referrer or url_for('main.supply_needs_list'))
@@ -8583,6 +8595,8 @@ def production_line_comment(line_id):
 @main_bp.route('/logistics/workspace')
 @role_required('logistics', 'director')
 def logistics_workspace():
+    if current_user.is_logistics:
+        return redirect(url_for('main.vin_registry_list'))
     production_warehouses = _production_warehouses()
     production_warehouse = _default_production_warehouse()
     production_warehouse_warning = None
@@ -8737,17 +8751,25 @@ def logistics_workspace():
 
 
 @main_bp.route('/logistics/produced-units/<int:unit_id>/assign-vin', methods=['GET', 'POST'])
-@role_required('logistics')
+@role_required('manager', 'director')
 def logistics_assign_vin(unit_id):
     unit = ProducedUnit.query.get_or_404(unit_id)
     form = AssignVinForm()
     context = _produced_unit_context(unit)
+    back_url = url_for('main.manager_workspace', tab='produced') if current_user.is_manager else url_for('main.logistics_workspace')
+    if current_user.is_manager:
+        order = context.get('order')
+        if not (
+            unit.target_warehouse_id == current_user.warehouse_id
+            or (order and can_manage_order(order))
+        ):
+            abort(403)
     reserved_vin_row = context.get('vin_registry')
     if reserved_vin_row and (reserved_vin_row.status != 'reserved' or not reserved_vin_row.vin_full):
         reserved_vin_row = None
     if unit.status != 'produced_no_vin':
         flash('По этой единице VIN уже присвоен или она недоступна.', 'warning')
-        return redirect(url_for('main.logistics_workspace'))
+        return redirect(back_url)
     if request.method == 'GET':
         form.manufacture_date.data = date.today()
         if reserved_vin_row:
@@ -8756,7 +8778,7 @@ def logistics_assign_vin(unit_id):
         production_warehouse = _default_production_warehouse()
         if not production_warehouse:
             flash('Производственный склад не найден. В справочнике складов отметьте нужный склад как производственный.', 'danger')
-            return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row)
+            return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row, back_url=back_url)
         vin = reserved_vin_row.vin_full if reserved_vin_row else (form.vin.data or '').strip().upper()
         line = unit.production_request_line
         order = unit.order if unit.order_id else None
@@ -8769,11 +8791,11 @@ def logistics_assign_vin(unit_id):
             parsed, error = _parse_vin_full(vin)
             if error:
                 form.vin.errors.append(error)
-                return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row)
+                return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row, back_url=back_url)
             vin_registry_row = VinRegistry.query.filter(or_(VinRegistry.vin_full == vin, VinRegistry.serial7 == parsed['serial7'])).first()
             if vin_registry_row and not existing_trailer and vin_registry_row.status not in ('free', 'reserved'):
                 form.vin.errors.append('Этот VIN уже занят в реестре.')
-                return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row)
+                return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row, back_url=back_url)
             if not vin_registry_row:
                 vin_registry_row = VinRegistry(status='free', source='logistics_assign', **parsed)
                 db.session.add(vin_registry_row)
@@ -8786,13 +8808,13 @@ def logistics_assign_vin(unit_id):
                 vin_registry_row.vin_full = parsed['vin_full']
         idem_key, duplicate = _reserve_idempotency_key()
         if duplicate:
-            return _duplicate_redirect(idem_key, url_for('main.logistics_workspace'))
+            return _duplicate_redirect(idem_key, back_url)
         if existing_trailer:
             form.vin.errors.append(
                 f'VIN уже есть у прицепа Trailer #{existing_trailer.id} на складе. '
                 'Нельзя присвоить этот VIN новой выпущенной единице, иначе получится дубль.'
             )
-            return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row)
+            return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row, back_url=back_url)
         trailer_status = 'IN_STOCK'
         if order:
             trailer_status = 'SOLD' if order.documents_issued or order.status == 'sold_not_shipped' else 'RESERVED'
@@ -8830,8 +8852,8 @@ def logistics_assign_vin(unit_id):
         _add_vin_event(vin_registry_row, 'assigned', old_vin_status, vin_registry_row.status, comment='VIN привязан к выпущенному прицепу')
         db.session.commit()
         flash('VIN присвоен. Прицеп создан на производственном складе.', 'success')
-        return redirect(url_for('main.logistics_workspace'))
-    return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row)
+        return redirect(back_url)
+    return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row, back_url=back_url)
 
 
 @main_bp.route('/logistics/produced-units/<int:unit_id>/change-item', methods=['GET', 'POST'])

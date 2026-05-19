@@ -13,7 +13,7 @@
     {{ form.hidden_tag() }}
     <div class="col-md-6">{{ form.vin.label(class="form-label") }}{{ form.vin(class="form-control", readonly=reserved_vin_row is not none) }}{% for e in form.vin.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}</div>
     <div class="col-md-6">{{ form.manufacture_date.label(class="form-label") }}{{ form.manufacture_date(class="form-control") }}</div>
-    <div class="col-12"><button class="btn btn-orange">{{ 'Привязать зарезервированный VIN' if reserved_vin_row else 'Присвоить VIN' }}</button> <a class="btn btn-soft" href="{{ url_for('main.logistics_workspace') }}">Назад</a></div>
+    <div class="col-12"><button class="btn btn-orange">{{ 'Привязать зарезервированный VIN' if reserved_vin_row else 'Присвоить VIN' }}</button> <a class="btn btn-soft" href="{{ back_url or url_for('main.logistics_workspace') }}">Назад</a></div>
   </form>
 </div>
 {% endblock %}

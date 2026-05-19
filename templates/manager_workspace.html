@@ -174,6 +174,31 @@
     </div>
 
     <div class="tab-pane fade" id="production-tab">
+        <div class="app-card mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>Нужно отдать в производство</span>
+                <span class="text-muted small">потребность → производственное задание</span>
+            </div>
+            <div class="table-responsive"><table class="table table-hover align-middle">
+                <thead><tr><th>Потребность</th><th>Тип</th><th>Модель</th><th>Кол-во</th><th>Срок</th><th>Заказ</th><th></th></tr></thead>
+                <tbody>{% for need in pending_production_needs %}
+                    <tr>
+                        <td>#{{ need.id }}</td>
+                        <td><span class="badge text-bg-{{ need.need_type|status_badge_class }}">{{ need.need_type|status_label }}</span></td>
+                        <td class="fw-semibold">{{ need.article_snapshot or (need.item.article if need.item else '') }} {{ need.product_name_snapshot or (need.item.name if need.item else '') }}</td>
+                        <td>{{ need.quantity }}</td>
+                        <td>{{ need.required_by|date_format }}</td>
+                        <td>{% if need.order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=need.order.id) }}">{{ need.order.order_number }}</a>{% else %}<span class="badge text-bg-info">Пополнение склада</span>{% endif %}</td>
+                        <td class="text-end">
+                            <form method="post" action="{{ url_for('main.supply_need_create_production_request', need_id=need.id) }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button class="btn btn-sm btn-orange">Отдать в производство</button>
+                            </form>
+                        </td>
+                    </tr>
+                {% else %}<tr><td colspan="7" class="text-muted p-3">Новых потребностей нет</td></tr>{% endfor %}</tbody>
+            </table></div>
+        </div>
         <div class="app-card">
             <div class="card-header">В производстве для склада</div>
             <div class="table-responsive"><table class="table table-hover align-middle">
@@ -197,7 +222,7 @@
         <div class="app-card">
             <div class="card-header">Выпущено без VIN для склада</div>
             <div class="table-responsive"><table class="table table-hover align-middle">
-                <thead><tr><th>Единица</th><th>Тип</th><th>Модель</th><th>Дата выпуска</th><th>Склад назначения</th><th>Статус</th></tr></thead>
+                <thead><tr><th>Единица</th><th>Тип</th><th>Модель</th><th>Дата выпуска</th><th>Склад назначения</th><th>Статус</th><th></th></tr></thead>
                 <tbody>{% for unit in produced_units_for_warehouse %}
                     {% set need = unit.production_request_line.supply_need if unit.production_request_line else None %}
                     <tr>
@@ -207,8 +232,9 @@
                         <td>{{ unit.produced_at|date_format }}</td>
                         <td>{{ unit.target_warehouse.name if unit.target_warehouse else '' }}</td>
                         <td><span class="badge text-bg-{{ unit.status|status_badge_class }}">{{ unit.status|status_label }}</span></td>
+                        <td class="text-end"><a class="btn btn-sm btn-orange" href="{{ url_for('main.logistics_assign_vin', unit_id=unit.id) }}">Привязать VIN</a></td>
                     </tr>
-                {% else %}<tr><td colspan="6" class="text-muted p-3">Выпущенных единиц без VIN нет</td></tr>{% endfor %}</tbody>
+                {% else %}<tr><td colspan="7" class="text-muted p-3">Выпущенных единиц без VIN нет</td></tr>{% endfor %}</tbody>
             </table></div>
         </div>
     </div>

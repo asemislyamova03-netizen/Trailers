@@ -36,7 +36,7 @@
           <td><span class="badge text-bg-{{ n.status|status_badge_class }}">{{ n.status|status_label }}</span></td>
           <td class="text-end">
             <a class="btn btn-sm btn-outline-primary" href="{{ url_for('main.supply_need_edit', need_id=n.id) }}">Изменить</a>
-            {% if n.status == 'NEW' %}
+            {% if n.status == 'NEW' and (current_user.is_admin or current_user.is_director or current_user.is_manager) %}
               <form method="post" action="{{ url_for('main.supply_need_create_production_request', need_id=n.id) }}" class="d-inline">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button class="btn btn-sm btn-orange">В производство</button>

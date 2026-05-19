@@ -68,7 +68,7 @@
                 <a class="btn btn-sm btn-soft" href="{{ url_for('main.production_request_detail', request_id=pr.id) }}">{{ pr.request_number }}</a>
               {% endfor %}
             {% endif %}
-            {% if need.status == 'NEW' and (current_user.is_admin or current_user.is_director or current_user.is_logistics) %}
+            {% if need.status == 'NEW' and (current_user.is_admin or current_user.is_director or current_user.is_manager) %}
               <form method="post" action="{{ url_for('main.supply_need_create_production_request', need_id=need.id) }}" class="d-inline">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button class="btn btn-sm btn-orange">В производство</button>

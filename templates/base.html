@@ -70,9 +70,7 @@
                     {{ nav_item('Мои задания', 'bi-list-check', 'main.production_workspace') }}
                     {{ nav_item('Выпущено', 'bi-check2-circle', 'main.production_workspace') }}
                 {% elif current_user.is_logistics %}
-                    {{ nav_item('Логистика', 'bi-truck', 'main.logistics_workspace', match='/logistics') }}
                     {{ nav_item('Реестр VIN', 'bi-upc', 'main.vin_registry_list', match='/logistics/vin-registry') }}
-                    {{ nav_item('Прицепы склада выпуска', 'bi-box-seam', 'main.trailers_list', match='/trailers') }}
                 {% elif current_user.is_director %}
                     {{ nav_item('Панель', 'bi-speedometer2', 'main.director_dashboard', match='/director') }}
                     {{ nav_item('Диалоги', 'bi-chat-dots', 'main.conversations_list', match='/conversations') }}
