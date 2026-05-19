@@ -9957,6 +9957,7 @@ def director_report(section='sales'):
     manager_id = request.args.get('manager_id', type=int)
     status_filter = (request.args.get('status') or 'all').strip()
     search = (request.args.get('q') or '').strip()
+    report_direction = (request.args.get('direction') or 'all').strip()
     period = request.args.get('period', 'month')
     today = date.today()
 
@@ -9965,6 +9966,9 @@ def director_report(section='sales'):
         date_to = today
     elif period == 'week':
         date_from = today - timedelta(days=today.weekday())
+        date_to = today
+    elif period == 'year':
+        date_from = today.replace(month=1, day=1)
         date_to = today
     elif period == 'custom':
         try:
@@ -9994,6 +9998,28 @@ def director_report(section='sales'):
         if manager_id:
             query = query.filter(CustomerOrder.assigned_user_id == manager_id)
         return query
+
+    def record_direction(record: dict) -> str:
+        lines = record.get('lines') or []
+        article = None
+        if lines:
+            article = next(
+                (
+                    line.article_snapshot or (line.item.article if line.item else None)
+                    for line in lines
+                    if line.article_snapshot or (line.item and line.item.article)
+                ),
+                None,
+            )
+        if not article and record.get('item'):
+            article = record['item'].article
+        group_code = _article_group_code(article)
+        vin = record.get('trailer').vin if record.get('trailer') else None
+        if not vin or not group_code:
+            return 'other'
+        if group_code == '002':
+            return 'light'
+        return 'cargo'
 
     def contract_report_records():
         contracts = (
@@ -10062,7 +10088,7 @@ def director_report(section='sales'):
             if quantity <= 0:
                 quantity = order.quantity if order and order.quantity else 1
             revenue = float(contract.price if contract.price is not None else (order.price if order else 0) or 0)
-            result.append({
+            record = {
                 'date': sale_dt,
                 'contract': contract,
                 'order': order,
@@ -10073,16 +10099,25 @@ def director_report(section='sales'):
                 'lines': lines,
                 'quantity': quantity,
                 'revenue': revenue,
-            })
+            }
+            record['direction'] = record_direction(record)
+            if report_direction != 'all' and record['direction'] != report_direction:
+                continue
+            result.append(record)
         return result
 
     cards = []
     rows = []
     problem_rows = []
     analytics_rows = []
+    anomaly_rows = []
 
     if section in ('sales', 'finance', 'dynamics', 'branches', 'types'):
         rows = contract_report_records()
+        anomaly_rows = [
+            row for row in rows
+            if row['revenue'] >= 3000000 or row['direction'] == 'other'
+        ][:10]
         sold_quantity = sum(row['quantity'] or 0 for row in rows)
         revenue = sum(row['revenue'] or 0 for row in rows)
         cards = [
@@ -10408,6 +10443,7 @@ def director_report(section='sales'):
         warehouse_id=warehouse_id,
         manager_id=manager_id,
         status_filter=status_filter,
+        report_direction=report_direction,
         search=search,
         period=period,
         date_from=date_from,
@@ -10417,6 +10453,7 @@ def director_report(section='sales'):
         problem_rows=problem_rows,
         analytics_rows=analytics_rows,
         chart_data=chart_data,
+        anomaly_rows=anomaly_rows,
     )
 
 

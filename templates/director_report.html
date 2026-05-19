@@ -74,6 +74,15 @@
         <option value="PENDING" {% if status_filter == 'PENDING' %}selected{% endif %}>Оплата на проверке</option>
       </select>
     </div>
+    <div class="col-md-2">
+      <label class="form-label">Направление</label>
+      <select name="direction" class="form-select">
+        <option value="all" {% if report_direction == 'all' %}selected{% endif %}>Все</option>
+        <option value="light" {% if report_direction == 'light' %}selected{% endif %}>Легковые</option>
+        <option value="cargo" {% if report_direction == 'cargo' %}selected{% endif %}>Грузовые / спец</option>
+        <option value="other" {% if report_direction == 'other' %}selected{% endif %}>Без VIN / прочее</option>
+      </select>
+    </div>
     <div class="col-md-3">
       <label class="form-label">Поиск</label>
       <input name="q" value="{{ search }}" class="form-control" placeholder="VIN, модель, партия">
@@ -112,6 +121,29 @@ document.addEventListener('DOMContentLoaded', () => {
 </section>
 
 {% if section in ['sales', 'dynamics', 'branches', 'types', 'turnover'] %}
+{% if anomaly_rows %}
+<div class="alert alert-warning">
+  <div class="fw-semibold mb-1">В выборке есть договоры, которые могут искажать выручку.</div>
+  <div class="small">Показаны договоры без VIN/артикула или с суммой от 3 000 000 ₸. Проверьте направление или исправьте номенклатуру.</div>
+  <div class="table-responsive mt-2">
+    <table class="table table-sm mb-0">
+      <thead><tr><th>Дата</th><th>Договор</th><th>Клиент</th><th>Сумма</th><th>VIN</th><th>Направление</th></tr></thead>
+      <tbody>
+      {% for row in anomaly_rows %}
+        <tr>
+          <td>{{ row.date|date_format }}</td>
+          <td>{{ row.contract.contract_number or row.contract.id }}</td>
+          <td>{{ row.contract.customer.name if row.contract.customer else '—' }}</td>
+          <td>{{ row.revenue|money }}</td>
+          <td>{{ row.trailer.vin if row.trailer else '—' }}</td>
+          <td>{{ {'light':'Легковые','cargo':'Грузовые / спец','other':'Без VIN / прочее'}.get(row.direction, row.direction) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
 <div class="row g-4">
   <div class="col-xl-8">
     <div class="app-card p-3 h-100">
