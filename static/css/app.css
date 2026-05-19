@@ -559,4 +559,38 @@ a { text-decoration: none; }
   .kpi-value { font-size: 1.55rem; }
   .user-chip .user-meta { display: none; }
   .topbar-actions { display: none !important; }
+  .compact-page-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .nav-tabs {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .nav-tabs .nav-link {
+    white-space: nowrap;
+  }
+  .production-notes {
+    max-height: 150px;
+    overflow-y: auto;
+  }
+  .production-notes + .d-flex,
+  .app-card .card-body > .d-flex.gap-2.flex-wrap {
+    display: grid !important;
+    grid-template-columns: 1fr;
+  }
+  .app-card .card-body > .d-flex.gap-2.flex-wrap form,
+  .app-card .card-body > .d-flex.gap-2.flex-wrap .btn,
+  .app-card .card-body > form .btn {
+    width: 100%;
+  }
+  .vin-registry-table {
+    min-width: 720px;
+  }
+  .vin-registry-table th,
+  .vin-registry-table td {
+    white-space: nowrap;
+  }
 }

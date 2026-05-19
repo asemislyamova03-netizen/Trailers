@@ -996,10 +996,11 @@ def _default_trailer_config_values() -> dict:
 
 def _config_with_defaults(config: dict | None = None) -> dict:
     base = _default_trailer_config_values()
+    optional_blank_keys = {'wheel_code', 'hub_code', 'support_wheel_code', 'tent_code'}
     for key, value in (config or {}).items():
         if key == 'special_options':
             base[key] = value or []
-        elif value not in (None, ''):
+        elif value is not None and (value != '' or key in optional_blank_keys):
             base[key] = value
     return base
 
@@ -1012,8 +1013,25 @@ def _code_by_article_part(model, text: str) -> tuple[str, str]:
     return '', text
 
 
+def _infer_body_execution_code_for_item(config: dict, article: str) -> str:
+    if not article:
+        return config.get('body_execution_code') or 'BOARD'
+
+    from trailer_configurator import build_trailer_configuration_result
+
+    for execution in TrailerBodyExecution.query.filter_by(is_active=True).order_by(TrailerBodyExecution.sort_order, TrailerBodyExecution.code).all():
+        trial_config = dict(config)
+        trial_config['body_execution_code'] = execution.code
+        result = build_trailer_configuration_result(trial_config)
+        if not result.get('errors') and (result.get('article') or '') == article:
+            return execution.code
+    return config.get('body_execution_code') or 'BOARD'
+
+
 def _config_from_item(item: Item | None) -> dict:
     config = _default_trailer_config_values()
+    config['support_wheel_code'] = ''
+    config['tent_code'] = ''
     article = (item.article if item else '') or ''
     parts = article.split('-')
     if len(parts) >= 2:
@@ -1051,6 +1069,12 @@ def _config_from_item(item: Item | None) -> dict:
             specials.append(code)
             right = remainder
         config['special_options'] = specials
+    if item:
+        if item.has_tent is False:
+            config['tent_code'] = ''
+        if item.has_jockey_wheel is False:
+            config['support_wheel_code'] = ''
+    config['body_execution_code'] = _infer_body_execution_code_for_item(config, article)
     return config
 
 
@@ -1668,13 +1692,16 @@ def trailer_edit(trailer_id):
 
 
 @main_bp.route('/trailers/<int:trailer_id>/change-item', methods=['GET', 'POST'])
-@role_required('logistics', 'director')
+@role_required('manager', 'director')
 def trailer_change_item(trailer_id):
     trailer = Trailer.query.get_or_404(trailer_id)
+    back_url = url_for('main.manager_workspace', tab='stock') if current_user.is_manager else url_for('main.trailers_list', vin=trailer.vin or '')
+    if current_user.is_manager and trailer.warehouse_id != current_user.warehouse_id:
+        abort(403)
     ok, message = _can_change_trailer_item(trailer)
     if not ok:
         flash(message, 'danger')
-        return redirect(url_for('main.trailers_list', vin=trailer.vin or ''))
+        return redirect(back_url)
 
     form = FlaskForm()
     locked_config = _config_from_item(trailer.item)
@@ -1690,7 +1717,7 @@ def trailer_change_item(trailer_id):
                 title='Изменить комплектацию прицепа',
                 current_item=trailer.item,
                 target_label=f'Trailer #{trailer.id} {trailer.vin or ""}',
-                back_url=url_for('main.trailers_list', vin=trailer.vin or ''),
+                back_url=back_url,
                 locked_base=True,
                 locked_config=locked_config,
                 config=config,
@@ -1706,7 +1733,7 @@ def trailer_change_item(trailer_id):
                 title='Изменить комплектацию прицепа',
                 current_item=trailer.item,
                 target_label=f'Trailer #{trailer.id} {trailer.vin or ""}',
-                back_url=url_for('main.trailers_list', vin=trailer.vin or ''),
+                back_url=back_url,
                 locked_base=True,
                 locked_config=locked_config,
                 config=config,
@@ -1722,7 +1749,7 @@ def trailer_change_item(trailer_id):
                 title='Изменить комплектацию прицепа',
                 current_item=trailer.item,
                 target_label=f'Trailer #{trailer.id} {trailer.vin or ""}',
-                back_url=url_for('main.trailers_list', vin=trailer.vin or ''),
+                back_url=back_url,
                 locked_base=True,
                 locked_config=locked_config,
                 config=config,
@@ -1748,7 +1775,7 @@ def trailer_change_item(trailer_id):
                 )
         db.session.commit()
         flash('Комплектация прицепа обновлена.', 'success')
-        return redirect(url_for('main.trailers_list', vin=trailer.vin or ''))
+        return redirect(back_url)
 
     return render_template(
         'trailer_item_form.html',
@@ -1756,7 +1783,7 @@ def trailer_change_item(trailer_id):
         title='Изменить комплектацию прицепа',
         current_item=trailer.item,
         target_label=f'Trailer #{trailer.id} {trailer.vin or ""}',
-        back_url=url_for('main.trailers_list', vin=trailer.vin or ''),
+        back_url=back_url,
         locked_base=True,
         locked_config=locked_config,
         config=config,
@@ -8861,13 +8888,16 @@ def logistics_assign_vin(unit_id):
 
 
 @main_bp.route('/logistics/produced-units/<int:unit_id>/change-item', methods=['GET', 'POST'])
-@role_required('logistics', 'director')
+@role_required('manager', 'director')
 def produced_unit_change_item(unit_id):
     unit = ProducedUnit.query.get_or_404(unit_id)
+    back_url = url_for('main.manager_workspace', tab='produced') if current_user.is_manager else url_for('main.logistics_workspace')
+    if current_user.is_manager and unit.target_warehouse_id != current_user.warehouse_id:
+        abort(403)
     ok, message = _can_change_produced_unit_item(unit)
     if not ok:
         flash(message, 'danger')
-        return redirect(url_for('main.logistics_workspace'))
+        return redirect(back_url)
 
     form = FlaskForm()
     locked_config = _config_from_item(unit.item)
@@ -8883,7 +8913,7 @@ def produced_unit_change_item(unit_id):
                 title='Изменить комплектацию выпущенной единицы',
                 current_item=unit.item,
                 target_label=f'Выпущенная единица #{unit.id}',
-                back_url=url_for('main.logistics_workspace'),
+                back_url=back_url,
                 locked_base=True,
                 locked_config=locked_config,
                 config=config,
@@ -8899,7 +8929,7 @@ def produced_unit_change_item(unit_id):
                 title='Изменить комплектацию выпущенной единицы',
                 current_item=unit.item,
                 target_label=f'Выпущенная единица #{unit.id}',
-                back_url=url_for('main.logistics_workspace'),
+                back_url=back_url,
                 locked_base=True,
                 locked_config=locked_config,
                 config=config,
@@ -8915,7 +8945,7 @@ def produced_unit_change_item(unit_id):
                 title='Изменить комплектацию выпущенной единицы',
                 current_item=unit.item,
                 target_label=f'Выпущенная единица #{unit.id}',
-                back_url=url_for('main.logistics_workspace'),
+                back_url=back_url,
                 locked_base=True,
                 locked_config=locked_config,
                 config=config,
@@ -8941,7 +8971,7 @@ def produced_unit_change_item(unit_id):
 
         db.session.commit()
         flash('Комплектация выпущенной единицы обновлена.', 'success')
-        return redirect(url_for('main.logistics_workspace'))
+        return redirect(back_url)
 
     return render_template(
         'trailer_item_form.html',
@@ -8949,7 +8979,7 @@ def produced_unit_change_item(unit_id):
         title='Изменить комплектацию выпущенной единицы',
         current_item=unit.item,
         target_label=f'Выпущенная единица #{unit.id}',
-        back_url=url_for('main.logistics_workspace'),
+        back_url=back_url,
         locked_base=True,
         locked_config=locked_config,
         config=config,

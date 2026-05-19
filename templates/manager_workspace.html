@@ -164,7 +164,16 @@
                             {% endif %}
                         </td>
                         <td>{% if row.order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=row.order.id) }}">{{ row.order.order_number }}</a>{% else %}<span class="text-muted">—</span>{% endif %}</td>
-                        <td class="text-end">{% if row.group == 'available' and trailer %}<a class="btn btn-sm btn-orange" href="{{ url_for('main.order_create', trailer_id=trailer.id, item_id=trailer.item_id, return_to='manager_workspace', return_tab='stock') }}">Создать заказ</a>{% endif %}</td>
+                        <td class="text-end">
+                            <div class="d-flex gap-1 justify-content-end flex-wrap">
+                                {% if trailer %}
+                                    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.trailer_change_item', trailer_id=trailer.id, return_to='manager_workspace', return_tab='stock') }}">Комплектация</a>
+                                {% endif %}
+                                {% if row.group == 'available' and trailer %}
+                                    <a class="btn btn-sm btn-orange" href="{{ url_for('main.order_create', trailer_id=trailer.id, item_id=trailer.item_id, return_to='manager_workspace', return_tab='stock') }}">Создать заказ</a>
+                                {% endif %}
+                            </div>
+                        </td>
                     </tr>
                 {% else %}<tr><td colspan="7" class="text-muted p-3">На складе нет прицепов</td></tr>{% endfor %}
                     <tr id="stockEmptyRow" class="{% if not warehouse_stock_rows or stock_trailers %}d-none{% endif %}"><td colspan="7" class="text-muted p-3">В выбранной группе нет прицепов</td></tr>
@@ -232,7 +241,12 @@
                         <td>{{ unit.produced_at|date_format }}</td>
                         <td>{{ unit.target_warehouse.name if unit.target_warehouse else '' }}</td>
                         <td><span class="badge text-bg-{{ unit.status|status_badge_class }}">{{ unit.status|status_label }}</span></td>
-                        <td class="text-end"><a class="btn btn-sm btn-orange" href="{{ url_for('main.logistics_assign_vin', unit_id=unit.id) }}">Привязать VIN</a></td>
+                        <td class="text-end">
+                            <div class="d-flex gap-1 justify-content-end flex-wrap">
+                                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.produced_unit_change_item', unit_id=unit.id) }}">Комплектация</a>
+                                <a class="btn btn-sm btn-orange" href="{{ url_for('main.logistics_assign_vin', unit_id=unit.id) }}">Привязать VIN</a>
+                            </div>
+                        </td>
                     </tr>
                 {% else %}<tr><td colspan="7" class="text-muted p-3">Выпущенных единиц без VIN нет</td></tr>{% endfor %}</tbody>
             </table></div>
