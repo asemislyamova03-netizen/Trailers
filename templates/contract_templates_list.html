@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Шаблоны договоров{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h1 class="h3 mb-0">Шаблоны договоров</h1>
+    <div class="text-muted small">Правила выбора шаблона для печати и PDF договора.</div>
+  </div>
+  <a href="{{ url_for('main.contract_template_create') }}" class="btn btn-orange">Создать шаблон</a>
+</div>
+
+<div class="app-card">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Код</th>
+          <th>Название</th>
+          <th>Группа</th>
+          <th>ОТТС</th>
+          <th>Исполнение</th>
+          <th>Клиент</th>
+          <th>Файл</th>
+          <th>Приоритет</th>
+          <th>Статус</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for template in templates %}
+        <tr>
+          <td class="fw-semibold">{{ template.code }}</td>
+          <td>{{ template.name }}</td>
+          <td>{{ template.product_group_code or 'любой' }}</td>
+          <td>
+            <div>{{ template.otss_number or 'любой' }}</div>
+            {% if template.otss_type or template.otss_modification %}
+              <div class="small text-muted">{{ template.otss_type or 'тип любой' }} / {{ template.otss_modification or 'мод. любая' }}</div>
+            {% endif %}
+          </td>
+          <td>{{ template.body_execution_code or 'любое' }}</td>
+          <td>{{ template.customer_type or 'любой' }}</td>
+          <td>{{ template.content_path or 'contract_print.html' }}</td>
+          <td>{{ template.sort_order }}</td>
+          <td>
+            {% if template.is_active %}<span class="badge text-bg-success">активен</span>{% else %}<span class="badge text-bg-secondary">выключен</span>{% endif %}
+            {% if template.is_default %}<span class="badge text-bg-info">по умолчанию</span>{% endif %}
+          </td>
+          <td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{{ url_for('main.contract_template_edit', template_id=template.id) }}">Изменить</a></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="10" class="text-muted p-4">Шаблоны ещё не заведены. Пока используется стандартный `contract_print.html`.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

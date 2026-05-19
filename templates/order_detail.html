@@ -392,6 +392,16 @@
             <div class="d-flex flex-column gap-2">
               <div><strong>Договор № {{ order_contract.contract_number or order_contract.id }}</strong></div>
               <div class="small">
+                Шаблон:
+                {% if order_contract_template %}
+                  <span class="badge text-bg-info">{{ order_contract_template.name }}</span>
+                  <span class="text-muted ms-1">{{ order_contract_template.code }}</span>
+                {% else %}
+                  <span class="badge text-bg-secondary">стандартный</span>
+                  <span class="text-muted ms-1">fallback contract_print.html</span>
+                {% endif %}
+              </div>
+              <div class="small">
                 SIGEX/eGov:
                 <span class="badge text-bg-{{ order_contract.sigex_last_status|status_badge_class }}">{{ order_contract.sigex_last_status|status_label if order_contract.sigex_last_status else 'не начато' }}</span>
                 {% if order_contract.sigex_document_id %}<span class="text-muted ms-1">doc {{ order_contract.sigex_document_id }}</span>{% endif %}

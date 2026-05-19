@@ -96,56 +96,33 @@
   {% endfor %}
 </section>
 
-<div class="app-card">
+{% if section in ['sales', 'dynamics', 'branches', 'types', 'turnover'] %}
+<div class="row g-4">
+  <div class="col-xl-8">
+    <div class="app-card p-3 h-100">
+      <div class="card-header px-0 pt-0 d-flex justify-content-between align-items-center">
+        <span>{{ 'Выручка и количество' if section != 'turnover' else 'Остаток и продажи' }}</span>
+        <span class="text-muted small">{{ date_from|date_format }} — {{ date_to|date_format }}</span>
+      </div>
+      <canvas id="mainReportChart" height="120"></canvas>
+    </div>
+  </div>
+  <div class="col-xl-4">
+    <div class="app-card p-3 h-100">
+      <div class="card-header px-0 pt-0">{{ 'Средний чек' if section != 'turnover' else 'Оборачиваемость' }}</div>
+      <canvas id="secondaryReportChart" height="170"></canvas>
+    </div>
+  </div>
+</div>
+
+<div class="app-card mt-4">
   <div class="card-header d-flex justify-content-between align-items-center">
-    <span>{{ title }}</span>
+    <span>Агрегированные показатели</span>
     <span class="text-muted small">{{ date_from|date_format }} — {{ date_to|date_format }}</span>
   </div>
-
-  {% if section == 'sales' %}
   <div class="table-responsive">
-    <table class="table table-hover align-middle">
-      <thead><tr><th>Дата</th><th>Заказ</th><th>Клиент</th><th>Менеджер</th><th>Прицеп</th><th>Сумма</th><th>Документы</th><th>Отгрузка</th></tr></thead>
-      <tbody>
-      {% for order in rows %}
-        <tr>
-          <td>{{ order.documents_issued_at|date_format }}</td>
-          <td><a href="{{ url_for('main.order_detail', order_id=order.id) }}">{{ order.order_number }}</a></td>
-          <td>{{ order.customer.name if order.customer else '—' }}</td>
-          <td>{{ order.assigned_user.full_name or order.assigned_user.username if order.assigned_user else '—' }}</td>
-          <td>{{ get_order_effective_vin(order) or '—' }}</td>
-          <td>{{ order.price|money }}</td>
-          <td><span class="badge {{ order.document_status|status_badge_class }}">{{ order.document_status|status_label }}</span></td>
-          <td><span class="badge {{ order.status|status_badge_class }}">{{ order.status|status_label }}</span></td>
-        </tr>
-      {% else %}
-        <tr><td colspan="8" class="text-muted p-4">Нет продаж за выбранный период</td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% elif section in ['dynamics', 'branches', 'types'] %}
-  <div class="table-responsive">
-    <table class="table table-hover align-middle">
-      <thead><tr><th>{{ 'Период' if section == 'dynamics' else ('Филиал' if section == 'branches' else 'Тип / группа') }}</th><th>Заказов</th><th>Продано, шт.</th><th>Выручка</th><th>Средний чек</th></tr></thead>
-      <tbody>
-      {% for row in analytics_rows %}
-        <tr>
-          <td class="fw-semibold">{{ row.label }}</td>
-          <td>{{ row.orders }}</td>
-          <td>{{ row.quantity }}</td>
-          <td>{{ row.revenue|money }}</td>
-          <td>{{ row.average|money }}</td>
-        </tr>
-      {% else %}
-        <tr><td colspan="5" class="text-muted p-4">Нет данных за выбранный период</td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% elif section == 'turnover' %}
-  <div class="table-responsive">
-    <table class="table table-hover align-middle">
+    {% if section == 'turnover' %}
+    <table class="table table-hover align-middle mb-0">
       <thead><tr><th>Тип / группа</th><th>Остаток, шт.</th><th>Продано, шт.</th><th>Выручка</th><th>Оборачиваемость</th><th>Дней запаса</th></tr></thead>
       <tbody>
       {% for row in analytics_rows %}
@@ -162,8 +139,34 @@
       {% endfor %}
       </tbody>
     </table>
+    {% else %}
+    <table class="table table-hover align-middle mb-0">
+      <thead><tr><th>{{ 'Период' if section in ['sales', 'dynamics'] else ('Филиал' if section == 'branches' else 'Тип / группа') }}</th><th>Заказов</th><th>Продано, шт.</th><th>Выручка</th><th>Средний чек</th></tr></thead>
+      <tbody>
+      {% for row in analytics_rows %}
+        <tr>
+          <td class="fw-semibold">{{ row.label }}</td>
+          <td>{{ row.orders }}</td>
+          <td>{{ row.quantity }}</td>
+          <td>{{ row.revenue|money }}</td>
+          <td>{{ row.average|money }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="text-muted p-4">Нет агрегированных данных за выбранный период</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
   </div>
-  {% elif section == 'finance' %}
+</div>
+{% else %}
+<div class="app-card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>{{ title }}</span>
+    <span class="text-muted small">{{ date_from|date_format }} — {{ date_to|date_format }}</span>
+  </div>
+
+  {% if section == 'finance' %}
   <div class="table-responsive">
     <table class="table table-hover align-middle">
       <thead><tr><th>Дата</th><th>Заказ</th><th>Клиент</th><th>Сумма</th><th>Этап</th><th>Метод</th><th>Статус</th><th>Примечание</th></tr></thead>
@@ -302,4 +305,57 @@
   </div>
   {% endif %}
 </div>
+{% endif %}
+
+{% if section in ['sales', 'dynamics', 'branches', 'types', 'turnover'] %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const chartData = {{ chart_data|tojson }};
+  const labels = chartData.labels || [];
+  const revenue = chartData.revenue || [];
+  const quantity = chartData.quantity || [];
+  const average = chartData.average || [];
+  const stock = chartData.stock || [];
+  const turnover = chartData.turnover || [];
+  const mainCanvas = document.getElementById('mainReportChart');
+  const secondaryCanvas = document.getElementById('secondaryReportChart');
+  if (mainCanvas) {
+    new Chart(mainCanvas, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          { type: 'bar', label: '{{ "Остаток" if section == "turnover" else "Выручка" }}', data: {{ "stock" if section == "turnover" else "revenue" }}, backgroundColor: '#2563eb', yAxisID: 'y' },
+          { type: 'line', label: 'Продано, шт.', data: quantity, borderColor: '#f97316', backgroundColor: '#f97316', tension: 0.25, yAxisID: 'y1' }
+        ]
+      },
+      options: {
+        responsive: true,
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          y: { beginAtZero: true, position: 'left' },
+          y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false } }
+        }
+      }
+    });
+  }
+  if (secondaryCanvas) {
+    new Chart(secondaryCanvas, {
+      type: '{{ "doughnut" if section in ["branches", "types"] else "line" }}',
+      data: {
+        labels,
+        datasets: [{
+          label: '{{ "Оборачиваемость" if section == "turnover" else "Средний чек" }}',
+          data: {{ "turnover" if section == "turnover" else "average" }},
+          borderColor: '#16a34a',
+          backgroundColor: ['#16a34a', '#2563eb', '#f97316', '#7c3aed', '#0891b2', '#dc2626', '#64748b'],
+          tension: 0.25
+        }]
+      },
+      options: { responsive: true }
+    });
+  }
+});
+</script>
+{% endif %}
 {% endblock %}

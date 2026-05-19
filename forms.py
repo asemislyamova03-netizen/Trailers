@@ -512,6 +512,34 @@ class CustomerOrderForm(IdempotentFlaskForm):
     manager_comment = TextAreaField('Комментарий менеджера', validators=[Optional()])
     submit = SubmitField('Сохранить')
 
+
+class ContractTemplateForm(IdempotentFlaskForm):
+    code = StringField('Код шаблона', validators=[DataRequired(), Length(max=60)])
+    name = StringField('Название', validators=[DataRequired(), Length(max=160)])
+    template_type = SelectField(
+        'Тип шаблона',
+        choices=[('sale', 'Договор продажи')],
+        default='sale',
+        validators=[DataRequired()],
+    )
+    product_group_code = StringField('Группа / тип прицепа', validators=[Optional(), Length(max=20)])
+    otss_number = StringField('Номер ОТТС', validators=[Optional(), Length(max=120)])
+    otss_type = StringField('Тип ОТТС', validators=[Optional(), Length(max=20)])
+    otss_modification = StringField('Модификация ОТТС', validators=[Optional(), Length(max=20)])
+    body_execution_code = StringField('Исполнение кузова', validators=[Optional(), Length(max=30)])
+    customer_type = SelectField(
+        'Тип клиента',
+        choices=[('', 'Любой'), ('PERSON', 'Физическое лицо'), ('COMPANY', 'Юридическое лицо / ИП / КХ')],
+        default='',
+        validators=[Optional()],
+    )
+    content_path = StringField('Файл шаблона HTML', validators=[Optional(), Length(max=500)])
+    is_default = BooleanField('Шаблон по умолчанию')
+    is_active = BooleanField('Активен', default=True)
+    sort_order = IntegerField('Приоритет', validators=[Optional(), NumberRange(min=0)], default=0)
+    comment = TextAreaField('Комментарий', validators=[Optional()])
+    submit = SubmitField('Сохранить')
+
     def validate_order_number(self, field):
         num = (field.data or '').strip()
         if not num:

@@ -43,7 +43,7 @@
                     {{ nav_item('Реестр VIN', 'bi-upc', 'main.vin_registry_list', match='/logistics/vin-registry') }}
                     {{ nav_item('Пополнение складов', 'bi-box-arrow-in-down', 'main.stock_replenishment_list', match='/stock-replenishment') }}
                     {{ nav_item('Финансы', 'bi-cash-coin', 'main.orders_list') }}
-                    {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', match='/director/reports') }}
+                    {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', match='/reports') }}
                     <div class="sidebar-section-title">Справочники</div>
                     {{ nav_item('Номенклатура', 'bi-tags', 'main.items_list', match='/items') }}
                     {{ nav_item('Конфигуратор прицепов', 'bi-sliders', 'main.trailer_config_catalog', match='/catalog/trailer-config') }}
@@ -52,6 +52,7 @@
                     {{ nav_item('Прицепы', 'bi-box-seam', 'main.trailers_list', match='/trailers') }}
                     {{ nav_item('Клиенты', 'bi-person-lines-fill', 'main.customers_list', match='/customers') }}
                     {{ nav_item('Договоры', 'bi-file-earmark-text', 'main.contracts_list', match='/contracts') }}
+                    {{ nav_item('Шаблоны договоров', 'bi-file-earmark-ruled', 'main.contract_templates_list', match='/contracts/templates') }}
                     {{ nav_item('Пользователи', 'bi-people', 'main.users_list', match='/users') }}
                 {% elif current_user.is_manager %}
                     {{ nav_item('Рабочий стол', 'bi-speedometer2', 'main.manager_workspace', match='/manager') }}
@@ -68,8 +69,6 @@
                     {{ nav_item('Договоры', 'bi-file-earmark-text', 'main.contracts_list', match='/contracts') }}
                 {% elif current_user.is_production %}
                     {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', match='/production') }}
-                    {{ nav_item('Мои задания', 'bi-list-check', 'main.production_workspace') }}
-                    {{ nav_item('Выпущено', 'bi-check2-circle', 'main.production_workspace') }}
                 {% elif current_user.is_logistics %}
                     {{ nav_item('Реестр VIN', 'bi-upc', 'main.vin_registry_list', match='/logistics/vin-registry') }}
                     {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', match='/reports') }}
@@ -82,13 +81,14 @@
                     {{ nav_item('Логистика', 'bi-truck', 'main.logistics_workspace', match='/logistics') }}
                     {{ nav_item('Реестр VIN', 'bi-upc', 'main.vin_registry_list', match='/logistics/vin-registry') }}
                     {{ nav_item('Пополнение складов', 'bi-box-arrow-in-down', 'main.stock_replenishment_list', match='/stock-replenishment') }}
-                    {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', match='/director/reports') }}
+                    {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', match='/reports') }}
                     <div class="sidebar-section-title">Справочники</div>
                     {{ nav_item('Номенклатура', 'bi-tags', 'main.items_list', match='/items') }}
                     {{ nav_item('Конфигуратор прицепов', 'bi-sliders', 'main.trailer_config_catalog', match='/catalog/trailer-config') }}
                     {{ nav_item('Склады', 'bi-buildings', 'main.warehouses_list', match='/warehouses') }}
                     {{ nav_item('Прицепы', 'bi-box-seam', 'main.trailers_list', match='/trailers') }}
                     {{ nav_item('Клиенты', 'bi-person-lines-fill', 'main.customers_list', match='/customers') }}
+                    {{ nav_item('Шаблоны договоров', 'bi-file-earmark-ruled', 'main.contract_templates_list', match='/contracts/templates') }}
                 {% else %}
                     {{ nav_item('Панель', 'bi-speedometer2', 'main.trailers_list') }}
                     {{ nav_item('Остатки', 'bi-box-seam', 'main.trailers_list', match='/trailers') }}

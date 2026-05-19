@@ -26,7 +26,7 @@ from forms import (
     TrailerCreateForm, WarehouseForm, ItemForm,
     CustomerForm, SalesContractForm, LoginForm, UserForm, OTTSForm, LeadForm, CustomerOrderForm, OrderPaymentForm,
     SupplyNeedForm, ProductionRequestForm, ProductionRequestLineForm, StockMovementForm, StockMovementBatchForm,
-    AssignVinForm, SendTrailerForm, StockReplenishmentForm, TrailerItemChangeForm
+    AssignVinForm, SendTrailerForm, StockReplenishmentForm, TrailerItemChangeForm, ContractTemplateForm
 )
 from collections import defaultdict
 import sqlalchemy as sa
@@ -3241,6 +3241,30 @@ def _contract_template_render_name(template: ContractTemplate | None) -> str:
     return path
 
 
+def _contract_template_for_contract(contract: SalesContract | None) -> ContractTemplate | None:
+    if not contract:
+        return None
+    lines = contract.lines.order_by(SalesContractLine.line_no.asc(), SalesContractLine.id.asc()).all()
+    return _select_contract_template(contract, lines)
+
+
+def _apply_contract_template_form(template: ContractTemplate, form: ContractTemplateForm) -> None:
+    template.code = (form.code.data or '').strip()
+    template.name = (form.name.data or '').strip()
+    template.template_type = form.template_type.data or 'sale'
+    template.product_group_code = (form.product_group_code.data or '').strip() or None
+    template.otss_number = (form.otss_number.data or '').strip() or None
+    template.otss_type = (form.otss_type.data or '').strip() or None
+    template.otss_modification = (form.otss_modification.data or '').strip() or None
+    template.body_execution_code = (form.body_execution_code.data or '').strip() or None
+    template.customer_type = (form.customer_type.data or '').strip() or None
+    template.content_path = (form.content_path.data or '').strip() or None
+    template.is_default = bool(form.is_default.data)
+    template.is_active = bool(form.is_active.data)
+    template.sort_order = int(form.sort_order.data or 0)
+    template.comment = (form.comment.data or '').strip() or None
+
+
 def _build_contract_context(contract_id: int) -> dict:
     contract = SalesContract.query.get_or_404(contract_id)
     _ensure_can_access_contract(contract)
@@ -3375,6 +3399,53 @@ def contracts_list():
         paid=paid,
         shipped=shipped,
     )
+
+
+@main_bp.route('/contracts/templates')
+@role_required('director')
+def contract_templates_list():
+    templates = ContractTemplate.query.order_by(ContractTemplate.is_active.desc(), ContractTemplate.sort_order.desc(), ContractTemplate.name.asc()).all()
+    return render_template('contract_templates_list.html', templates=templates)
+
+
+@main_bp.route('/contracts/templates/new', methods=['GET', 'POST'])
+@role_required('director')
+def contract_template_create():
+    form = ContractTemplateForm()
+    if form.validate_on_submit():
+        template = ContractTemplate()
+        _apply_contract_template_form(template, form)
+        db.session.add(template)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash('Шаблон с таким кодом уже существует.', 'danger')
+            return render_template('contract_template_form.html', form=form, form_title='Новый шаблон договора')
+        flash('Шаблон договора создан.', 'success')
+        return redirect(url_for('main.contract_templates_list'))
+    return render_template('contract_template_form.html', form=form, form_title='Новый шаблон договора')
+
+
+@main_bp.route('/contracts/templates/<int:template_id>/edit', methods=['GET', 'POST'])
+@role_required('director')
+def contract_template_edit(template_id):
+    template = ContractTemplate.query.get_or_404(template_id)
+    form = ContractTemplateForm(obj=template)
+    if request.method == 'GET':
+        form.customer_type.data = template.customer_type or ''
+    if form.validate_on_submit():
+        _apply_contract_template_form(template, form)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash('Шаблон с таким кодом уже существует.', 'danger')
+            return render_template('contract_template_form.html', form=form, form_title='Редактирование шаблона договора', template=template)
+        flash('Шаблон договора сохранён.', 'success')
+        return redirect(url_for('main.contract_templates_list'))
+    return render_template('contract_template_form.html', form=form, form_title='Редактирование шаблона договора', template=template)
+
 
 @main_bp.route('/contracts/new', methods=['GET', 'POST'])
 @login_required
@@ -6837,6 +6908,7 @@ def order_detail(order_id):
     ]
     add_line_items = Item.query.filter_by(is_active=True).order_by(Item.article.asc().nullslast(), Item.name.asc()).limit(150).all()
     order_contract = SalesContract.query.filter_by(order_id=order.id).first()
+    order_contract_template = _contract_template_for_contract(order_contract)
     document_blockers = _order_lines_document_blockers(order)
     order_vin_row = _active_vin_registry_for_order(order.id)
     future_production_lines = []
@@ -6987,6 +7059,7 @@ def order_detail(order_id):
         add_line_stock_trailers=add_line_stock_trailers,
         add_line_items=add_line_items,
         order_contract=order_contract,
+        order_contract_template=order_contract_template,
         document_blockers=document_blockers,
         order_vin_row=order_vin_row,
         future_production_lines=future_production_lines,
@@ -9944,7 +10017,7 @@ def director_report(section='sales'):
             {'title': 'Средний чек', 'value': money(revenue / len(rows) if rows else 0), 'caption': 'по закрытым продажам'},
             {'title': 'Резервы', 'value': order_scope(CustomerOrder.query).filter(CustomerOrder.status.in_(['reserved', 'waiting_payment', 'prepaid', 'ready_to_ship'])).count(), 'caption': 'активные заказы'},
         ]
-        if section == 'dynamics':
+        if section in ('sales', 'dynamics'):
             buckets = defaultdict(lambda: {'orders': 0, 'quantity': 0, 'revenue': 0.0})
             for order in rows:
                 key = order.documents_issued_at.strftime('%Y-%m') if order.documents_issued_at else 'без даты'
@@ -10235,6 +10308,31 @@ def director_report(section='sales'):
             {'title': 'Просрочки', 'value': len(overdue_movements) + len(overdue_production), 'caption': 'логистика + производство'},
         ]
 
+    chart_data = {'labels': [], 'revenue': [], 'quantity': [], 'average': [], 'stock': [], 'turnover': []}
+    if section == 'sales':
+        buckets = defaultdict(lambda: {'orders': 0, 'quantity': 0, 'revenue': 0.0})
+        for order in rows:
+            key = order.documents_issued_at.strftime('%Y-%m') if order.documents_issued_at else 'без даты'
+            buckets[key]['orders'] += 1
+            buckets[key]['quantity'] += order.quantity or 1
+            buckets[key]['revenue'] += float(order.price or 0)
+        for key, value in sorted(buckets.items()):
+            chart_data['labels'].append(key)
+            chart_data['revenue'].append(round(value['revenue'], 2))
+            chart_data['quantity'].append(value['quantity'])
+            chart_data['average'].append(round(value['revenue'] / value['orders'], 2) if value['orders'] else 0)
+    elif section in ('dynamics', 'branches', 'types'):
+        chart_data['labels'] = [row['label'] for row in analytics_rows]
+        chart_data['revenue'] = [round(row['revenue'], 2) for row in analytics_rows]
+        chart_data['quantity'] = [row['quantity'] for row in analytics_rows]
+        chart_data['average'] = [round(row['average'], 2) for row in analytics_rows]
+    elif section == 'turnover':
+        chart_data['labels'] = [row['label'] for row in analytics_rows]
+        chart_data['stock'] = [row['stock'] for row in analytics_rows]
+        chart_data['quantity'] = [row['quantity'] for row in analytics_rows]
+        chart_data['revenue'] = [round(row['revenue'], 2) for row in analytics_rows]
+        chart_data['turnover'] = [round(row['turnover'], 2) for row in analytics_rows]
+
     return render_template(
         'director_report.html',
         section=section,
@@ -10253,6 +10351,7 @@ def director_report(section='sales'):
         rows=rows,
         problem_rows=problem_rows,
         analytics_rows=analytics_rows,
+        chart_data=chart_data,
     )
 
 

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}{{ form_title }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="h3 mb-0">{{ form_title }}</h1>
+  <a href="{{ url_for('main.contract_templates_list') }}" class="btn btn-soft">Назад</a>
+</div>
+
+<form method="post" class="app-card p-4">
+  {{ form.hidden_tag() }}
+  <div class="row g-3">
+    <div class="col-md-3">{{ form.code.label(class="form-label") }}{{ form.code(class="form-control", placeholder="cargo_default") }}</div>
+    <div class="col-md-5">{{ form.name.label(class="form-label") }}{{ form.name(class="form-control", placeholder="Договор для грузовых") }}</div>
+    <div class="col-md-4">{{ form.template_type.label(class="form-label") }}{{ form.template_type(class="form-select") }}</div>
+    <div class="col-md-3">{{ form.product_group_code.label(class="form-label") }}{{ form.product_group_code(class="form-control", placeholder="006G или 002") }}</div>
+    <div class="col-md-3">{{ form.body_execution_code.label(class="form-label") }}{{ form.body_execution_code(class="form-control", placeholder="GRAINTRAILER") }}</div>
+    <div class="col-md-3">{{ form.customer_type.label(class="form-label") }}{{ form.customer_type(class="form-select") }}</div>
+    <div class="col-md-3">{{ form.sort_order.label(class="form-label") }}{{ form.sort_order(class="form-control") }}</div>
+    <div class="col-md-4">{{ form.otss_number.label(class="form-label") }}{{ form.otss_number(class="form-control") }}</div>
+    <div class="col-md-2">{{ form.otss_type.label(class="form-label") }}{{ form.otss_type(class="form-control") }}</div>
+    <div class="col-md-2">{{ form.otss_modification.label(class="form-label") }}{{ form.otss_modification(class="form-control") }}</div>
+    <div class="col-md-4">{{ form.content_path.label(class="form-label") }}{{ form.content_path(class="form-control", placeholder="contract_print.html") }}</div>
+    <div class="col-md-6">
+      <div class="form-check mt-2">{{ form.is_default(class="form-check-input") }}{{ form.is_default.label(class="form-check-label") }}</div>
+      <div class="form-check mt-2">{{ form.is_active(class="form-check-input") }}{{ form.is_active.label(class="form-check-label") }}</div>
+    </div>
+    <div class="col-12">{{ form.comment.label(class="form-label") }}{{ form.comment(class="form-control", rows=3) }}</div>
+  </div>
+  <div class="mt-4 d-flex gap-2">
+    {{ form.submit(class="btn btn-orange") }}
+    <a href="{{ url_for('main.contract_templates_list') }}" class="btn btn-soft">Отмена</a>
+  </div>
+</form>
+{% endblock %}
