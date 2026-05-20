@@ -161,7 +161,13 @@ def can_access_contract(contract: SalesContract) -> bool:
     if current_user.is_manager:
         if contract.order:
             return can_access_order(contract.order)
-        return bool(current_user.warehouse_id and contract.trailer and contract.trailer.warehouse_id == current_user.warehouse_id)
+        return bool(
+            current_user.warehouse_id
+            and (
+                contract.warehouse_id == current_user.warehouse_id
+                or (contract.trailer and contract.trailer.warehouse_id == current_user.warehouse_id)
+            )
+        )
     return False
 
 
@@ -3487,6 +3493,14 @@ def contract_edit(contract_id):
         (t.id, f"{t.vin} — {t.item.article if t.item else ''}")
         for t in trailers
     ]
+    form.warehouse_id.choices = [(0, '— из заказа / прицепа —')] + [
+        (w.id, w.name)
+        for w in Warehouse.query.filter_by(is_active=True).order_by(Warehouse.name).all()
+    ]
+    form.assigned_user_id.choices = [(0, '— из заказа / не указан —')] + [
+        (u.id, u.full_name or u.username)
+        for u in User.query.order_by(User.full_name, User.username).all()
+    ]
 
     if request.method == 'GET':
         form.contract_date.data = contract.contract_date
@@ -3495,6 +3509,8 @@ def contract_edit(contract_id):
             form.customer_id.data = contract.customer_id
         if contract.trailer_id:
             form.trailer_id.data = contract.trailer_id
+        form.warehouse_id.data = contract.warehouse_id or 0
+        form.assigned_user_id.data = contract.assigned_user_id or 0
         form.price.data = float(contract.price) if contract.price is not None else None
         form.payment_method.data = contract.payment_method or ''
         form.is_paid.data = contract.is_paid
@@ -3580,6 +3596,8 @@ def contract_edit(contract_id):
         contract.contract_date = form.contract_date.data
         contract.customer_id = form.customer_id.data
         contract.trailer_id = new_trailer.id
+        contract.warehouse_id = form.warehouse_id.data or None
+        contract.assigned_user_id = form.assigned_user_id.data or None
         contract.price = form.price.data
         contract.payment_method = _norm_str(form.payment_method.data)
         if current_user.is_admin:
@@ -10387,8 +10405,16 @@ def director_report(section='sales'):
                 continue
 
             trailer = contract.trailer or (order.trailer if order else None)
-            warehouse = (order.warehouse if order and order.warehouse else (trailer.warehouse if trailer else None))
-            manager = order.assigned_user if order else None
+            warehouse = (
+                contract.warehouse if contract.warehouse
+                else order.warehouse if order and order.warehouse
+                else trailer.warehouse if trailer else None
+            )
+            manager = (
+                contract.assigned_user if contract.assigned_user
+                else order.assigned_user if order and order.assigned_user
+                else None
+            )
             if current_user.is_manager:
                 allowed_by_order = order and (
                     order.assigned_user_id == current_user.id

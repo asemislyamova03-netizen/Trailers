@@ -67,6 +67,24 @@
             {% endfor %}
         </div>
     </div>
+    <div class="row">
+        <div class="col-md-6 mb-3">
+            {{ form.warehouse_id.label(class="form-label") }}
+            {{ form.warehouse_id(class="form-select") }}
+            <div class="form-text">Используется для исторических договоров без CRM-заказа.</div>
+            {% for error in form.warehouse_id.errors %}
+            <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+        </div>
+        <div class="col-md-6 mb-3">
+            {{ form.assigned_user_id.label(class="form-label") }}
+            {{ form.assigned_user_id(class="form-select") }}
+            <div class="form-text">Используется в отчетах как ответственный по исторической продаже.</div>
+            {% for error in form.assigned_user_id.errors %}
+            <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+        </div>
+    </div>
     {% if current_user.is_admin %}
     <div class="form-check mb-2">
         {{ form.is_paid(class="form-check-input") }}

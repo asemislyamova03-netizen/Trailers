@@ -399,6 +399,8 @@ class SalesContract(db.Model):
     customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'), nullable=True, index=True)
     trailer_id  = db.Column(db.Integer, db.ForeignKey('trailer.id'), nullable=True, index=True)
     order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=True, index=True)
+    warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=True, index=True)
+    assigned_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
 
     price = db.Column(Numeric(12, 2), nullable=True)
     payment_method = db.Column(db.String(50), nullable=True)
@@ -408,6 +410,8 @@ class SalesContract(db.Model):
     customer = db.relationship('Customer', backref='sales_contracts')
     trailer  = db.relationship('Trailer', backref='sales_contracts')
     order = db.relationship('CustomerOrder', backref=db.backref('sales_contracts', lazy='dynamic'))
+    warehouse = db.relationship('Warehouse', foreign_keys=[warehouse_id], backref='sales_contracts')
+    assigned_user = db.relationship('User', foreign_keys=[assigned_user_id], backref='sales_contracts')
 
     is_paid = db.Column(db.Boolean, nullable=False, default=False)
     is_shipped = db.Column(db.Boolean, nullable=False, default=False)

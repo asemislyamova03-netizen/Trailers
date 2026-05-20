@@ -368,6 +368,18 @@ class SalesContractForm(IdempotentFlaskForm):
         validators=[DataRequired(message='Выберите прицеп')]
     )
 
+    warehouse_id = SelectField(
+        'Склад для исторических отчетов',
+        coerce=int,
+        validators=[Optional()]
+    )
+
+    assigned_user_id = SelectField(
+        'Ответственный для исторических отчетов',
+        coerce=int,
+        validators=[Optional()]
+    )
+
     price = DecimalField(
         'Сумма',
         places=2,
