@@ -19,6 +19,11 @@
           {{ form.order_number(class="form-control") }}
         </div>
         <div class="col-md-6">
+          {{ form.order_date.label(class="form-label") }}
+          {{ form.order_date(class="form-control", type="date") }}
+          {% for error in form.order_date.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+        </div>
+        <div class="col-md-6">
           {{ form.lead_id.label(class="form-label") }}
           {{ form.lead_id(class="form-select") }}
         </div>

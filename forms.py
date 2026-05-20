@@ -473,6 +473,7 @@ class CustomerOrderForm(IdempotentFlaskForm):
         super().__init__(*args, **kwargs)
 
     order_number = StringField('Номер заказа', validators=[Optional(), Length(max=50)])
+    order_date = DateField('Дата заказа', format='%Y-%m-%d', validators=[Optional()])
     lead_id = SelectField('Заявка', coerce=int, validators=[Optional()])
     customer_search = StringField('Поиск клиента', validators=[Optional(), Length(max=255)])
     customer_id = SelectField('Клиент', coerce=int, validators=[DataRequired()])

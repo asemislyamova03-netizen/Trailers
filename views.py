@@ -6530,6 +6530,7 @@ def order_create():
 
     if request.method == 'GET':
         form.order_number.data = _next_number('ORD', CustomerOrder, 'order_number')
+        form.order_date.data = date.today()
         form.status.data = 'waiting_payment'
         form.fulfillment_source.data = 'later'
         form.prepayment_percent.data = 30
@@ -6620,6 +6621,7 @@ def order_create():
 
         order = CustomerOrder(
             order_number=order_number,
+            created_at=datetime.combine(form.order_date.data or date.today(), datetime.min.time()),
             lead_id=form.lead_id.data or None,
             customer_id=form.customer_id.data,
             item_id=form.item_id.data or None,
@@ -7453,6 +7455,7 @@ def order_edit(order_id):
     _fill_order_form_choices(form, item_id_prefill=order.item_id, current_order_id=order.id)
 
     if request.method == 'GET':
+        form.order_date.data = order.created_at.date() if order.created_at else date.today()
         form.lead_id.data = order.lead_id or 0
         customer_id_prefill = request.args.get('customer_id', type=int)
         if customer_id_prefill:
@@ -7514,6 +7517,8 @@ def order_edit(order_id):
             return _render_order_form(form, 'Редактирование заказа')
 
         order.order_number = (form.order_number.data or '').strip() or order.order_number
+        if form.order_date.data:
+            order.created_at = datetime.combine(form.order_date.data, time.min)
         order.lead_id = form.lead_id.data or None
         order.customer_id = form.customer_id.data
         order.item_id = form.item_id.data
