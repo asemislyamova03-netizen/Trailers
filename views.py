@@ -7960,7 +7960,13 @@ def _resolve_realization_trailer_for_line(order: CustomerOrder, source_line: Cus
         )
         .first()
     )
-    trailer = source_line.trailer or (vin_row.trailer if vin_row and vin_row.trailer_id else None)
+    if not vin_row:
+        return None, None, f'Позиция #{source_line.line_no}: нет активного VIN в реестре по этой строке заказа. Привяжите правильный VIN к строке перед созданием реализации.'
+
+    trailer = vin_row.trailer
+
+    if source_line.trailer_id and trailer and source_line.trailer_id != trailer.id:
+        return None, None, f'Позиция #{source_line.line_no}: прицеп в строке заказа не совпадает с прицепом VIN-реестра.'
 
     if vin_row and vin_row.trailer_id and trailer and vin_row.trailer_id != trailer.id:
         return None, None, f'Позиция #{source_line.line_no}: VIN связан с другим прицепом. Проверьте строку заказа и VIN-реестр.'
