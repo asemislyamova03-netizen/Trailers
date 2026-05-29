@@ -1307,6 +1307,48 @@ def manager_workspace():
         .all()
         if active_order_ids else []
     )
+    stock_need_scope = SupplyNeed.query.filter(SupplyNeed.need_type.in_(['STOCK_REPLENISHMENT', 'WAREHOUSE_STOCK']))
+    stock_unit_scope = (
+        ProducedUnit.query
+        .join(ProductionRequestLine, ProductionRequestLine.id == ProducedUnit.production_request_line_id)
+        .join(SupplyNeed, SupplyNeed.id == ProductionRequestLine.supply_need_id)
+        .filter(SupplyNeed.need_type.in_(['STOCK_REPLENISHMENT', 'WAREHOUSE_STOCK']))
+    )
+    if current_user.is_manager and current_user.warehouse_id:
+        stock_need_scope = stock_need_scope.filter(SupplyNeed.warehouse_id == current_user.warehouse_id)
+        stock_unit_scope = stock_unit_scope.filter(ProducedUnit.target_warehouse_id == current_user.warehouse_id)
+    elif warehouse_id:
+        stock_need_scope = stock_need_scope.filter(SupplyNeed.warehouse_id == warehouse_id)
+        stock_unit_scope = stock_unit_scope.filter(ProducedUnit.target_warehouse_id == warehouse_id)
+    stock_replenishment_to_production = (
+        stock_need_scope
+        .filter(SupplyNeed.status == 'NEW')
+        .order_by(SupplyNeed.required_by.asc().nullslast(), SupplyNeed.created_at.asc())
+        .limit(10)
+        .all()
+    )
+    stock_replenishment_needs_vin = (
+        stock_unit_scope
+        .filter(ProducedUnit.status == 'produced_no_vin')
+        .order_by(ProducedUnit.produced_at.asc().nullslast(), ProducedUnit.created_at.asc())
+        .limit(10)
+        .all()
+    )
+    stock_replenishment_needs_movement = [
+        unit for unit in (
+            stock_unit_scope
+            .join(Trailer, Trailer.id == ProducedUnit.trailer_id)
+            .filter(
+                ProducedUnit.status == 'vin_assigned',
+                ProducedUnit.target_warehouse_id.isnot(None),
+                Trailer.warehouse_id != ProducedUnit.target_warehouse_id,
+            )
+            .order_by(ProducedUnit.created_at.asc())
+            .limit(20)
+            .all()
+        )
+        if unit.trailer and not _active_movement_for_trailer(unit.trailer.id)
+    ][:10]
 
     return render_template(
         'manager_workspace.html',
@@ -1324,6 +1366,9 @@ def manager_workspace():
         waiting_movement_rows=waiting_movement_rows,
         blocked_order_rows=blocked_order_rows,
         assigned_vins_to_confirm=assigned_vins_to_confirm,
+        stock_replenishment_to_production=stock_replenishment_to_production,
+        stock_replenishment_needs_vin=stock_replenishment_needs_vin,
+        stock_replenishment_needs_movement=stock_replenishment_needs_movement,
         active_tab=active_tab,
     )
 
@@ -7257,6 +7302,7 @@ def _stock_replenishment_stats(need: SupplyNeed):
         1 for unit in units
         if unit.trailer and unit.trailer.warehouse_id == need.warehouse_id and unit.trailer.status == 'IN_STOCK'
     )
+    needs_vin_units = [unit for unit in units if unit.status == 'produced_no_vin']
     produced_qty = len(units)
     in_production_qty = sum(line.quantity or 0 for line in lines)
     production_requests = {}
@@ -7266,6 +7312,8 @@ def _stock_replenishment_stats(need: SupplyNeed):
     return {
         'in_production_qty': in_production_qty,
         'produced_qty': produced_qty,
+        'needs_vin_qty': len(needs_vin_units),
+        'needs_vin_units': needs_vin_units,
         'accepted_qty': accepted_qty,
         'remaining_qty': max((need.quantity or 0) - accepted_qty, 0),
         'production_requests': sorted(production_requests.values(), key=lambda pr: pr.created_at or datetime.min, reverse=True),

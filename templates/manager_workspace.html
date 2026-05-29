@@ -204,8 +204,11 @@
             {% if assigned_vins_to_confirm %}<li class="mb-2"><span class="badge text-bg-warning me-2">{{ assigned_vins_to_confirm|length }}</span>Сделки ждут подтверждения VIN.</li>{% endif %}
             {% if waiting_realization_rows %}<li class="mb-2"><span class="badge text-bg-primary me-2">{{ waiting_realization_rows|length }}</span>Сделки готовы к реализации.</li>{% endif %}
             {% if waiting_movement_rows %}<li class="mb-2"><span class="badge text-bg-info me-2">{{ waiting_movement_rows|length }}</span>Сделки требуют перемещения.</li>{% endif %}
+            {% if stock_replenishment_to_production %}<li class="mb-2"><span class="badge text-bg-info me-2">{{ stock_replenishment_to_production|length }}</span>Пополнение склада нужно отдать в производство.</li>{% endif %}
+            {% if stock_replenishment_needs_vin %}<li class="mb-2"><span class="badge text-bg-warning me-2">{{ stock_replenishment_needs_vin|length }}</span>Выпущенные пополнения ждут VIN.</li>{% endif %}
+            {% if stock_replenishment_needs_movement %}<li class="mb-2"><span class="badge text-bg-info me-2">{{ stock_replenishment_needs_movement|length }}</span>Пополнения с VIN нужно переместить на склад.</li>{% endif %}
             {% if blocked_order_rows %}<li class="mb-2"><span class="badge text-bg-secondary me-2">{{ blocked_order_rows|length }}</span>Сделки имеют блокеры.</li>{% endif %}
-            {% if not unread_messages_count and not assigned_vins_to_confirm and not waiting_realization_rows and not waiting_movement_rows and not blocked_order_rows %}<li class="text-muted">Критичных задач нет.</li>{% endif %}
+            {% if not unread_messages_count and not assigned_vins_to_confirm and not waiting_realization_rows and not waiting_movement_rows and not stock_replenishment_to_production and not stock_replenishment_needs_vin and not stock_replenishment_needs_movement and not blocked_order_rows %}<li class="text-muted">Критичных задач нет.</li>{% endif %}
           </ul>
         </div>
       </div>
@@ -217,6 +220,8 @@
             <li class="mb-1">Подтвердить VIN, где он уже назначен.</li>
             <li class="mb-1">Создать или проверить реализации.</li>
             <li class="mb-1">Создать нужные перемещения.</li>
+            <li class="mb-1">Отдать складские пополнения в производство.</li>
+            <li class="mb-1">Проверить выпущенные пополнения без VIN и перемещения на склад.</li>
             <li class="mb-1">Разобрать сделки с блокерами.</li>
           </ol>
           <div class="d-flex flex-wrap gap-2 border-top pt-3">
@@ -224,6 +229,9 @@
             <a class="btn btn-sm btn-soft" href="{{ url_for('main.orders_list', status='waiting_vin_confirm') }}">Что нужно подтвердить?</a>
             <a class="btn btn-sm btn-soft" href="{{ url_for('main.orders_list', status='waiting_realization') }}">Какие реализации не проведены?</a>
             <a class="btn btn-sm btn-soft" href="{{ url_for('main.orders_list', status='waiting_movement') }}">Где нужно перемещение?</a>
+            <a class="btn btn-sm btn-soft" href="{{ url_for('main.stock_replenishment_list') }}">Пополнение склада</a>
+            <a class="btn btn-sm btn-soft" href="{{ url_for('main.vin_registry_list', status='free') }}">VIN для выпуска</a>
+            <a class="btn btn-sm btn-soft" href="{{ url_for('main.stock_movements_list') }}">Перемещения на склад</a>
           </div>
         </div>
       </div>

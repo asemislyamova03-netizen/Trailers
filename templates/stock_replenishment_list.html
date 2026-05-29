@@ -3,6 +3,42 @@
 {% block title %}Пополнение складов{% endblock %}
 
 {% block content %}
+<style>
+  .stock-need-row {
+    display: grid;
+    grid-template-columns: minmax(260px, 1.4fr) minmax(360px, 2fr) minmax(260px, 1fr);
+    gap: 16px;
+    align-items: start;
+  }
+  .stock-need-title {
+    overflow-wrap: anywhere;
+  }
+  .stock-need-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 8px;
+  }
+  .stock-need-metric {
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: 8px;
+    padding: 8px 10px;
+    min-height: 58px;
+  }
+  .stock-need-metric .label {
+    color: var(--bs-secondary-color);
+    font-size: .78rem;
+  }
+  .stock-need-metric .value {
+    font-weight: 700;
+    font-size: 1rem;
+  }
+  @media (max-width: 1200px) {
+    .stock-need-row {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+
 <div class="compact-page-header">
   <div>
     <h1>Пополнение складов</h1>
@@ -10,6 +46,7 @@
   </div>
   <a href="{{ url_for('main.stock_replenishment_create') }}" class="btn btn-orange btn-sm"><i class="bi bi-plus-lg me-1"></i>Заказать на склад</a>
 </div>
+
 <form method="get" class="app-card p-3 mb-3">
   <div class="row g-2 align-items-end">
     <div class="col-md-3">
@@ -24,70 +61,82 @@
   </div>
 </form>
 
-<div class="app-card">
-  <div class="card-header d-flex justify-content-between align-items-center">
-    <span>Заявки на склад</span>
-    <span class="text-muted small">{{ needs|length }} записей</span>
-  </div>
-  <div class="table-responsive">
-    <table class="table table-hover align-middle">
-      <thead>
-        <tr>
-          <th>Дата</th>
-          <th>Склад</th>
-          <th>Номенклатура</th>
-          <th>Кол-во</th>
-          <th>В производстве</th>
-          <th>Выпущено</th>
-          <th>Принято</th>
-          <th>Осталось</th>
-          <th>Срок</th>
-          <th>Статус</th>
-          <th>Комментарий</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-      {% for need in needs %}
-        {% set st = stats[need.id] %}
-        <tr>
-          <td>{{ need.created_at|date_format }}</td>
-          <td>{{ need.warehouse.name if need.warehouse else '' }}</td>
-          <td class="fw-semibold">{{ need.item.article if need.item else '' }} {{ need.item.name if need.item else '' }}</td>
-          <td>{{ need.quantity }}</td>
-          <td>{{ st.in_production_qty }}</td>
-          <td>{{ st.produced_qty }}</td>
-          <td>{{ st.accepted_qty }}</td>
-          <td>{{ st.remaining_qty }}</td>
-          <td>{{ need.required_by|date_format }}</td>
-          <td><span class="badge text-bg-{{ need.status|status_badge_class }}">{{ need.status|status_label }}</span></td>
-          <td class="text-muted">{{ need.note or '' }}</td>
-          <td class="text-end">
-            {% if st.production_requests %}
-              {% for pr in st.production_requests %}
-                <a class="btn btn-sm btn-soft" href="{{ url_for('main.production_request_detail', request_id=pr.id) }}">{{ pr.request_number }}</a>
-              {% endfor %}
-            {% endif %}
-            {% if need.status == 'NEW' and (current_user.is_admin or current_user.is_director or current_user.is_manager) %}
-              <form method="post" action="{{ url_for('main.supply_need_create_production_request', need_id=need.id) }}" class="d-inline">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button class="btn btn-sm btn-orange">В производство</button>
-              </form>
-            {% endif %}
-            {% if need.status == 'NEW' and (current_user.is_admin or current_user.is_director or current_user.is_manager) %}
-              <form method="post" action="{{ url_for('main.supply_need_cancel', need_id=need.id) }}" class="d-inline">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="cancel_reason" value="Отмена из списка пополнения склада">
-                <button class="btn btn-sm btn-outline-dark">Отменить</button>
-              </form>
-            {% endif %}
-          </td>
-        </tr>
-      {% else %}
-        <tr><td colspan="12" class="text-muted p-4">Заявок на пополнение склада нет</td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
+<div class="d-flex justify-content-between align-items-center mb-2">
+  <h2 class="h6 mb-0">Заявки на склад</h2>
+  <span class="text-muted small">{{ needs|length }} записей</span>
 </div>
+
+{% for need in needs %}
+  {% set st = stats[need.id] %}
+  <div class="app-card p-3 mb-2">
+    <div class="stock-need-row">
+      <div>
+        <div class="d-flex gap-2 flex-wrap align-items-center mb-2">
+          <span class="badge text-bg-{{ need.status|status_badge_class }}">{{ need.status|status_label }}</span>
+          {% if st.needs_vin_qty %}
+            <span class="badge text-bg-warning">Нужен VIN: {{ st.needs_vin_qty }}</span>
+          {% endif %}
+          <span class="text-muted small">{{ need.created_at|date_format }}</span>
+        </div>
+        <div class="fw-semibold stock-need-title">{{ need.item.article if need.item else '' }}</div>
+        <div class="stock-need-title">{{ need.item.name if need.item else 'Номенклатура не найдена' }}</div>
+        <div class="text-muted small mt-2">
+          {{ need.warehouse.name if need.warehouse else 'Склад не выбран' }}
+          {% if need.required_by %} · срок {{ need.required_by|date_format }}{% endif %}
+        </div>
+      </div>
+
+      <div class="stock-need-metrics">
+        <div class="stock-need-metric"><div class="label">Заказано</div><div class="value">{{ need.quantity }}</div></div>
+        <div class="stock-need-metric"><div class="label">В производстве</div><div class="value">{{ st.in_production_qty }}</div></div>
+        <div class="stock-need-metric"><div class="label">Выпущено</div><div class="value">{{ st.produced_qty }}</div></div>
+        <div class="stock-need-metric"><div class="label">Без VIN</div><div class="value">{{ st.needs_vin_qty }}</div></div>
+        <div class="stock-need-metric"><div class="label">На складе</div><div class="value">{{ st.accepted_qty }}</div></div>
+        <div class="stock-need-metric"><div class="label">Осталось</div><div class="value">{{ st.remaining_qty }}</div></div>
+      </div>
+
+      <div class="d-flex flex-column gap-2 align-items-start align-items-xl-end">
+        {% if st.needs_vin_qty %}
+          <div class="text-warning fw-semibold">Выпущено, ждёт VIN</div>
+          {% if current_user.is_admin or current_user.is_director %}
+            <a class="btn btn-sm btn-orange" href="{{ url_for('main.logistics_assign_vin', unit_id=st.needs_vin_units[0].id) }}">Присвоить VIN</a>
+          {% else %}
+            <span class="text-muted small">Следующий шаг у логиста: присвоить VIN выпущенной единице.</span>
+          {% endif %}
+        {% elif need.status == 'NEW' and (current_user.is_admin or current_user.is_director or current_user.is_manager) %}
+          <form method="post" action="{{ url_for('main.supply_need_create_production_request', need_id=need.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn-sm btn-orange">В производство</button>
+          </form>
+        {% elif st.accepted_qty >= (need.quantity or 0) and need.quantity %}
+          <div class="text-success fw-semibold">На складе</div>
+        {% else %}
+          <div class="text-muted small">Следите за выпуском в производстве.</div>
+        {% endif %}
+
+        {% if st.production_requests %}
+          <div class="d-flex gap-1 flex-wrap justify-content-xl-end">
+            {% for pr in st.production_requests %}
+              <a class="btn btn-sm btn-soft" href="{{ url_for('main.production_request_detail', request_id=pr.id) }}">{{ pr.request_number }}</a>
+            {% endfor %}
+          </div>
+        {% endif %}
+
+        {% if need.status == 'NEW' and (current_user.is_admin or current_user.is_director or current_user.is_manager) %}
+          <form method="post" action="{{ url_for('main.supply_need_cancel', need_id=need.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="cancel_reason" value="Отмена из списка пополнения склада">
+            <button class="btn btn-sm btn-outline-dark">Отменить</button>
+          </form>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if need.note %}
+      <div class="small text-muted mt-2">{{ need.note }}</div>
+    {% endif %}
+  </div>
+{% else %}
+  <div class="app-card p-4 text-muted">Заявок на пополнение склада нет</div>
+{% endfor %}
 {% endblock %}
