@@ -226,6 +226,39 @@
                     </div>
                   </form>
 
+                  {% if row.vin_link_candidates or row.can_create_vin_from_trailer or row.vin_link_message %}
+                  <div class="border-top pt-2">
+                    <div class="small fw-semibold mb-1">VIN строки для реализации</div>
+                    {% if row.vin_link_candidates %}
+                    <form method="post" action="{{ url_for('main.order_line_link_vin', order_id=order.id, line_id=line.id) }}" class="row g-2 align-items-end">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <div class="col-md-5">
+                        <label class="form-label small mb-1">Привязать VIN из реестра</label>
+                        <select name="vin_id" class="form-select form-select-sm" required>
+                          {% for vin in row.vin_link_candidates %}
+                          <option value="{{ vin.id }}">{{ vin.vin_full }} · {{ vin.status|status_label }} · {{ vin.trailer.warehouse.name if vin.trailer and vin.trailer.warehouse else '' }}</option>
+                          {% endfor %}
+                        </select>
+                      </div>
+                      <div class="col-md-3">
+                        <button class="btn btn-sm btn-outline-primary w-100">Привязать VIN</button>
+                      </div>
+                    </form>
+                    {% elif row.can_create_vin_from_trailer %}
+                    <form method="post" action="{{ url_for('main.order_line_link_vin', order_id=order.id, line_id=line.id) }}" class="row g-2 align-items-end">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <input type="hidden" name="create_from_trailer" value="1">
+                      <div class="col-md-6 small text-muted">У прицепа строки есть VIN {{ line.trailer.vin }}, но записи в VIN-реестре нет.</div>
+                      <div class="col-md-3">
+                        <button class="btn btn-sm btn-outline-primary w-100">Создать связь VIN</button>
+                      </div>
+                    </form>
+                    {% else %}
+                    <div class="small text-muted">{{ row.vin_link_message }}</div>
+                    {% endif %}
+                  </div>
+                  {% endif %}
+
                   {% if row.can_change_source %}
                     {% if (line.fulfillment_source or '') == 'production' %}
                     <form method="post" action="{{ url_for('main.order_line_source_to_stock', order_id=order.id, line_id=line.id) }}" class="row g-2 align-items-end border-top pt-2">

@@ -7812,6 +7812,9 @@ def order_detail(order_id):
         can_ship_line, ship_message = _order_line_can_ship(line)
         can_change_source, source_blockers = can_change_order_line_source(line)
         source_change_trailers = []
+        vin_link_candidates = []
+        can_create_vin_from_trailer = False
+        vin_link_message = ''
         if can_change_source and (line.fulfillment_source or '').lower() == 'production' and (line.quantity or 1) == 1:
             source_change_trailers = [
                 trailer for trailer in (
@@ -7827,6 +7830,23 @@ def order_detail(order_id):
                 )
                 if _trailer_available_for_sale(trailer, exclude_order_id=order.id)
             ]
+        if (
+            can_manage_order(order)
+            and line.line_type == 'TRAILER'
+            and not vin_rows
+            and not order.documents_issued
+            and not order.is_shipped
+            and order.status != 'cancelled'
+            and not _line_has_any_realization(line)
+        ):
+            vin_link_candidates = _vin_link_candidates_for_line(order, line)
+            can_create_vin_from_trailer = bool(
+                line.trailer
+                and line.trailer.vin
+                and not VinRegistry.query.filter_by(vin_full=line.trailer.vin).first()
+            )
+            if not vin_link_candidates and not can_create_vin_from_trailer and line.trailer and line.trailer.vin:
+                vin_link_message = 'По прицепу строки нет свободной активной записи VIN-реестра.'
         order_line_rows.append({
             'line': line,
             'vin_rows': vin_rows,
@@ -7846,6 +7866,9 @@ def order_detail(order_id):
             'can_change_source': can_change_source and (line.quantity or 1) == 1,
             'source_change_message': '; '.join(source_blockers) if source_blockers else '',
             'source_change_trailers': source_change_trailers,
+            'vin_link_candidates': vin_link_candidates,
+            'can_create_vin_from_trailer': can_create_vin_from_trailer,
+            'vin_link_message': vin_link_message,
         })
     add_line_stock_trailers = [
         trailer for trailer in (
@@ -8431,6 +8454,27 @@ def order_line_source_to_production(order_id, line_id):
     return redirect(url_for('main.order_detail', order_id=order.id))
 
 
+@main_bp.route('/orders/<int:order_id>/lines/<int:line_id>/link-vin', methods=['POST'])
+@login_required
+def order_line_link_vin(order_id, line_id):
+    order = CustomerOrder.query.get_or_404(order_id)
+    _ensure_can_manage_order(order)
+    line = CustomerOrderLine.query.filter_by(id=line_id, order_id=order.id).first_or_404()
+    try:
+        if request.form.get('create_from_trailer'):
+            vin_row = _create_vin_registry_from_line_trailer(order, line)
+        else:
+            vin_row = VinRegistry.query.get_or_404(request.form.get('vin_id', type=int))
+        _link_vin_registry_to_order_line(order, line, vin_row)
+        _refresh_order_status(order)
+        db.session.commit()
+        flash('VIN привязан к строке заказа. Реализация будет создана по этой строке.', 'success')
+    except ValueError as exc:
+        db.session.rollback()
+        flash(str(exc), 'danger')
+    return redirect(url_for('main.order_detail', order_id=order.id))
+
+
 def _posted_realization_for_trailer(trailer_id: int | None):
     if not trailer_id:
         return None
@@ -8472,6 +8516,121 @@ def _refresh_order_realization_status(order: CustomerOrder) -> None:
         order.realized_at = max((row.posted_at for row in posted if row.posted_at), default=datetime.utcnow())
     else:
         order.realization_status = 'partial'
+
+
+def _vin_link_candidates_for_line(order: CustomerOrder, line: CustomerOrderLine) -> list[VinRegistry]:
+    trailer_id = line.trailer_id
+    if not trailer_id:
+        active_reservation = next((row for row in getattr(line, 'reservations', []) if row.status == 'ACTIVE' and row.trailer_id), None)
+        trailer_id = active_reservation.trailer_id if active_reservation else None
+    if not trailer_id:
+        return []
+    return (
+        VinRegistry.query
+        .filter(
+            VinRegistry.trailer_id == trailer_id,
+            VinRegistry.status.in_(['reserved', 'assigned', 'confirmed']),
+            or_(VinRegistry.order_line_id.is_(None), VinRegistry.order_line_id == line.id),
+            or_(VinRegistry.customer_order_id.is_(None), VinRegistry.customer_order_id == order.id),
+        )
+        .order_by(
+            VinRegistry.confirmed_at.desc().nullslast(),
+            VinRegistry.assigned_at.desc().nullslast(),
+            VinRegistry.reserved_at.desc().nullslast(),
+            VinRegistry.id.desc(),
+        )
+        .all()
+    )
+
+
+def _link_vin_registry_to_order_line(order: CustomerOrder, line: CustomerOrderLine, vin_row: VinRegistry) -> None:
+    if order.status == 'cancelled' or order.documents_issued or order.is_shipped:
+        raise ValueError('VIN строки можно менять только до документов и отгрузки.')
+    if line.line_type != 'TRAILER':
+        raise ValueError('VIN можно привязать только к строке техники.')
+    if _line_has_any_realization(line):
+        raise ValueError('VIN строки нельзя менять: по строке уже есть реализация.')
+    if vin_row.status not in ('reserved', 'assigned', 'confirmed'):
+        raise ValueError('Можно привязать только активный VIN: reserved, assigned или confirmed.')
+    if vin_row.order_line_id and vin_row.order_line_id != line.id:
+        raise ValueError('Этот VIN уже привязан к другой строке заказа.')
+    if vin_row.customer_order_id and vin_row.customer_order_id != order.id:
+        raise ValueError('Этот VIN уже привязан к другому заказу.')
+    if not vin_row.trailer:
+        raise ValueError('У VIN нет физического прицепа. Сначала привяжите VIN к прицепу в VIN-реестре.')
+    trailer = vin_row.trailer
+    if line.trailer_id and line.trailer_id != trailer.id:
+        raise ValueError('Прицеп в строке заказа не совпадает с прицепом VIN-реестра.')
+    if line.item_id and trailer.item_id and line.item_id != trailer.item_id:
+        raise ValueError('Номенклатура строки заказа не совпадает с номенклатурой прицепа.')
+    if trailer.vin and vin_row.vin_full and trailer.vin != vin_row.vin_full:
+        raise ValueError('VIN в реестре не совпадает с VIN физического прицепа.')
+    if _posted_realization_for_trailer(trailer.id):
+        raise ValueError('Этот VIN уже есть в проведённой реализации.')
+
+    old_trailer_id = line.trailer_id
+    line.trailer_id = trailer.id
+    line.fulfillment_source = line.fulfillment_source or 'stock'
+    line.status = 'vin_confirmed' if vin_row.status == 'confirmed' else 'vin_assigned'
+    vin_row.order_line_id = line.id
+    vin_row.customer_order_id = order.id
+
+    if order.lines.count() == 1 and order.trailer_id != trailer.id:
+        order.trailer_id = trailer.id
+        order.source_warehouse_id = trailer.warehouse_id
+    elif not order.trailer_id:
+        order.trailer_id = trailer.id
+        order.source_warehouse_id = trailer.warehouse_id
+
+    if not any(row.status == 'ACTIVE' and row.trailer_id == trailer.id for row in line.reservations):
+        db.session.add(Reservation(
+            order_id=order.id,
+            order_line_id=line.id,
+            trailer_id=trailer.id,
+            item_id=line.item_id,
+            status='ACTIVE',
+            source_type='VIN_LINK',
+            priority=10,
+        ))
+    add_order_event(
+        order,
+        'trailer_reserved',
+        old_value=str(old_trailer_id or ''),
+        new_value=vin_row.vin_full or trailer.vin or str(trailer.id),
+        comment=f'VIN привязан к позиции #{line.line_no}',
+    )
+    _add_vin_event(vin_row, 'linked_to_order_line', vin_row.status, vin_row.status, comment=f'Привязан к заказу {order.order_number}, позиция #{line.line_no}')
+
+
+def _create_vin_registry_from_line_trailer(order: CustomerOrder, line: CustomerOrderLine) -> VinRegistry:
+    if not line.trailer or not line.trailer.vin:
+        raise ValueError('У строки нет прицепа с VIN.')
+    existing = VinRegistry.query.filter_by(vin_full=line.trailer.vin).first()
+    if existing:
+        return existing
+    serial = (line.trailer.vin or '')[-7:]
+    if len(serial) != 7:
+        raise ValueError('VIN прицепа не содержит корректный 7-значный порядковый номер.')
+    serial_owner = VinRegistry.query.filter_by(serial7=serial).first()
+    if serial_owner:
+        raise ValueError(f'Порядковый номер {serial} уже есть в VIN-реестре.')
+    vin_row = VinRegistry(
+        vin_full=line.trailer.vin,
+        prefix=(line.trailer.vin or 'MX4')[:3],
+        serial7=serial,
+        status='confirmed',
+        customer_order_id=order.id,
+        order_line_id=line.id,
+        trailer_id=line.trailer.id,
+        confirmed_by_user_id=current_user.id,
+        confirmed_at=datetime.utcnow(),
+        source='legacy_repair',
+        comment='Создано из VIN физического прицепа при привязке строки заказа',
+    )
+    db.session.add(vin_row)
+    db.session.flush()
+    _add_vin_event(vin_row, 'created_from_trailer', None, 'confirmed', comment=f'Создано из прицепа для заказа {order.order_number}, позиция #{line.line_no}')
+    return vin_row
 
 
 def _resolve_realization_trailer_for_line(order: CustomerOrder, source_line: CustomerOrderLine):
