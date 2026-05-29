@@ -10144,7 +10144,11 @@ def production_request_detail(request_id):
     pr = ProductionRequest.query.get_or_404(request_id)
     form = ProductionRequestLineForm()
     _fill_production_line_form_choices(form, target_warehouse_id=pr.target_warehouse_id)
+    can_add_line = (current_user.is_admin or current_user.is_director) and (pr.status or '').lower() in ('draft', 'approved')
     if form.validate_on_submit():
+        if not can_add_line:
+            flash('Добавление позиций в эту заявку закрыто. Новые складские потребности отправляйте в производство из раздела пополнения склада.', 'warning')
+            return redirect(url_for('main.production_request_detail', request_id=pr.id))
         idem_key, duplicate = _reserve_idempotency_key()
         if duplicate:
             return _duplicate_redirect(idem_key, url_for('main.production_request_detail', request_id=pr.id))
@@ -10190,7 +10194,7 @@ def production_request_detail(request_id):
         db.session.commit()
         flash('Позиция добавлена', 'success')
         return redirect(url_for('main.production_request_detail', request_id=pr.id))
-    return render_template('production_request_detail.html', pr=pr, form=form)
+    return render_template('production_request_detail.html', pr=pr, form=form, can_add_line=can_add_line)
 
 
 @main_bp.route('/production-requests/<int:request_id>/edit', methods=['GET', 'POST'])

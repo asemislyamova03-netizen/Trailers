@@ -103,36 +103,38 @@
   </div>
 </div>
 
-<div class="app-card">
-  <h2 class="h5 mb-3">Добавить позицию</h2>
-  <form method="post" class="row g-3">
-    {{ form.hidden_tag() }}
-    <div class="col-12">
-      {{ form.supply_need_id.label(class="form-label") }}
-      {{ form.supply_need_id(class="form-select") }}
-      <div class="form-text">Показываются только новые потребности без активной производственной строки и подходящие складу этой заявки.</div>
-    </div>
-    <div class="col-md-6">
-      {{ form.item_id.label(class="form-label") }}
-      {{ form.item_id(class="form-select") }}
-      <div class="form-text">Если выбрана потребность, модель возьмётся из неё.</div>
-    </div>
-    <div class="col-md-3">
-      {{ form.quantity.label(class="form-label") }}
-      {{ form.quantity(class="form-control") }}
-      <div class="form-text">Если выбрана потребность, количество возьмётся из неё.</div>
-    </div>
-    <div class="col-md-3">
-      {{ form.status.label(class="form-label") }}
-      {{ form.status(class="form-select") }}
-    </div>
-    <div class="col-12">
-      {{ form.note.label(class="form-label") }}
-      {{ form.note(class="form-control", rows=3) }}
-    </div>
-    <div class="col-12">
-      {{ form.submit(class="btn btn-orange") }}
-    </div>
-  </form>
-</div>
+{% if can_add_line %}
+  <div class="app-card">
+    <h2 class="h5 mb-3">Добавить позицию</h2>
+    <form method="post" class="row g-3">
+      {{ form.hidden_tag() }}
+      <div class="col-12">
+        {{ form.supply_need_id.label(class="form-label") }}
+        {{ form.supply_need_id(class="form-select") }}
+        <div class="form-text">Показываются только новые потребности без активной производственной строки и подходящие складу этой заявки.</div>
+      </div>
+      <div class="col-md-6">
+        {{ form.item_id.label(class="form-label") }}
+        {{ form.item_id(class="form-select") }}
+        <div class="form-text">Если выбрана потребность, модель возьмётся из неё.</div>
+      </div>
+      <div class="col-md-3">
+        {{ form.quantity.label(class="form-label") }}
+        {{ form.quantity(class="form-control") }}
+        <div class="form-text">Если выбрана потребность, количество возьмётся из неё.</div>
+      </div>
+      <div class="col-md-3">
+        {{ form.status.label(class="form-label") }}
+        {{ form.status(class="form-select") }}
+      </div>
+      <div class="col-12">
+        {{ form.note.label(class="form-label") }}
+        {{ form.note(class="form-control", rows=3) }}
+      </div>
+      <div class="col-12">
+        {{ form.submit(class="btn btn-orange") }}
+      </div>
+    </form>
+  </div>
+{% endif %}
 {% endblock %}
