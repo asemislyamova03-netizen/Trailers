@@ -9109,10 +9109,15 @@ def order_request_transfer(order_id):
     if order.is_shipped or order.status == 'cancelled':
         abort(400)
     trailer = Trailer.query.get_or_404(request.form.get('trailer_id', type=int))
-    if trailer.item_id != order.item_id:
+    order_line_id = request.form.get('order_line_id', type=int)
+    order_line = None
+    if order_line_id:
+        order_line = CustomerOrderLine.query.filter_by(id=order_line_id, order_id=order.id).first_or_404()
+    target_item_id = order_line.item_id if order_line else order.item_id
+    if trailer.item_id != target_item_id:
         flash('Выбранный VIN не соответствует модели заказа.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
-    reserved_for_this_order = trailer.status == 'RESERVED' and order.trailer_id == trailer.id
+    reserved_for_this_order = trailer.status == 'RESERVED' and (order.trailer_id == trailer.id or (order_line and order_line.trailer_id == trailer.id))
     if trailer.status not in ('IN_STOCK', 'RESERVED') or (trailer.status == 'RESERVED' and not reserved_for_this_order) or trailer.warehouse_id == order.warehouse_id:
         flash('Для запроса перемещения нужен свободный или уже зарезервированный под эту сделку прицеп на другом складе.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
@@ -9124,14 +9129,37 @@ def order_request_transfer(order_id):
         return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
 
     old_trailer = Trailer.query.get(order.trailer_id) if order.trailer_id else None
-    order.fulfillment_source = 'other_warehouse'
     order.status = 'waiting_transfer'
     order.source_warehouse_id = trailer.warehouse_id
-    ok, message = _sync_order_trailer_links(order, old_trailer, trailer, 'TRANSFER')
-    if not ok:
-        flash(message, 'danger')
-        return redirect(url_for('main.order_detail', order_id=order.id))
-    order_line = _primary_order_line(order)
+    if order_line:
+        order_line.trailer_id = trailer.id
+        order_line.fulfillment_source = 'other_warehouse'
+        order_line.status = 'waiting_transfer'
+        if not any(row.status == 'ACTIVE' and row.trailer_id == trailer.id for row in order_line.reservations):
+            db.session.add(Reservation(
+                order_id=order.id,
+                order_line_id=order_line.id,
+                trailer_id=trailer.id,
+                item_id=order_line.item_id,
+                status='ACTIVE',
+                source_type='TRANSFER',
+                priority=10,
+            ))
+        if trailer.status == 'IN_STOCK':
+            trailer.status = 'RESERVED'
+            trailer.lifecycle_status = 'reserved'
+        if order.lines.count() == 1 and order.trailer_id != trailer.id:
+            order.trailer_id = trailer.id
+            order.fulfillment_source = 'other_warehouse'
+        elif not order.trailer_id:
+            order.trailer_id = trailer.id
+    else:
+        order.fulfillment_source = 'other_warehouse'
+        ok, message = _sync_order_trailer_links(order, old_trailer, trailer, 'TRANSFER')
+        if not ok:
+            flash(message, 'danger')
+            return redirect(url_for('main.order_detail', order_id=order.id))
+        order_line = _primary_order_line(order)
     if not _active_movement_for_trailer(trailer.id):
         movement = StockMovement(
             from_warehouse_id=trailer.warehouse_id,
