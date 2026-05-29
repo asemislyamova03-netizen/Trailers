@@ -10968,7 +10968,7 @@ def logistics_assign_vin(unit_id):
     unit = ProducedUnit.query.get_or_404(unit_id)
     form = AssignVinForm()
     context = _produced_unit_context(unit)
-    back_url = url_for('main.logistics_workspace')
+    back_url = url_for('main.vin_registry_list') if current_user.is_logistics else url_for('main.logistics_workspace')
     reserved_vin_row = context.get('vin_registry')
     if reserved_vin_row and (reserved_vin_row.status != 'reserved' or not reserved_vin_row.vin_full):
         reserved_vin_row = None
