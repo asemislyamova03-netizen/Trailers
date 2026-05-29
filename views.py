@@ -9796,7 +9796,7 @@ def vin_registry_detail(vin_id):
 
 
 @main_bp.route('/logistics/vin-registry/<int:vin_id>/reserve', methods=['POST'])
-@role_required('manager', 'director')
+@role_required('logistics', 'director')
 def vin_registry_reserve(vin_id):
     row = VinRegistry.query.get_or_404(vin_id)
     if row.status != 'free':
@@ -9844,7 +9844,7 @@ def vin_registry_reserve(vin_id):
 
 
 @main_bp.route('/logistics/vin-registry/<int:vin_id>/cancel-reservation', methods=['POST'])
-@role_required('manager', 'director')
+@role_required('logistics', 'director')
 def vin_registry_cancel_reservation(vin_id):
     row = VinRegistry.query.get_or_404(vin_id)
     if row.status != 'reserved':
@@ -9935,7 +9935,7 @@ def vin_registry_confirm(vin_id):
 
 
 @main_bp.route('/logistics/vin-registry/<int:vin_id>/void', methods=['POST'])
-@role_required('manager', 'director')
+@role_required('director')
 def vin_registry_void(vin_id):
     row = VinRegistry.query.get_or_404(vin_id)
     reason = (request.form.get('comment') or '').strip()

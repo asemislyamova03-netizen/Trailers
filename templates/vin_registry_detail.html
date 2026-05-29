@@ -84,7 +84,7 @@
 {% endif %}
 
 <div class="row g-3 mb-3">
-  {% if row.status == 'free' and (current_user.is_admin or current_user.is_director or current_user.is_manager) %}
+  {% if row.status == 'free' and (current_user.is_admin or current_user.is_director or current_user.is_logistics) %}
   <div class="col-lg-4">
     <div class="app-card p-3 h-100">
       <h3 class="h6">Зарезервировать под заказ</h3>
@@ -107,7 +107,7 @@
     </div>
   </div>
   {% endif %}
-  {% if row.status == 'reserved' and not row.docs_issued_at and not row.trailer_id and (current_user.is_admin or current_user.is_director or current_user.is_manager) %}
+  {% if row.status == 'reserved' and not row.docs_issued_at and not row.trailer_id and (current_user.is_admin or current_user.is_director or current_user.is_logistics) %}
   <div class="col-lg-4">
     <div class="app-card p-3 h-100">
       <h3 class="h6">Отменить резерв</h3>
@@ -144,7 +144,7 @@
     </div>
   </div>
   {% endif %}
-  {% if not row.docs_issued_at and row.status not in ['assigned', 'confirmed', 'void'] and (current_user.is_admin or current_user.is_director or current_user.is_manager) %}
+  {% if not row.docs_issued_at and row.status not in ['assigned', 'confirmed', 'void'] and (current_user.is_admin or current_user.is_director) %}
   <div class="col-lg-4">
     <div class="app-card p-3 h-100">
       <h3 class="h6">Аннулировать</h3>
