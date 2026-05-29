@@ -76,6 +76,9 @@
           {% if st.needs_vin_qty %}
             <span class="badge text-bg-warning">Нужен VIN: {{ st.needs_vin_qty }}</span>
           {% endif %}
+          {% if st.needs_movement_qty %}
+            <span class="badge text-bg-info">Нужно переместить: {{ st.needs_movement_qty }}</span>
+          {% endif %}
           <span class="text-muted small">{{ need.created_at|date_format }}</span>
         </div>
         <div class="fw-semibold stock-need-title">{{ need.item.article if need.item else '' }}</div>
@@ -91,6 +94,7 @@
         <div class="stock-need-metric"><div class="label">В производстве</div><div class="value">{{ st.in_production_qty }}</div></div>
         <div class="stock-need-metric"><div class="label">Выпущено</div><div class="value">{{ st.produced_qty }}</div></div>
         <div class="stock-need-metric"><div class="label">Без VIN</div><div class="value">{{ st.needs_vin_qty }}</div></div>
+        <div class="stock-need-metric"><div class="label">К перемещению</div><div class="value">{{ st.needs_movement_qty }}</div></div>
         <div class="stock-need-metric"><div class="label">На складе</div><div class="value">{{ st.accepted_qty }}</div></div>
         <div class="stock-need-metric"><div class="label">Осталось</div><div class="value">{{ st.remaining_qty }}</div></div>
       </div>
@@ -102,6 +106,19 @@
             <a class="btn btn-sm btn-orange" href="{{ url_for('main.logistics_assign_vin', unit_id=st.needs_vin_units[0].id) }}">Присвоить VIN</a>
           {% else %}
             <span class="text-muted small">Следующий шаг у логиста: присвоить VIN выпущенной единице.</span>
+          {% endif %}
+        {% elif st.needs_movement_qty %}
+          {% set move_unit = st.needs_movement_units[0] %}
+          <div class="text-info fw-semibold">VIN присвоен, нужно переместить</div>
+          {% if move_unit.trailer and need.warehouse %}
+            <form method="post" action="{{ url_for('main.logistics_send_trailer') }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="trailer_id" value="{{ move_unit.trailer.id }}">
+              <input type="hidden" name="to_warehouse_id" value="{{ need.warehouse.id }}">
+              <input type="hidden" name="order_id" value="0">
+              <button class="btn btn-sm btn-orange">Отправить на склад</button>
+            </form>
+            <div class="small text-muted">{{ move_unit.trailer.vin }} -> {{ need.warehouse.name }}</div>
           {% endif %}
         {% elif need.status == 'NEW' and (current_user.is_admin or current_user.is_director or current_user.is_manager) %}
           <form method="post" action="{{ url_for('main.supply_need_create_production_request', need_id=need.id) }}">
