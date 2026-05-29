@@ -5243,6 +5243,112 @@ def _order_lines_document_blockers(order: CustomerOrder) -> list[str]:
     return blockers
 
 
+ORDER_LIST_FILTERS = [
+    ('all', 'Все'),
+    ('new', 'Новые'),
+    ('waiting_vin', 'Ждут VIN'),
+    ('waiting_vin_confirm', 'Ждут подтверждения VIN'),
+    ('waiting_kit', 'Ждут комплектацию'),
+    ('waiting_payment', 'Ждут оплату'),
+    ('waiting_contract', 'Ждут договор'),
+    ('waiting_docs', 'Ждут документы'),
+    ('waiting_realization', 'Ждут реализацию'),
+    ('waiting_movement', 'Ждут перемещение'),
+    ('ready_to_ship', 'Готовы к отгрузке'),
+    ('shipped', 'Отгруженные'),
+    ('problem', 'Проблемные'),
+]
+
+
+def _order_primary_line_state(order: CustomerOrder) -> dict:
+    lines = order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()).all()
+    if not lines:
+        return {'vin_rows': [], 'trailers': [], 'missing_vin': True, 'assigned_unconfirmed': False, 'active_needs': [], 'active_movements': []}
+
+    vin_rows = []
+    trailers = []
+    active_needs = []
+    active_movements = []
+    missing_vin = False
+    assigned_unconfirmed = False
+    seen_trailer_ids = set()
+
+    for line in lines:
+        line_vins = _active_vin_rows_for_order_line(line)
+        vin_rows.extend(line_vins)
+        assigned_unconfirmed = assigned_unconfirmed or any(row.status == 'assigned' for row in line_vins)
+        line_trailers = _trailers_for_order_line(line)
+        for trailer in line_trailers:
+            if trailer and trailer.id not in seen_trailer_ids:
+                trailers.append(trailer)
+                seen_trailer_ids.add(trailer.id)
+        active_needs.extend(_line_active_supply_needs(line))
+        active_movements.extend([row for row in line.movements if row.status in ('DRAFT', 'draft', 'sent', 'in_transit')])
+        if line.line_type == 'TRAILER' and len(line_vins) < (line.quantity or 1) and not line_trailers:
+            missing_vin = True
+
+    return {
+        'vin_rows': vin_rows,
+        'trailers': trailers,
+        'missing_vin': missing_vin,
+        'assigned_unconfirmed': assigned_unconfirmed,
+        'active_needs': active_needs,
+        'active_movements': active_movements,
+    }
+
+
+def _order_needs_transfer(order: CustomerOrder, trailers: list[Trailer]) -> bool:
+    if not order.warehouse_id:
+        return False
+    for trailer in trailers:
+        if trailer.warehouse_id and trailer.warehouse_id != order.warehouse_id:
+            return True
+    return False
+
+
+def _order_list_state(order: CustomerOrder) -> dict:
+    line_state = _order_primary_line_state(order)
+    trailers = line_state['trailers']
+    source_warehouse = order.source_warehouse
+    if not source_warehouse and trailers:
+        source_warehouse = trailers[0].warehouse
+
+    if order.status == 'cancelled':
+        code, label, blocker, next_action = 'problem', 'Отменена', 'заказ отменён', 'проверить историю'
+    elif order.is_shipped or order.status == 'shipped':
+        code, label, blocker, next_action = 'shipped', 'Отгружена', '', 'закрыто'
+    elif not order.lines.count():
+        code, label, blocker, next_action = 'new', 'Новая', 'нет строк заказа', 'добавить позицию'
+    elif line_state['assigned_unconfirmed']:
+        code, label, blocker, next_action = 'waiting_vin_confirm', 'Ждёт подтверждения VIN', 'VIN назначен, но не подтверждён', 'подтвердить нанесение VIN'
+    elif line_state['missing_vin']:
+        code, label, blocker, next_action = 'waiting_vin', 'Ждёт VIN', 'нет активного VIN по строке', 'назначить или привязать VIN'
+    elif any((need.status or '').upper() in ('NEW', 'PLANNED', 'SENT_TO_PRODUCTION', 'IN_PRODUCTION', 'PARTIALLY_DONE') for need in line_state['active_needs']):
+        code, label, blocker, next_action = 'waiting_kit', 'Ждёт комплектацию', 'есть активная производственная потребность', 'завершить производство/комплектацию'
+    elif order.remaining_amount and order.remaining_amount > 0:
+        code, label, blocker, next_action = 'waiting_payment', 'Ждёт оплату', 'есть остаток к оплате', 'получить оплату'
+    elif not SalesContract.query.filter_by(order_id=order.id).first():
+        code, label, blocker, next_action = 'waiting_contract', 'Ждёт договор', 'договор не создан', 'создать договор'
+    elif order.document_status not in ('documents_issued', 'documents_ready'):
+        code, label, blocker, next_action = 'waiting_docs', 'Ждёт документы', 'документы не выданы', 'подготовить договор/документы'
+    elif order.realization_status != 'realized':
+        code, label, blocker, next_action = 'waiting_realization', 'Ждёт реализацию', 'реализация не проведена', 'создать и провести реализацию'
+    elif _order_needs_transfer(order, trailers):
+        code, label, blocker, next_action = 'waiting_movement', 'Ждёт перемещение', 'техника не на складе выдачи', 'создать перемещение'
+    else:
+        code, label, blocker, next_action = 'ready_to_ship', 'Готова к отгрузке', '', 'провести реализацию/закрыть выдачу'
+
+    return {
+        'code': code,
+        'label': label,
+        'blocker': blocker,
+        'next_action': next_action,
+        'source_warehouse': source_warehouse,
+        'trailers': trailers,
+        'vin': ', '.join([row.vin_full or row.serial7 for row in line_state['vin_rows'] if row.vin_full or row.serial7]) or (trailers[0].vin if trailers else ''),
+    }
+
+
 def _order_line_can_ship(line: CustomerOrderLine) -> tuple[bool, str]:
     order = line.order
     if not order or not order.documents_issued or order.status == 'cancelled':
@@ -6840,7 +6946,7 @@ def conversation_report():
 @login_required
 def orders_list():
     _block_production_commercial_access()
-    status = request.args.get('status', '').strip()
+    status = (request.args.get('status') or 'all').strip()
     q = request.args.get('q', '').strip()
 
     query = CustomerOrder.query.join(Customer, Customer.id == CustomerOrder.customer_id).outerjoin(Item, Item.id == CustomerOrder.item_id)
@@ -6852,14 +6958,21 @@ def orders_list():
     elif not current_user.can_view_all and current_user.warehouse_id:
         query = query.filter(or_(CustomerOrder.warehouse_id == current_user.warehouse_id, CustomerOrder.warehouse_id.is_(None)))
 
-    if status:
-        query = query.filter(CustomerOrder.status == status)
+    legacy_status = status if status and status not in {code for code, _label in ORDER_LIST_FILTERS} else ''
+    if legacy_status:
+        query = query.filter(CustomerOrder.status == legacy_status)
     if q:
         like = f'%{q}%'
         query = query.filter(or_(CustomerOrder.order_number.ilike(like), Customer.name.ilike(like), Item.article.ilike(like), Item.name.ilike(like)))
 
     orders = query.order_by(CustomerOrder.created_at.desc(), CustomerOrder.id.desc()).all()
-    return render_template('orders_list.html', orders=orders, status=status, q=q)
+    rows = []
+    for order in orders:
+        state = _order_list_state(order)
+        if status != 'all' and not legacy_status and state['code'] != status:
+            continue
+        rows.append({'order': order, 'state': state})
+    return render_template('orders_list.html', rows=rows, status=status, q=q, order_filters=ORDER_LIST_FILTERS)
 
 
 @main_bp.route('/api/order-availability')

@@ -2,32 +2,65 @@
 {% block title %}Заказы{% endblock %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h1 class="h3 mb-0">Заказы</h1>
+  <div>
+    <h1 class="h3 mb-1">Заказы</h1>
+    <div class="text-muted small">Один основной статус, главный блокер и следующее действие по сделке.</div>
+  </div>
   <a class="btn btn-primary" href="{{ url_for('main.order_create') }}">Новый заказ</a>
 </div>
+
 <form class="row g-2 mb-3">
-  <div class="col-md-4"><input class="form-control" name="q" value="{{ q }}" placeholder="Номер, клиент, артикул"></div>
-  <div class="col-md-3"><input class="form-control" name="status" value="{{ status }}" placeholder="Статус"></div>
+  <div class="col-md-5"><input class="form-control" name="q" value="{{ q }}" placeholder="Номер, клиент, артикул, модель"></div>
+  <div class="col-md-3">
+    <select class="form-select" name="status">
+      {% for code, label in order_filters %}
+      <option value="{{ code }}" {% if status == code %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
   <div class="col-md-2"><button class="btn btn-outline-secondary w-100">Фильтр</button></div>
+  <div class="col-md-2"><a class="btn btn-soft w-100" href="{{ url_for('main.orders_list') }}">Сбросить</a></div>
 </form>
-<table class="table table-sm table-striped align-middle">
-  <thead><tr><th>Номер</th><th>Клиент</th><th>Модель</th><th>VIN</th><th>Склад</th><th>Сумма</th><th>Оплачено</th><th>Статус</th><th></th></tr></thead>
-  <tbody>
-  {% for order in orders %}
-    <tr>
-      <td>{{ order.order_number }}</td>
-      <td>{{ order.customer.name }}</td>
-      <td>{{ order.item.article or order.item.name }}</td>
-      <td>{{ order.trailer.vin if order.trailer else '' }}</td>
-      <td>{{ order.warehouse.name if order.warehouse else '' }}</td>
-      <td>{{ order.price or 0 }}</td>
-      <td>{{ order.confirmed_paid_amount }}</td>
-      <td>{{ order.status }}</td>
-      <td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{{ url_for('main.order_detail', order_id=order.id) }}">Открыть</a></td>
-    </tr>
-  {% else %}
-    <tr><td colspan="9" class="text-muted">Заказов нет</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
+
+<div class="table-responsive">
+  <table class="table table-sm table-striped align-middle">
+    <thead>
+      <tr>
+        <th>Номер</th>
+        <th>Клиент</th>
+        <th>Менеджер</th>
+        <th>Склад источника</th>
+        <th>Склад выдачи</th>
+        <th>Сумма</th>
+        <th>Статус</th>
+        <th>Блокер</th>
+        <th>Следующее действие</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for row in rows %}
+      {% set order = row.order %}
+      {% set state = row.state %}
+      <tr>
+        <td>
+          <div class="fw-semibold">{{ order.order_number }}</div>
+          {% if state.vin %}<div class="small text-muted">{{ state.vin }}</div>{% endif %}
+        </td>
+        <td>{{ order.customer.name if order.customer else '' }}</td>
+        <td>{{ order.assigned_user.full_name if order.assigned_user else '' }}</td>
+        <td>{{ state.source_warehouse.name if state.source_warehouse else 'не задан' }}</td>
+        <td>{{ order.warehouse.name if order.warehouse else 'не задан' }}</td>
+        <td>{{ order.price|money }}</td>
+        <td><span class="badge text-bg-{{ state.code|status_badge_class }}">{{ state.label }}</span></td>
+        <td>{% if state.blocker %}<span class="text-danger">{{ state.blocker }}</span>{% else %}<span class="text-muted">нет</span>{% endif %}</td>
+        <td>{{ state.next_action }}</td>
+        <td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{{ url_for('main.order_detail', order_id=order.id) }}">Открыть</a></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="10" class="text-muted">Заказов нет</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endblock %}
