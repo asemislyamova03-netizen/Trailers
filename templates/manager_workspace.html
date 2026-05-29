@@ -193,19 +193,32 @@
     <div class="row g-3">
       <div class="col-lg-6">
         <div class="app-card p-3 h-100">
-          <h2 class="h6 mb-3">Задачи на сегодня</h2>
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h2 class="h6 mb-0">Что у нас на сегодня?</h2>
+            <span class="badge text-bg-light">Сегодня</span>
+          </div>
+          <div class="small text-muted mb-2">Критично</div>
           <ul class="list-unstyled mb-0 small">
-            {% if unread_messages_count %}<li class="mb-2"><span class="badge text-bg-danger me-2">{{ unread_messages_count }}</span>Ответить на непрочитанные сообщения.</li>{% endif %}
-            {% if assigned_vins_to_confirm %}<li class="mb-2"><span class="badge text-bg-warning me-2">{{ assigned_vins_to_confirm|length }}</span>Подтвердить нанесение VIN.</li>{% endif %}
-            {% if active_orders %}<li class="mb-2"><span class="badge text-bg-secondary me-2">{{ active_orders|length }}</span>Проверить сделки с блокерами.</li>{% endif %}
-            {% if not unread_messages_count and not assigned_vins_to_confirm and not active_orders %}<li class="text-muted">Критичных задач нет.</li>{% endif %}
+            {% if unread_messages_count %}<li class="mb-2"><span class="badge text-bg-danger me-2">{{ unread_messages_count }}</span>Клиентские сообщения ждут ответа.</li>{% endif %}
+            {% if assigned_vins_to_confirm %}<li class="mb-2"><span class="badge text-bg-warning me-2">{{ assigned_vins_to_confirm|length }}</span>Сделки ждут подтверждения VIN.</li>{% endif %}
+            {% if waiting_realization_rows %}<li class="mb-2"><span class="badge text-bg-primary me-2">{{ waiting_realization_rows|length }}</span>Сделки готовы к реализации.</li>{% endif %}
+            {% if waiting_movement_rows %}<li class="mb-2"><span class="badge text-bg-info me-2">{{ waiting_movement_rows|length }}</span>Сделки требуют перемещения.</li>{% endif %}
+            {% if blocked_order_rows %}<li class="mb-2"><span class="badge text-bg-secondary me-2">{{ blocked_order_rows|length }}</span>Сделки имеют блокеры.</li>{% endif %}
+            {% if not unread_messages_count and not assigned_vins_to_confirm and not waiting_realization_rows and not waiting_movement_rows and not blocked_order_rows %}<li class="text-muted">Критичных задач нет.</li>{% endif %}
           </ul>
         </div>
       </div>
       <div class="col-lg-6">
         <div class="app-card p-3 h-100">
-          <h2 class="h6 mb-3">Ассистент</h2>
-          <div class="d-flex flex-wrap gap-2">
+          <h2 class="h6 mb-3">Рекомендованный порядок</h2>
+          <ol class="small ps-3 mb-3">
+            <li class="mb-1">Ответить клиентам.</li>
+            <li class="mb-1">Подтвердить VIN, где он уже назначен.</li>
+            <li class="mb-1">Создать или проверить реализации.</li>
+            <li class="mb-1">Создать нужные перемещения.</li>
+            <li class="mb-1">Разобрать сделки с блокерами.</li>
+          </ol>
+          <div class="d-flex flex-wrap gap-2 border-top pt-3">
             <a class="btn btn-sm btn-soft" href="{{ url_for('main.conversations_list', status='manager_needed') }}">Кому надо ответить?</a>
             <a class="btn btn-sm btn-soft" href="{{ url_for('main.orders_list', status='waiting_vin_confirm') }}">Что нужно подтвердить?</a>
             <a class="btn btn-sm btn-soft" href="{{ url_for('main.orders_list', status='waiting_realization') }}">Какие реализации не проведены?</a>

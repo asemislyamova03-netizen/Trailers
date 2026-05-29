@@ -1311,6 +1311,9 @@ def manager_workspace():
         if state.get('blocker'):
             funnel_map[code]['blockers'] += 1
     funnel_rows = sorted(funnel_map.values(), key=lambda row: (row['sort'], row['label']))
+    waiting_realization_rows = [row for row in active_order_rows if row['state'].get('code') == 'waiting_realization']
+    waiting_movement_rows = [row for row in active_order_rows if row['state'].get('code') == 'waiting_movement']
+    blocked_order_rows = [row for row in active_order_rows if row['state'].get('blocker')]
     active_order_ids = [order.id for order in active_orders]
     assigned_vins_to_confirm = (
         VinRegistry.query
@@ -1531,6 +1534,9 @@ def manager_workspace():
         active_orders=active_orders,
         active_order_rows=active_order_rows,
         funnel_rows=funnel_rows,
+        waiting_realization_rows=waiting_realization_rows,
+        waiting_movement_rows=waiting_movement_rows,
+        blocked_order_rows=blocked_order_rows,
         assigned_vins_to_confirm=assigned_vins_to_confirm,
         inbound_movements=inbound_movements,
         outgoing_movements=outgoing_movements,
