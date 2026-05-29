@@ -1329,7 +1329,11 @@ def manager_workspace():
     )
     stock_replenishment_needs_vin = (
         stock_unit_scope
-        .filter(ProducedUnit.status == 'produced_no_vin')
+        .filter(
+            ProducedUnit.status == 'produced_no_vin',
+            ProducedUnit.order_id.is_(None),
+            ProducedUnit.order_line_id.is_(None),
+        )
         .order_by(ProducedUnit.produced_at.asc().nullslast(), ProducedUnit.created_at.asc())
         .limit(10)
         .all()
@@ -5794,11 +5798,69 @@ def _release_assigned_vin_from_order(row: VinRegistry, order: CustomerOrder, rea
 
 
 def _release_order_produced_units_without_trailer(order: CustomerOrder, reason: str) -> None:
-    for unit in ProducedUnit.query.filter_by(order_id=order.id, trailer_id=None).all():
-        if unit.status == 'vin_assigned':
+    order_line_ids = [
+        line_id for (line_id,) in (
+            CustomerOrderLine.query
+            .with_entities(CustomerOrderLine.id)
+            .filter(CustomerOrderLine.order_id == order.id)
+            .all()
+        )
+    ]
+    query = ProducedUnit.query.filter(
+        or_(
+            ProducedUnit.order_id == order.id,
+            ProducedUnit.order_line_id.in_(order_line_ids) if order_line_ids else sa.false(),
+        )
+    )
+    for unit in query.all():
+        if unit.status == 'vin_assigned' and not unit.trailer_id:
             unit.status = 'produced_no_vin'
         unit.order_id = None
+        unit.order_line_id = None
         unit.note = ((unit.note or '') + f'\nКлиентский резерв снят. Причина: {reason}').strip()
+
+
+def _convert_customer_need_to_stock_replenishment(need: SupplyNeed, reason: str) -> None:
+    old_order = need.order
+    old_order_id = need.order_id
+    old_order_line_id = need.order_line_id
+
+    need.order_id = None
+    need.order_line_id = None
+    need.need_type = 'STOCK_REPLENISHMENT'
+    need.note = ((need.note or '') + f'\nРезерв под заказ #{old_order_id} снят. Причина: {reason}').strip()
+
+    for line in need.production_lines:
+        if line.order_line_id:
+            line.note = ((line.note or '') + f'\nКлиентская строка #{line.order_line_id} отвязана. Причина: {reason}').strip()
+        line.order_line_id = None
+        for unit in line.produced_units:
+            if unit.status == 'vin_assigned' and not unit.trailer_id:
+                unit.status = 'produced_no_vin'
+            unit.order_id = None
+            unit.order_line_id = None
+            unit.target_warehouse_id = need.warehouse_id or unit.target_warehouse_id
+            unit.note = ((unit.note or '') + f'\nПереведено в пополнение склада. Причина: {reason}').strip()
+
+    vin_filters = [VinRegistry.supply_need_id == need.id]
+    if old_order_id:
+        vin_filters.append(VinRegistry.customer_order_id == old_order_id)
+    if old_order_line_id:
+        vin_filters.append(VinRegistry.order_line_id == old_order_line_id)
+    for row in VinRegistry.query.filter(or_(*vin_filters)).all():
+        if row.docs_issued_at:
+            raise ValueError('Нельзя снять резерв: по VIN уже выданы документы.')
+        row.customer_order_id = None
+        row.order_line_id = None
+        if row.status in ('assigned', 'confirmed') and row.trailer_id:
+            row.supply_need_id = need.id
+
+    if old_order:
+        for reservation in old_order.reservations.filter_by(status='ACTIVE').all():
+            if old_order_line_id and reservation.order_line_id not in (None, old_order_line_id):
+                continue
+            reservation.status = 'CANCELLED'
+            reservation.note = ((reservation.note or '') + f'\nРезерв отменён. Причина: {reason}').strip()
 
 
 def _release_order_trailer_and_vin(order: CustomerOrder, reason: str) -> tuple[bool, str]:
@@ -7302,7 +7364,10 @@ def _stock_replenishment_stats(need: SupplyNeed):
         1 for unit in units
         if unit.trailer and unit.trailer.warehouse_id == need.warehouse_id and unit.trailer.status == 'IN_STOCK'
     )
-    needs_vin_units = [unit for unit in units if unit.status == 'produced_no_vin']
+    needs_vin_units = [
+        unit for unit in units
+        if unit.status == 'produced_no_vin' and not unit.order_id and not unit.order_line_id
+    ]
     needs_movement_units = [
         unit for unit in units
         if (
@@ -7506,9 +7571,11 @@ def supply_need_release_order_reserve(need_id):
             flash('По заказу есть зарезервированный VIN. Сначала отмените резерв VIN или оставьте заказ без снятия резерва.', 'danger')
         return redirect(request.referrer or url_for('main.stock_replenishment_list'))
     old_order_id = need.order_id
-    need.order_id = None
-    need.need_type = 'STOCK_REPLENISHMENT'
-    need.note = ((need.note or '') + f'\nРезерв под заказ #{old_order_id} снят. Причина: {reason}').strip()
+    try:
+        _convert_customer_need_to_stock_replenishment(need, reason)
+    except ValueError as exc:
+        flash(str(exc), 'danger')
+        return redirect(request.referrer or url_for('main.stock_replenishment_list'))
     add_order_event(order, 'production_need_created', old_value=str(old_order_id), new_value='STOCK_REPLENISHMENT', comment=f'Резерв под заказ клиента снят. Производство продолжается на склад. Причина: {reason}')
     db.session.commit()
     flash('Резерв под заказ снят. Заявка переведена в пополнение склада.', 'success')
