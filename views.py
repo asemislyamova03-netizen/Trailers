@@ -1286,11 +1286,22 @@ def manager_workspace():
     waiting_movement_rows = [row for row in active_order_rows if row['state'].get('code') == 'waiting_movement']
     blocked_order_rows = [row for row in active_order_rows if row['state'].get('blocker')]
     active_order_ids = [order.id for order in active_orders]
+    active_order_line_ids = [
+        line_id for (line_id,) in (
+            CustomerOrderLine.query
+            .with_entities(CustomerOrderLine.id)
+            .filter(CustomerOrderLine.order_id.in_(active_order_ids))
+            .all()
+        )
+    ] if active_order_ids else []
     assigned_vins_to_confirm = (
         VinRegistry.query
         .filter(
             VinRegistry.status == 'assigned',
-            VinRegistry.customer_order_id.in_(active_order_ids),
+            or_(
+                VinRegistry.customer_order_id.in_(active_order_ids),
+                VinRegistry.order_line_id.in_(active_order_line_ids) if active_order_line_ids else sa.false(),
+            ),
         )
         .order_by(VinRegistry.assigned_at.desc().nullslast(), VinRegistry.id.desc())
         .all()

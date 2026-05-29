@@ -22,9 +22,10 @@
     <table class="table table-sm align-middle mb-0">
       <tbody>
       {% for row in assigned_vins_to_confirm %}
+        {% set vin_order = row.customer_order or (row.order_line.order if row.order_line else none) %}
         <tr>
           <td class="fw-bold">{{ row.vin_full }}</td>
-          <td>{{ row.customer_order.order_number if row.customer_order else '' }}</td>
+          <td>{{ vin_order.order_number if vin_order else '' }}</td>
           <td>{{ row.trailer.item.article if row.trailer and row.trailer.item else '' }}</td>
           <td class="text-end">
             <form method="post" action="{{ url_for('main.vin_registry_confirm', vin_id=row.id) }}" class="d-inline">
