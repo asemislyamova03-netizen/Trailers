@@ -40,9 +40,10 @@
       <thead><tr><th>VIN</th><th>Заказ</th><th>Прицеп</th><th>Назначен</th><th></th></tr></thead>
       <tbody>
       {% for row in assigned_not_confirmed_vins %}
+        {% set vin_order = row.customer_order or (row.order_line.order if row.order_line else none) %}
         <tr>
           <td class="fw-bold">{{ row.vin_full }}</td>
-          <td>{% if row.customer_order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=row.customer_order.id) }}">{{ row.customer_order.order_number }}</a>{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+          <td>{% if vin_order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=vin_order.id) }}">{{ vin_order.order_number }}</a>{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
           <td>{% if row.trailer %}Trailer #{{ row.trailer.id }}{% else %}<span class="text-muted">не привязан</span>{% endif %}</td>
           <td>{{ row.assigned_at|date_format }}</td>
           <td class="text-end"><span class="badge text-bg-warning">Ждёт подтверждения менеджера</span></td>

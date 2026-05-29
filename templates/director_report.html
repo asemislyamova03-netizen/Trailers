@@ -317,8 +317,9 @@ document.addEventListener('DOMContentLoaded', () => {
           {% for item in group['items'][:20] %}
             <tr>
               {% if item.vin_full is defined %}
+                {% set vin_order = item.customer_order or (item.order_line.order if item.order_line else none) %}
                 <td>VIN {{ item.vin_full or item.serial7 }}</td>
-                <td>{% if item.customer_order %}<a href="{{ url_for('main.order_detail', order_id=item.customer_order.id) }}">{{ item.customer_order.order_number }}</a>{% else %}&mdash;{% endif %}</td>
+                <td>{% if vin_order %}<a href="{{ url_for('main.order_detail', order_id=vin_order.id) }}">{{ vin_order.order_number }}</a>{% else %}&mdash;{% endif %}</td>
                 <td>{{ item.trailer.warehouse.name if item.trailer and item.trailer.warehouse else '&mdash;' }}</td>
                 <td>{{ (item.reserved_at or item.assigned_at or item.docs_issued_at or item.created_at)|date_format }}</td>
                 <td><span class="badge text-bg-{{ item.status|status_badge_class }}">{{ item.status|status_label }}</span></td>

@@ -11274,7 +11274,7 @@ def director_dashboard():
         VinRegistry.confirmed_at.is_(None),
     ).order_by(VinRegistry.assigned_at.desc().nullslast(), VinRegistry.id.desc()).limit(20).all()
     if warehouse_id:
-        vin_assigned_not_confirmed = [row for row in vin_assigned_not_confirmed if row.customer_order and row.customer_order.warehouse_id == warehouse_id]
+        vin_assigned_not_confirmed = [row for row in vin_assigned_not_confirmed if _vin_registry_order(row) and _vin_registry_order(row).warehouse_id == warehouse_id]
     orders_without_trailer = later_orders + production_without_trailer + docs_issued_without_trailer
     paid_without_contract = [
         order for order in scoped_order_query().filter(
@@ -11863,9 +11863,9 @@ def director_report(section='sales'):
             VinRegistry.confirmed_at.is_(None),
         ).order_by(VinRegistry.assigned_at.desc().nullslast()).all()
         if warehouse_id:
-            vin_assigned_not_confirmed = [row for row in vin_assigned_not_confirmed if row.customer_order and row.customer_order.warehouse_id == warehouse_id]
+            vin_assigned_not_confirmed = [row for row in vin_assigned_not_confirmed if _vin_registry_order(row) and _vin_registry_order(row).warehouse_id == warehouse_id]
         if manager_id:
-            vin_assigned_not_confirmed = [row for row in vin_assigned_not_confirmed if row.customer_order and row.customer_order.assigned_user_id == manager_id]
+            vin_assigned_not_confirmed = [row for row in vin_assigned_not_confirmed if _vin_registry_order(row) and _vin_registry_order(row).assigned_user_id == manager_id]
         paid_without_contract = [
             order for order in order_scope(CustomerOrder.query).filter(
                 CustomerOrder.documents_issued == False,
