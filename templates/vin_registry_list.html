@@ -71,6 +71,7 @@
       <thead><tr><th>VIN</th><th></th><th>Категория</th><th>serial7</th><th>Модификация</th><th>Год</th><th>Статус</th><th>Документы</th><th>Заказ</th><th class="d-none d-lg-table-cell">Договор</th><th>Клиент</th><th class="d-none d-xl-table-cell">Прицеп</th><th class="d-none d-xl-table-cell">Кто резервировал</th><th class="d-none d-lg-table-cell">Дата</th><th class="d-none d-xl-table-cell">Комментарий</th></tr></thead>
       <tbody>
       {% for row in rows %}
+        {% set vin_order = row.customer_order or (row.order_line.order if row.order_line else none) %}
         <tr>
           <td class="fw-semibold">{{ row.vin_full or '—' }}</td>
           <td><a class="btn btn-sm btn-soft" href="{{ url_for('main.vin_registry_detail', vin_id=row.id) }}">Открыть</a></td>
@@ -80,9 +81,9 @@
           <td>{{ row.year_code or '' }}</td>
           <td><span class="badge text-bg-{{ row.status|status_badge_class }}">{{ row.status|status_label }}</span></td>
           <td>{% if row.docs_issued_at %}<span class="badge text-bg-success">выданы</span><div class="small text-muted">{{ row.docs_issued_at|date_format }}</div>{% else %}<span class="text-muted">нет</span>{% endif %}</td>
-          <td>{% if row.customer_order %}<a href="{{ url_for('main.order_detail', order_id=row.customer_order.id) }}">{{ row.customer_order.order_number }}</a>{% endif %}</td>
+          <td>{% if vin_order %}<a href="{{ url_for('main.order_detail', order_id=vin_order.id) }}">{{ vin_order.order_number }}</a>{% endif %}</td>
           <td class="d-none d-lg-table-cell">{% if row.sales_contract %}<div class="fw-semibold">№ {{ row.sales_contract.contract_number or row.sales_contract.id }}</div>{% if row.sales_contract.contract_date %}<div class="small text-muted">{{ row.sales_contract.contract_date|date_format }}</div>{% endif %}{% endif %}</td>
-          <td>{% if row.customer_order and row.customer_order.customer %}{{ row.customer_order.customer.name }}{% elif row.sales_contract and row.sales_contract.customer %}{{ row.sales_contract.customer.name }}{% endif %}</td>
+          <td>{% if vin_order and vin_order.customer %}{{ vin_order.customer.name }}{% elif row.sales_contract and row.sales_contract.customer %}{{ row.sales_contract.customer.name }}{% endif %}</td>
           <td class="d-none d-xl-table-cell">{{ row.trailer.vin if row.trailer else '' }}</td>
           <td class="d-none d-xl-table-cell">{{ row.reserved_by_user.full_name if row.reserved_by_user else '' }}</td>
           <td class="d-none d-lg-table-cell">{{ row.reserved_at|date_format if row.reserved_at else '' }}</td>

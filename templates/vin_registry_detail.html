@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}VIN {{ row.vin_full or row.serial7 }}{% endblock %}
 {% block content %}
+{% set vin_order = row.customer_order or (row.order_line.order if row.order_line else none) %}
 <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
   <div>
     <h1 class="h3 mb-1">{{ row.vin_full or row.serial7 }}</h1>
@@ -35,10 +36,10 @@
     <div class="app-card p-3 h-100">
       <h2 class="h5">Связи</h2>
       <dl class="row mb-0">
-        <dt class="col-5">Заказ</dt><dd class="col-7">{% if row.customer_order %}<a href="{{ url_for('main.order_detail', order_id=row.customer_order.id) }}">{{ row.customer_order.order_number }}</a>{% else %}<span class="text-muted">нет</span>{% endif %}</dd>
+        <dt class="col-5">Заказ</dt><dd class="col-7">{% if vin_order %}<a href="{{ url_for('main.order_detail', order_id=vin_order.id) }}">{{ vin_order.order_number }}</a>{% else %}<span class="text-muted">нет</span>{% endif %}</dd>
         <dt class="col-5">Договор</dt><dd class="col-7">{% if row.sales_contract %}<div class="fw-semibold">№ {{ row.sales_contract.contract_number or row.sales_contract.id }}</div>{% if row.sales_contract.contract_date %}<div class="small text-muted">{{ row.sales_contract.contract_date|date_format }}</div>{% endif %}{% else %}<span class="text-muted">нет</span>{% endif %}</dd>
         <dt class="col-5">Документы по заказу</dt><dd class="col-7">{% if row.docs_issued_order %}<a href="{{ url_for('main.order_detail', order_id=row.docs_issued_order.id) }}">{{ row.docs_issued_order.order_number }}</a>{% else %}<span class="text-muted">нет</span>{% endif %}</dd>
-        <dt class="col-5">Клиент</dt><dd class="col-7">{% if row.customer_order and row.customer_order.customer %}{{ row.customer_order.customer.name }}{% elif row.sales_contract and row.sales_contract.customer %}{{ row.sales_contract.customer.name }}{% endif %}</dd>
+        <dt class="col-5">Клиент</dt><dd class="col-7">{% if vin_order and vin_order.customer %}{{ vin_order.customer.name }}{% elif row.sales_contract and row.sales_contract.customer %}{{ row.sales_contract.customer.name }}{% endif %}</dd>
         <dt class="col-5">Заявка</dt><dd class="col-7">{{ row.supply_need_id or '' }}</dd>
         <dt class="col-5">Прицеп</dt><dd class="col-7">{{ row.trailer.vin if row.trailer else '' }}</dd>
         <dt class="col-5">Резерв</dt><dd class="col-7">{{ row.reserved_by_user.full_name if row.reserved_by_user else '' }} {{ row.reserved_at|date_format if row.reserved_at else '' }}</dd>

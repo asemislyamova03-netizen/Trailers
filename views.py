@@ -9449,6 +9449,14 @@ def _vin_product_category_name(row: VinRegistry) -> str:
     return category.name if category else 'Не определено'
 
 
+def _vin_registry_order(row: VinRegistry) -> CustomerOrder | None:
+    if row.customer_order:
+        return row.customer_order
+    if row.order_line:
+        return row.order_line.order
+    return None
+
+
 @main_bp.route('/logistics/vin-registry', methods=['GET', 'POST'])
 @role_required('logistics', 'director', 'manager')
 def vin_registry_list():
@@ -9500,8 +9508,16 @@ def vin_registry_list():
     category = (request.args.get('category') or ('light_trailer' if current_user.is_manager else 'all')).strip()
     query = VinRegistry.query
     if current_user.is_manager:
-        query = query.filter(VinRegistry.customer_order_id.in_(
-            CustomerOrder.query.with_entities(CustomerOrder.id).filter(CustomerOrder.assigned_user_id == current_user.id)
+        manager_order_ids = CustomerOrder.query.with_entities(CustomerOrder.id).filter(CustomerOrder.assigned_user_id == current_user.id)
+        manager_order_line_ids = (
+            CustomerOrderLine.query
+            .join(CustomerOrder, CustomerOrder.id == CustomerOrderLine.order_id)
+            .with_entities(CustomerOrderLine.id)
+            .filter(CustomerOrder.assigned_user_id == current_user.id)
+        )
+        query = query.filter(or_(
+            VinRegistry.customer_order_id.in_(manager_order_ids),
+            VinRegistry.order_line_id.in_(manager_order_line_ids),
         ))
     if status:
         query = query.filter(VinRegistry.status == status)
@@ -9517,11 +9533,19 @@ def vin_registry_list():
         query = query.filter(VinRegistry.docs_issued_at.is_(None))
     if q:
         like = f'%{q}%'
+        matching_order_line_ids = (
+            CustomerOrderLine.query
+            .join(CustomerOrder, CustomerOrder.id == CustomerOrderLine.order_id)
+            .outerjoin(Customer, Customer.id == CustomerOrder.customer_id)
+            .with_entities(CustomerOrderLine.id)
+            .filter(or_(CustomerOrder.order_number.ilike(like), Customer.name.ilike(like)))
+        )
         query = query.outerjoin(CustomerOrder, CustomerOrder.id == VinRegistry.customer_order_id).outerjoin(Customer, Customer.id == CustomerOrder.customer_id).filter(or_(
             VinRegistry.vin_full.ilike(like),
             VinRegistry.serial7.ilike(like),
             CustomerOrder.order_number.ilike(like),
             Customer.name.ilike(like),
+            VinRegistry.order_line_id.in_(matching_order_line_ids),
         ))
     rows = query.order_by(
         VinRegistry.serial7.desc().nullslast(),
@@ -9538,8 +9562,10 @@ def vin_registry_list():
 @role_required('logistics', 'director', 'manager')
 def vin_registry_detail(vin_id):
     row = VinRegistry.query.get_or_404(vin_id)
-    if current_user.is_manager and row.customer_order and row.customer_order.assigned_user_id != current_user.id:
-        abort(403)
+    if current_user.is_manager:
+        order = _vin_registry_order(row)
+        if not order or order.assigned_user_id != current_user.id:
+            abort(403)
     orders = CustomerOrder.query.filter(
         CustomerOrder.status.notin_(['cancelled', 'canceled', 'closed', 'done', 'shipped']),
         CustomerOrder.documents_issued == False,
@@ -9686,8 +9712,8 @@ def vin_registry_confirm(vin_id):
     if not row.trailer or row.trailer.vin != row.vin_full:
         flash('Нельзя подтвердить VIN: у связанного прицепа другой VIN.', 'danger')
         return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
-    order = row.customer_order
-    if current_user.is_manager and order and order.assigned_user_id != current_user.id:
+    order = _vin_registry_order(row)
+    if current_user.is_manager and (not order or order.assigned_user_id != current_user.id):
         abort(403)
     old_status = row.status
     row.status = 'confirmed'

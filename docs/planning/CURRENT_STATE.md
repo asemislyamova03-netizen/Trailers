@@ -166,6 +166,7 @@
 - Проверить прямые URL под логистом: `/reports`, `/stock-replenishment`, supply-needs POST-действия и производственные действия должны быть недоступны; `/logistics/vin-registry` остаётся доступен.
 - Проверить `/manager/workspace`, `/manager/workspace?tab=funnel`, `/manager/workspace?tab=assistant`: CRM должен открываться без 500 после удаления старых скрытых расчётов.
 - Проверить `/manager/workspace` на заказе с VIN, привязанным только к строке: assigned VIN должен попадать в блок подтверждения нанесения.
+- Проверить `/logistics/vin-registry?status=assigned` под менеджером: VIN, привязанный только через `order_line_id` его заказа, должен быть виден в списке, карточке и доступен для подтверждения нанесения.
 - Проверить категории `light_trailer` / `cargo_vehicle` у существующих групп и номенклатуры, особенно G-группы и зерновозы.
 
 ## Главный фокус сейчас
