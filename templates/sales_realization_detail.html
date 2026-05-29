@@ -21,7 +21,7 @@
         <button class="btn btn-orange">Провести и закрыть отгрузку</button>
       </form>
     {% endif %}
-    {% if realization.status in ['draft', 'posted'] %}
+    {% if realization.status == 'draft' or (realization.status == 'posted' and (current_user.is_admin or current_user.is_director)) %}
       <form method="post" action="{{ url_for('main.sales_realization_delete', realization_id=realization.id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button class="btn btn-outline-danger">Удалить реализацию</button>

@@ -8860,6 +8860,9 @@ def sales_realization_delete(realization_id):
     realization = SalesRealization.query.get_or_404(realization_id)
     if current_user.is_manager and realization.assigned_user_id != current_user.id:
         abort(403)
+    if realization.status == 'posted' and not (current_user.is_admin or current_user.is_director):
+        flash('Проведённую реализацию может удалить только директор или админ. Менеджер может редактировать проведённую реализацию.', 'danger')
+        return redirect(url_for('main.sales_realization_detail', realization_id=realization.id))
     if realization.status not in ('draft', 'posted'):
         flash('Удалить можно только черновик или проведённую реализацию.', 'danger')
         return redirect(url_for('main.sales_realization_detail', realization_id=realization.id))
