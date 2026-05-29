@@ -5371,6 +5371,14 @@ def _refresh_order_shipment_state(order: CustomerOrder) -> None:
         contract = SalesContract.query.filter_by(order_id=order.id).first()
         if contract:
             contract.is_shipped = True
+    elif lines:
+        order.is_shipped = False
+        order.shipped_at = None
+        contract = SalesContract.query.filter_by(order_id=order.id).first()
+        if contract:
+            contract.is_shipped = False
+        if order.status == 'shipped':
+            _refresh_order_status(order)
 
 
 def _apply_realization_shipment_effect(realization: SalesRealization) -> None:
@@ -5389,10 +5397,6 @@ def _apply_realization_shipment_effect(realization: SalesRealization) -> None:
 
     if order:
         _refresh_order_shipment_state(order)
-        if affected_lines and not order.is_shipped:
-            order.is_shipped = True
-            order.shipped_at = order.shipped_at or datetime.utcnow()
-            order.status = 'shipped'
         contract = SalesContract.query.filter_by(order_id=order.id).first()
         if contract:
             contract.is_shipped = bool(order.is_shipped)
@@ -5411,12 +5415,9 @@ def _revert_realization_shipment_effect(realization: SalesRealization) -> None:
                     reservation.status = 'ACTIVE'
 
     if order:
-        order.is_shipped = False
-        order.shipped_at = None
-        contract = SalesContract.query.filter_by(order_id=order.id).first()
-        if contract:
-            contract.is_shipped = False
-        _refresh_order_status(order)
+        _refresh_order_shipment_state(order)
+        if not order.is_shipped:
+            _refresh_order_status(order)
 
 
 def _line_snapshot_from_item(item: Item | None) -> dict:
@@ -8674,6 +8675,16 @@ def _order_realization_lines_source(order: CustomerOrder) -> list[CustomerOrderL
     return [line for line in lines if getattr(line, 'include_in_realization', True)]
 
 
+def _order_unrealized_lines_source(order: CustomerOrder) -> list[CustomerOrderLine]:
+    source_lines = _order_realization_lines_source(order)
+    result = []
+    for line in source_lines:
+        if any(row.realization and row.realization.status == 'posted' for row in line.realization_lines):
+            continue
+        result.append(line)
+    return result
+
+
 def _refresh_order_realization_status(order: CustomerOrder) -> None:
     posted = [row for row in order.sales_realizations if row.status == 'posted']
     if not posted:
@@ -8866,7 +8877,9 @@ def _build_sales_realization_from_order(order: CustomerOrder) -> SalesRealizatio
     db.session.add(realization)
     db.session.flush()
     total = Decimal('0')
-    source_lines = _order_realization_lines_source(order)
+    source_lines = _order_unrealized_lines_source(order)
+    if not source_lines:
+        raise ValueError('По заказу нет строк, которые можно добавить в новую реализацию: все строки уже проведены.')
     for idx, source_line in enumerate(source_lines, start=1):
         item = source_line.item
         line_type = 'component'
@@ -8999,12 +9012,12 @@ def order_realization_create(order_id):
         return redirect(url_for('main.order_detail', order_id=order.id))
     existing_realization = (
         SalesRealization.query
-        .filter(SalesRealization.order_id == order.id, SalesRealization.status.in_(['draft', 'posted']))
+        .filter(SalesRealization.order_id == order.id, SalesRealization.status == 'draft')
         .order_by(SalesRealization.created_at.desc(), SalesRealization.id.desc())
         .first()
     )
     if existing_realization:
-        flash('По заказу уже есть реализация. Откройте существующий документ вместо создания дубля.', 'warning')
+        flash('По заказу уже есть черновик реализации. Откройте его вместо создания дубля.', 'warning')
         return redirect(url_for('main.sales_realization_detail', realization_id=existing_realization.id))
     idem_key, duplicate = _reserve_idempotency_key()
     if duplicate:
@@ -9073,9 +9086,10 @@ def sales_realization_post(realization_id):
     _apply_realization_shipment_effect(realization)
     if order:
         _refresh_order_realization_status(order)
-        add_order_event(order, 'realization_posted', new_value=realization.number, comment='Проведена реализация товаров и услуг; заказ закрыт как отгрузка')
+        shipment_comment = 'Проведена реализация товаров и услуг; заказ закрыт как отгрузка' if order.is_shipped else 'Проведена реализация товаров и услуг; отгружены строки реализации'
+        add_order_event(order, 'realization_posted', new_value=realization.number, comment=shipment_comment)
     db.session.commit()
-    flash('Реализация проведена, заказ закрыт как отгруженный.', 'success')
+    flash('Реализация проведена, заказ закрыт как отгруженный.' if not order or order.is_shipped else 'Реализация проведена, отгружены строки реализации.', 'success')
     return redirect(url_for('main.sales_realization_detail', realization_id=realization.id))
 
 
