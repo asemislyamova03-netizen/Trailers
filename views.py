@@ -5019,6 +5019,52 @@ def _refresh_order_shipment_state(order: CustomerOrder) -> None:
             contract.is_shipped = True
 
 
+def _apply_realization_shipment_effect(realization: SalesRealization) -> None:
+    order = realization.order
+    affected_lines = []
+    for line in realization.lines:
+        if line.order_line:
+            line.order_line.status = 'shipped'
+            affected_lines.append(line.order_line)
+            for reservation in line.order_line.reservations:
+                if reservation.status == 'ACTIVE':
+                    reservation.status = 'CLOSED'
+        if line.inventory_effect == 'trailer_unit' and line.trailer:
+            line.trailer.status = 'SOLD'
+            line.trailer.lifecycle_status = 'customer_shipped'
+
+    if order:
+        _refresh_order_shipment_state(order)
+        if affected_lines and not order.is_shipped:
+            order.is_shipped = True
+            order.shipped_at = order.shipped_at or datetime.utcnow()
+            order.status = 'shipped'
+        contract = SalesContract.query.filter_by(order_id=order.id).first()
+        if contract:
+            contract.is_shipped = bool(order.is_shipped)
+
+
+def _revert_realization_shipment_effect(realization: SalesRealization) -> None:
+    order = realization.order
+    for line in realization.lines:
+        if line.order_line and line.order_line.status == 'shipped':
+            line.order_line.status = 'NEW'
+        if line.inventory_effect == 'trailer_unit' and line.trailer:
+            line.trailer.status = 'RESERVED'
+            line.trailer.lifecycle_status = 'reserved'
+            for reservation in line.trailer.reservations:
+                if order and reservation.order_id == order.id and reservation.status == 'CLOSED':
+                    reservation.status = 'ACTIVE'
+
+    if order:
+        order.is_shipped = False
+        order.shipped_at = None
+        contract = SalesContract.query.filter_by(order_id=order.id).first()
+        if contract:
+            contract.is_shipped = False
+        _refresh_order_status(order)
+
+
 def _line_snapshot_from_item(item: Item | None) -> dict:
     if not item:
         return {}
@@ -8086,17 +8132,25 @@ def sales_realization_delete(realization_id):
     realization = SalesRealization.query.get_or_404(realization_id)
     if current_user.is_manager and realization.assigned_user_id != current_user.id:
         abort(403)
-    if realization.status != 'draft':
-        flash('Удалить можно только черновик реализации.', 'danger')
+    if realization.status not in ('draft', 'posted'):
+        flash('Удалить можно только черновик или проведённую реализацию.', 'danger')
         return redirect(url_for('main.sales_realization_detail', realization_id=realization.id))
     order = realization.order
     number = realization.number or realization.id
+    was_posted = realization.status == 'posted'
+    if was_posted:
+        _revert_realization_shipment_effect(realization)
     db.session.delete(realization)
     if order:
         _refresh_order_realization_status(order)
-        add_order_event(order, 'realization_cancelled', old_value=number, comment='Удалён черновик реализации')
+        add_order_event(
+            order,
+            'realization_cancelled',
+            old_value=number,
+            comment='Удалена проведённая реализация с откатом отгрузки' if was_posted else 'Удалён черновик реализации',
+        )
     db.session.commit()
-    flash('Черновик реализации удалён.', 'success')
+    flash('Реализация удалена.', 'success')
     return redirect(url_for('main.order_detail', order_id=order.id) if order else url_for('main.sales_realizations_list'))
 
 
@@ -8117,16 +8171,12 @@ def sales_realization_post(realization_id):
     realization.posted_at = datetime.utcnow()
     realization.posted_by_user_id = current_user.id
     order = realization.order
-    for line in realization.lines:
-        if line.inventory_effect == 'trailer_unit' and line.trailer:
-            line.trailer.status = 'SOLD'
-            if line.trailer.lifecycle_status != 'customer_shipped':
-                line.trailer.lifecycle_status = 'sold'
+    _apply_realization_shipment_effect(realization)
     if order:
         _refresh_order_realization_status(order)
-        add_order_event(order, 'realization_posted', new_value=realization.number, comment='Проведена реализация товаров и услуг')
+        add_order_event(order, 'realization_posted', new_value=realization.number, comment='Проведена реализация товаров и услуг; заказ закрыт как отгрузка')
     db.session.commit()
-    flash('Реализация проведена.', 'success')
+    flash('Реализация проведена, заказ закрыт как отгруженный.', 'success')
     return redirect(url_for('main.sales_realization_detail', realization_id=realization.id))
 
 
@@ -8260,6 +8310,8 @@ def order_contract_create(order_id):
 def order_ship(order_id):
     order = CustomerOrder.query.get_or_404(order_id)
     _ensure_can_manage_order(order)
+    flash('Отдельная отгрузка больше не используется: проведение реализации закрывает отгрузку по заказу.', 'warning')
+    return redirect(url_for('main.order_detail', order_id=order.id))
     if order.is_shipped:
         flash('Заказ уже физически отгружен.', 'warning')
         return redirect(url_for('main.order_detail', order_id=order.id))
@@ -8309,6 +8361,8 @@ def order_ship(order_id):
 def order_line_ship(order_id, line_id):
     order = CustomerOrder.query.get_or_404(order_id)
     _ensure_can_manage_order(order)
+    flash('Отдельная отгрузка позиции больше не используется: проведение реализации закрывает отгрузку.', 'warning')
+    return redirect(url_for('main.order_detail', order_id=order.id))
     line = CustomerOrderLine.query.filter_by(id=line_id, order_id=order.id).first_or_404()
     if not can_ship_order(order) or order.status == 'cancelled':
         abort(403)

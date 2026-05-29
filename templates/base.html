@@ -59,7 +59,6 @@
                     {{ nav_item('Сделки', 'bi-speedometer2', 'main.manager_workspace', match='/manager') }}
                     {{ nav_item('Наличие', 'bi-box-seam', href=url_for('main.trailers_list', status='IN_STOCK'), match='/trailers') }}
                     {{ nav_item('Перемещения', 'bi-truck', 'main.stock_movements_list', match='/stock-movements') }}
-                    {{ nav_item('Отгрузки', 'bi-clipboard-check', href=url_for('main.manager_workspace', tab='issue'), match='/manager') }}
                     {{ nav_item('Реализации', 'bi-journal-check', 'main.sales_realizations_list', match='/realizations') }}
                     {{ nav_item('Клиенты', 'bi-person-lines-fill', 'main.customers_list', match='/customers') }}
                     {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', match='/reports') }}

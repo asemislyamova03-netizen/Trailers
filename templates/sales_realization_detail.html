@@ -15,11 +15,13 @@
     {% if realization.status == 'draft' %}
       <form method="post" action="{{ url_for('main.sales_realization_post', realization_id=realization.id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button class="btn btn-orange">Провести</button>
+        <button class="btn btn-orange">Провести и закрыть отгрузку</button>
       </form>
+    {% endif %}
+    {% if realization.status in ['draft', 'posted'] %}
       <form method="post" action="{{ url_for('main.sales_realization_delete', realization_id=realization.id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button class="btn btn-outline-danger">Удалить черновик</button>
+        <button class="btn btn-outline-danger">Удалить реализацию</button>
       </form>
     {% endif %}
   </div>
