@@ -8958,8 +8958,25 @@ def sales_realization_edit(realization_id):
                 flash('Дата реализации указана неверно.', 'danger')
                 return render_template('sales_realization_form.html', form=form, realization=realization)
 
+        remove_line_ids = {int(value) for value in request.form.getlist('remove_line_ids') if str(value).isdigit()}
+        if remove_line_ids and realization.status != 'draft':
+            flash('Удалять строки можно только в черновике реализации.', 'danger')
+            return render_template('sales_realization_form.html', form=form, realization=realization)
+        if remove_line_ids:
+            current_lines = list(realization.lines.order_by(SalesRealizationLine.line_no.asc(), SalesRealizationLine.id.asc()).all())
+            kept_lines = [line for line in current_lines if line.id not in remove_line_ids]
+            if not kept_lines:
+                flash('В реализации должна остаться хотя бы одна строка.', 'danger')
+                return render_template('sales_realization_form.html', form=form, realization=realization)
+            for line in current_lines:
+                if line.id in remove_line_ids:
+                    db.session.delete(line)
+            db.session.flush()
+            for index, line in enumerate(kept_lines, start=1):
+                line.line_no = index
+
         total = Decimal('0')
-        for line in realization.lines:
+        for line in realization.lines.order_by(SalesRealizationLine.line_no.asc(), SalesRealizationLine.id.asc()).all():
             qty = line.quantity or 1
             if line.inventory_effect != 'trailer_unit':
                 qty_raw = (request.form.get(f'line_{line.id}_quantity') or '').strip()
