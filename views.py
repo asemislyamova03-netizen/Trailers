@@ -11844,6 +11844,8 @@ def director_report(section='sales'):
     report_direction = (request.args.get('direction') or 'all').strip()
     period = request.args.get('period', 'all' if section in ('stock', 'line-links', 'problems') else 'month')
     today = date.today()
+    analytics_sections = ('sales', 'dynamics', 'branches', 'types', 'turnover')
+    default_date_from = date(2025, 1, 1) if section in analytics_sections else today.replace(day=1)
 
     if period == 'all':
         date_from = date(2000, 1, 1)
@@ -11852,7 +11854,7 @@ def director_report(section='sales'):
         try:
             date_from = datetime.strptime(request.args.get('date_from') or '', '%Y-%m-%d').date()
         except ValueError:
-            date_from = date(2000, 1, 1) if section in ('stock', 'line-links', 'problems') else today.replace(day=1)
+            date_from = date(2000, 1, 1) if section in ('stock', 'line-links', 'problems') else default_date_from
         try:
             date_to = datetime.strptime(request.args.get('date_to') or '', '%Y-%m-%d').date()
         except ValueError:
