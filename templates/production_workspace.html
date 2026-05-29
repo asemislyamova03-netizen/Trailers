@@ -10,19 +10,52 @@
 </div>
 
 <div class="nav nav-tabs mb-3 overflow-auto flex-nowrap">
+  <a class="nav-link {% if active_tab == 'warehouses' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='warehouses') }}">По складам</a>
+  <a class="nav-link {% if active_tab == 'frames' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='frames') }}">По размерам рам</a>
   <a class="nav-link {% if active_tab == 'todo' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='todo') }}">Мои задания</a>
   <a class="nav-link {% if active_tab == 'in_work' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='in_work') }}">В работе</a>
   <a class="nav-link {% if active_tab == 'done_today' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='done_today') }}">Выпуск</a>
-  <a class="nav-link {% if active_tab == 'overdue' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='overdue') }}">Просрочено</a>
+  <a class="nav-link {% if active_tab == 'history' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='history') }}">История</a>
+  <a class="nav-link {% if active_tab == 'materials' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='materials') }}">Материалы</a>
 </div>
 
-{% if active_tab == 'done_today' %}
+{% if active_tab == 'warehouses' %}
+<div class="app-card">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead><tr><th>Склад выдачи</th><th class="text-end">Осталось выпустить</th></tr></thead>
+      <tbody>
+      {% for row in warehouse_rows %}
+        <tr><td class="fw-semibold">{{ row.label }}</td><td class="text-end">{{ row.quantity }} шт.</td></tr>
+      {% else %}
+        <tr><td colspan="2" class="text-muted p-3">Активных заданий нет</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% elif active_tab == 'frames' %}
+<div class="app-card">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead><tr><th>Размер рамы / кузова</th><th class="text-end">Осталось выпустить</th></tr></thead>
+      <tbody>
+      {% for row in frame_rows %}
+        <tr><td class="fw-semibold">{{ row.label }}</td><td class="text-end">{{ row.quantity }} шт.</td></tr>
+      {% else %}
+        <tr><td colspan="2" class="text-muted p-3">Активных заданий нет</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% elif active_tab in ['done_today', 'history'] %}
 <div class="app-card">
   <div class="table-responsive">
     <table class="table table-sm align-middle mb-0">
       <thead><tr><th>Ед.</th><th>Модель</th><th>Склад</th><th>VIN</th><th>Статус</th><th>Дата</th></tr></thead>
       <tbody>
-      {% for unit in today_units %}
+      {% for unit in (today_units if active_tab == 'done_today' else history_units) %}
         {% set vin_row = production_vin_row_for_unit(unit) %}
         <tr>
           <td class="fw-semibold">#{{ unit.id }}</td>
@@ -33,7 +66,7 @@
           <td>{{ unit.produced_at|date_format }}</td>
         </tr>
       {% else %}
-        <tr><td colspan="6" class="text-muted p-3">Сегодня выпусков нет</td></tr>
+        <tr><td colspan="6" class="text-muted p-3">Выпусков нет</td></tr>
       {% endfor %}
       </tbody>
     </table>
@@ -41,6 +74,9 @@
 </div>
 {% else %}
 <div class="app-card">
+  {% if active_tab == 'materials' %}
+  <div class="px-3 pt-3 text-muted small">Показываются активные задания, по которым нужно обеспечить материалы. Списание по BOM будет отдельным этапом после приёмки Итерации 1.</div>
+  {% endif %}
   <div class="table-responsive">
     <table class="table table-sm align-middle mb-0">
       <thead><tr><th>Задание</th><th>Модель</th><th>Склад</th><th>Срок</th><th>Выпуск</th><th>VIN</th><th>Статус</th><th class="text-end">Действия</th></tr></thead>

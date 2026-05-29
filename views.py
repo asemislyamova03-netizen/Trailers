@@ -10610,6 +10610,9 @@ def _refresh_production_request_status(production_request: ProductionRequest) ->
 @role_required('production', 'director', 'manager')
 def production_workspace():
     active_tab = request.args.get('tab', 'todo')
+    production_tabs = {'warehouses', 'frames', 'todo', 'in_work', 'done_today', 'history', 'materials', 'overdue'}
+    if active_tab not in production_tabs:
+        active_tab = 'todo'
     today_start = datetime.combine(date.today(), time.min)
 
     base_query = (
@@ -10617,6 +10620,27 @@ def production_workspace():
         .join(ProductionRequest, ProductionRequest.id == ProductionRequestLine.production_request_id)
         .outerjoin(SupplyNeed, SupplyNeed.id == ProductionRequestLine.supply_need_id)
     )
+    open_lines = base_query.filter(
+        ~ProductionRequestLine.status.in_(['ready', 'closed', 'cancelled', 'CANCELLED'])
+    ).all()
+    warehouse_rows = []
+    warehouse_groups = defaultdict(int)
+    for line in open_lines:
+        warehouse_name = line.production_request.target_warehouse.name if line.production_request and line.production_request.target_warehouse else 'Склад не задан'
+        warehouse_groups[warehouse_name] += max((line.quantity or 0) - (line.produced_qty or 0), 0)
+    warehouse_rows = [{'label': label, 'quantity': qty} for label, qty in sorted(warehouse_groups.items())]
+
+    frame_groups = defaultdict(int)
+    for line in open_lines:
+        item = line.item
+        if item and item.body_length_mm and item.body_width_mm:
+            label = f'{item.body_length_mm}x{item.body_width_mm}'
+        elif item and item.size_body:
+            label = item.size_body
+        else:
+            label = 'Размер не задан'
+        frame_groups[label] += max((line.quantity or 0) - (line.produced_qty or 0), 0)
+    frame_rows = [{'label': label, 'quantity': qty} for label, qty in sorted(frame_groups.items())]
 
     lines = []
     if active_tab == 'in_work':
@@ -10627,7 +10651,9 @@ def production_workspace():
             SupplyNeed.required_by.isnot(None),
             SupplyNeed.required_by < date.today(),
         ).order_by(SupplyNeed.required_by.asc(), ProductionRequestLine.id.asc()).all()
-    elif active_tab != 'done_today':
+    elif active_tab == 'materials':
+        lines = sorted(open_lines, key=lambda row: (row.supply_need.required_by if row.supply_need and row.supply_need.required_by else date.max, row.id))
+    elif active_tab not in ('done_today', 'history', 'warehouses', 'frames'):
         active_tab = 'todo'
         lines = base_query.filter(ProductionRequestLine.status.in_(['planned', 'PLANNED', 'draft', 'DRAFT', 'waiting_production'])).order_by(ProductionRequest.created_at.asc(), ProductionRequestLine.id.asc()).all()
 
@@ -10637,7 +10663,21 @@ def production_workspace():
         .order_by(ProducedUnit.created_at.desc(), ProducedUnit.id.desc())
         .all()
     )
-    return render_template('production_workspace.html', lines=lines, today_units=today_units, active_tab=active_tab)
+    history_units = (
+        ProducedUnit.query
+        .order_by(ProducedUnit.created_at.desc(), ProducedUnit.id.desc())
+        .limit(80)
+        .all()
+    )
+    return render_template(
+        'production_workspace.html',
+        lines=lines,
+        today_units=today_units,
+        history_units=history_units,
+        warehouse_rows=warehouse_rows,
+        frame_rows=frame_rows,
+        active_tab=active_tab,
+    )
 
 
 @main_bp.route('/production/lines/<int:line_id>/start', methods=['POST'])
