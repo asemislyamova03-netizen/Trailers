@@ -122,6 +122,13 @@
           {% else %}
             <span class="text-muted small">Следующий шаг менеджера: присвоить VIN выпущенной единице.</span>
           {% endif %}
+          {% if current_user.is_admin %}
+            <form method="post" action="{{ url_for('main.produced_unit_admin_delete', unit_id=st.needs_vin_units[0].id) }}" onsubmit="return confirm('Удалить ошибочный выпуск без VIN?');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="reason" value="Очистка из пополнения склада">
+              <button class="btn btn-sm btn-outline-danger">Удалить выпуск</button>
+            </form>
+          {% endif %}
         {% elif st.needs_movement_qty %}
           {% set move_unit = st.needs_movement_units[0] %}
           <div class="text-info fw-semibold">VIN присвоен, нужно переместить</div>
@@ -134,6 +141,13 @@
               <button class="btn btn-sm btn-orange">Отправить на склад</button>
             </form>
             <div class="small text-muted">{{ move_unit.trailer.vin }} -> {{ need.warehouse.name }}</div>
+          {% endif %}
+          {% if current_user.is_admin %}
+            <form method="post" action="{{ url_for('main.produced_unit_admin_delete', unit_id=move_unit.id) }}" onsubmit="return confirm('Удалить ошибочный выпуск? Если прицеп/VIN уже связан с продажей, будет удалена только производственная связь.');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="reason" value="Очистка из пополнения склада">
+              <button class="btn btn-sm btn-outline-danger">Удалить выпуск</button>
+            </form>
           {% endif %}
         {% elif need.status == 'NEW' and (current_user.is_admin or current_user.is_director or current_user.is_manager) %}
           <form method="post" action="{{ url_for('main.supply_need_create_production_request', need_id=need.id) }}">

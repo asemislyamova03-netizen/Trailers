@@ -5863,6 +5863,50 @@ def _convert_customer_need_to_stock_replenishment(need: SupplyNeed, reason: str)
             reservation.note = ((reservation.note or '') + f'\nРезерв отменён. Причина: {reason}').strip()
 
 
+def _trailer_has_sale_or_document_links(trailer: Trailer) -> bool:
+    if not trailer:
+        return False
+    if (trailer.status or '').upper() == 'SOLD' or trailer.lifecycle_status == 'customer_shipped':
+        return True
+    if CustomerOrder.query.filter_by(trailer_id=trailer.id).first():
+        return True
+    if CustomerOrderLine.query.filter_by(trailer_id=trailer.id).first():
+        return True
+    if SalesContract.query.filter_by(trailer_id=trailer.id).first():
+        return True
+    if SalesContractLine.query.filter_by(trailer_id=trailer.id).first():
+        return True
+    if SalesRealizationLine.query.filter(or_(SalesRealizationLine.trailer_id == trailer.id, SalesRealizationLine.vin_full == trailer.vin)).first():
+        return True
+    if VinRegistry.query.filter(
+        VinRegistry.trailer_id == trailer.id,
+        or_(
+            VinRegistry.customer_order_id.isnot(None),
+            VinRegistry.order_line_id.isnot(None),
+            VinRegistry.sales_contract_id.isnot(None),
+            VinRegistry.docs_issued_order_id.isnot(None),
+            VinRegistry.docs_issued_at.isnot(None),
+        ),
+    ).first():
+        return True
+    return False
+
+
+def _reopen_production_line_after_unit_delete(line: ProductionRequestLine | None) -> None:
+    if not line:
+        return
+    line.produced_qty = max((line.produced_qty or 0) - 1, 0)
+    if line.produced_qty <= 0 and (line.status or '').lower() in ('ready', 'partial_ready', 'closed'):
+        line.status = 'in_production' if line.started_at else 'PLANNED'
+        line.completed_at = None
+        line.produced_at = None
+    elif line.produced_qty > 0 and (line.quantity or 0) > line.produced_qty and (line.status or '').lower() in ('ready', 'closed'):
+        line.status = 'partial_ready'
+    need = line.supply_need
+    if need and (need.status or '').upper() == 'READY':
+        need.status = 'IN_PRODUCTION' if line.produced_qty else 'PLANNED'
+
+
 def _release_order_trailer_and_vin(order: CustomerOrder, reason: str) -> tuple[bool, str]:
     if _order_has_issued_documents_or_shipment(order):
         return False, 'Нельзя отменить резерв: по заказу уже выданы документы или выполнена отгрузка.'
@@ -7579,6 +7623,57 @@ def supply_need_release_order_reserve(need_id):
     add_order_event(order, 'production_need_created', old_value=str(old_order_id), new_value='STOCK_REPLENISHMENT', comment=f'Резерв под заказ клиента снят. Производство продолжается на склад. Причина: {reason}')
     db.session.commit()
     flash('Резерв под заказ снят. Заявка переведена в пополнение склада.', 'success')
+    return redirect(request.referrer or url_for('main.stock_replenishment_list'))
+
+
+@main_bp.route('/production/produced-units/<int:unit_id>/admin-delete', methods=['POST'])
+@admin_required
+def produced_unit_admin_delete(unit_id):
+    unit = ProducedUnit.query.get_or_404(unit_id)
+    reason = (request.form.get('reason') or '').strip() or 'Административная очистка ошибочного выпуска'
+    line = unit.production_request_line
+    trailer = unit.trailer
+
+    if trailer and Reservation.query.filter_by(trailer_id=trailer.id, status='ACTIVE').first():
+        flash('Нельзя удалить выпуск: по прицепу есть активный резерв.', 'danger')
+        return redirect(request.referrer or url_for('main.stock_replenishment_list'))
+    if trailer and StockMovement.query.filter(
+        StockMovement.trailer_id == trailer.id,
+        StockMovement.status.in_(['draft', 'sent', 'in_transit']),
+    ).first():
+        flash('Нельзя удалить выпуск: по прицепу есть активное перемещение.', 'danger')
+        return redirect(request.referrer or url_for('main.stock_replenishment_list'))
+
+    trailer_preserved = False
+    if trailer and _trailer_has_sale_or_document_links(trailer):
+        trailer_preserved = True
+        for row in VinRegistry.query.filter_by(trailer_id=trailer.id).all():
+            _add_vin_event(row, 'admin_cleanup', row.status, row.status, comment=f'Удалена ошибочная производственная связь ProducedUnit #{unit.id}. Прицеп/VIN сохранены: {reason}')
+    elif trailer:
+        for row in VinRegistry.query.filter_by(trailer_id=trailer.id).all():
+            if row.docs_issued_at or row.sales_contract_id or row.docs_issued_order_id or row.customer_order_id or row.order_line_id:
+                flash('Нельзя удалить прицеп выпуска: VIN связан с заказом, договором или документами.', 'danger')
+                return redirect(request.referrer or url_for('main.stock_replenishment_list'))
+            old_status = row.status
+            row.trailer_id = None
+            row.supply_need_id = None
+            row.status = 'free'
+            row.assigned_by_user_id = None
+            row.confirmed_by_user_id = None
+            row.assigned_at = None
+            row.confirmed_at = None
+            _add_vin_event(row, 'admin_unassigned', old_status, row.status, comment=f'Удалён ошибочный выпуск ProducedUnit #{unit.id}: {reason}')
+        db.session.delete(trailer)
+
+    _reopen_production_line_after_unit_delete(line)
+    db.session.delete(unit)
+    db.session.commit()
+    if trailer_preserved:
+        flash('Ошибочная производственная запись удалена. Прицеп/VIN сохранены, потому что уже связаны с продажей или документами.', 'success')
+    elif trailer:
+        flash('Произведённая единица удалена, созданный прицеп удалён, VIN возвращён в свободные.', 'success')
+    else:
+        flash('Произведённая единица без VIN удалена.', 'success')
     return redirect(request.referrer or url_for('main.stock_replenishment_list'))
 
 

@@ -102,6 +102,13 @@
                   {% if unit.trailer and unit.target_warehouse and unit.trailer.warehouse_id != unit.target_warehouse_id %}
                     <div class="text-info mt-1">Нужно переместить на {{ unit.target_warehouse.name }}</div>
                   {% endif %}
+                  {% if current_user.is_admin %}
+                    <form method="post" action="{{ url_for('main.produced_unit_admin_delete', unit_id=unit.id) }}" class="mt-1" onsubmit="return confirm('Удалить ошибочный выпуск? Если прицеп/VIN уже связан с продажей, будет удалена только производственная связь.');">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <input type="hidden" name="reason" value="Очистка из карточки производственной заявки">
+                      <button class="btn btn-sm btn-outline-danger">Удалить выпуск</button>
+                    </form>
+                  {% endif %}
                 </div>
               {% else %}
                 <span class="text-muted">Ещё не выпускали</span>
