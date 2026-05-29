@@ -794,6 +794,8 @@ def _duplicate_redirect(key, fallback_url=None):
     if key and key.object_type in ('StockMovement', 'StockMovementBatch'):
         return redirect(url_for('main.stock_movements_list'))
     if key and key.object_type in ('ProducedUnit', 'Trailer'):
+        if current_user.is_logistics:
+            return redirect(url_for('main.vin_registry_list'))
         return redirect(url_for('main.logistics_workspace'))
     return redirect(fallback_url or request.referrer or url_for('main.role_home'))
 
@@ -884,7 +886,7 @@ def role_home():
     if current_user.is_production:
         return redirect(url_for('main.production_workspace'))
     if current_user.is_logistics:
-        return redirect(url_for('main.logistics_workspace'))
+        return redirect(url_for('main.vin_registry_list'))
     if current_user.is_director:
         return redirect(url_for('main.director_dashboard'))
     if current_user.is_manager:
