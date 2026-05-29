@@ -141,6 +141,46 @@
   </div>
 </div>
 {% endif %}
+{% if false %}
+<div class="app-card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>Продажи за период</span>
+    <span class="text-muted small">{{ date_from|date_format }} — {{ date_to|date_format }}</span>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead><tr><th>Дата</th><th>Документ</th><th>Клиент</th><th>Склад</th><th>VIN / модель</th><th>Продано</th><th>Сумма</th><th>Источник</th></tr></thead>
+      <tbody>
+      {% for row in rows %}
+        <tr>
+          <td>{{ row.date|date_format }}</td>
+          <td>
+            {% if row.realization %}
+              <a href="{{ url_for('main.sales_realization_detail', realization_id=row.realization.id) }}">{{ row.realization.number or row.realization.id }}</a>
+            {% elif row.contract %}
+              {{ row.contract.contract_number or row.contract.id }}
+            {% else %}
+              —
+            {% endif %}
+          </td>
+          <td>{{ (row.realization.customer.name if row.realization and row.realization.customer else (row.contract.customer.name if row.contract and row.contract.customer else (row.order.customer.name if row.order and row.order.customer else '—'))) }}</td>
+          <td>{{ row.warehouse.name if row.warehouse else '—' }}</td>
+          <td>
+            {{ row.trailer.vin if row.trailer else '—' }}
+            <div class="small text-muted">{{ row.item.article if row.item else '' }}</div>
+          </td>
+          <td>{{ row.quantity }}</td>
+          <td>{{ row.revenue|money }}</td>
+          <td>{{ 'Реализация/отгрузка' if row.realization else 'Старый договор' }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="8" class="text-muted p-4">Нет продаж за выбранный период</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
 <div class="row g-4">
   <div class="col-xl-8">
     <div class="app-card p-3 h-100">
@@ -185,7 +225,7 @@
     </table>
     {% else %}
     <table class="table table-hover align-middle mb-0">
-      <thead><tr><th>{{ 'Период' if section in ['sales', 'dynamics'] else ('Филиал' if section == 'branches' else 'Тип / группа') }}</th><th>Заказов</th><th>Продано, шт.</th><th>Выручка</th><th>Средний чек</th></tr></thead>
+      <thead><tr><th>{{ 'Период' if section in ['sales', 'dynamics'] else ('Склад' if section == 'branches' else 'Тип / группа') }}</th><th>Заказов</th><th>Продано, шт.</th><th>Выручка</th><th>Средний чек</th></tr></thead>
       <tbody>
       {% for row in analytics_rows %}
         <tr>
@@ -203,6 +243,7 @@
     {% endif %}
   </div>
 </div>
+{% endif %}
 {% else %}
 <div class="app-card">
   <div class="card-header d-flex justify-content-between align-items-center">
@@ -258,23 +299,17 @@
   {% elif section == 'production' %}
   <div class="table-responsive">
     <table class="table table-hover align-middle">
-      <thead><tr><th>Заявка</th><th>Тип</th><th>Модель</th><th>Количество</th><th>Выпущено</th><th>Осталось</th><th>Склад</th><th>Срок</th><th>Статус</th><th>Комментарий</th></tr></thead>
+      <thead><tr><th>Склад выпуска</th><th>Выпущено</th><th>С VIN</th><th>Без VIN</th></tr></thead>
       <tbody>
-      {% for line in rows %}
+      {% for row in rows %}
         <tr>
-          <td>{{ line.production_request.request_number if line.production_request else '—' }}</td>
-          <td>{{ line.supply_need.need_type|status_label if line.supply_need else '—' }}</td>
-          <td>{{ line.item.article or line.item.name if line.item else '—' }}</td>
-          <td>{{ line.quantity }}</td>
-          <td>{{ line.produced_qty or 0 }}</td>
-          <td>{{ [line.quantity - (line.produced_qty or 0), 0]|max }}</td>
-          <td>{{ line.production_request.target_warehouse.name if line.production_request and line.production_request.target_warehouse else '—' }}</td>
-          <td>{{ line.supply_need.required_by|date_format if line.supply_need else '' }}</td>
-          <td><span class="badge {{ line.status|status_badge_class }}">{{ line.status|status_label }}</span></td>
-          <td>{{ line.production_comment or line.note or (line.supply_need.note if line.supply_need else '') or '—' }}</td>
+          <td class="fw-semibold">{{ row.label }}</td>
+          <td>{{ row.quantity }}</td>
+          <td>{{ row.with_vin }}</td>
+          <td>{{ row.without_vin }}</td>
         </tr>
       {% else %}
-        <tr><td colspan="10" class="text-muted p-4">Нет производственных строк</td></tr>
+        <tr><td colspan="4" class="text-muted p-4">Нет факта выпуска за выбранный период</td></tr>
       {% endfor %}
       </tbody>
     </table>
@@ -282,23 +317,18 @@
   {% elif section == 'movements' %}
   <div class="table-responsive">
     <table class="table table-hover align-middle">
-      <thead><tr><th>Дата</th><th>Партия</th><th>VIN</th><th>Модель</th><th>Откуда</th><th>Куда</th><th>Статус</th><th>Отправка</th><th>Приёмка</th><th>Комментарий</th></tr></thead>
+      <thead><tr><th>Тип перемещения</th><th>Создано</th><th>В пути</th><th>Принято</th><th>Просрочено</th></tr></thead>
       <tbody>
-      {% for movement in rows %}
+      {% for row in rows %}
         <tr>
-          <td>{{ movement.created_at|date_format }}</td>
-          <td>{{ movement.batch_key or '—' }}</td>
-          <td>{{ movement.trailer.vin if movement.trailer else '—' }}</td>
-          <td>{{ movement.trailer.item.article or movement.trailer.item.name if movement.trailer and movement.trailer.item else '—' }}</td>
-          <td>{{ movement.from_warehouse.name if movement.from_warehouse else '—' }}</td>
-          <td>{{ movement.to_warehouse.name if movement.to_warehouse else '—' }}</td>
-          <td><span class="badge {{ movement.status|status_badge_class }}">{{ movement.status|status_label }}</span></td>
-          <td>{{ movement.departure_date|date_format }}</td>
-          <td>{{ movement.received_at|date_format }}</td>
-          <td>{{ movement.note or '—' }}</td>
+          <td class="fw-semibold">{{ row.label }}</td>
+          <td>{{ row.quantity }}</td>
+          <td>{{ row.in_transit }}</td>
+          <td>{{ row.arrived }}</td>
+          <td>{{ row.overdue }}</td>
         </tr>
       {% else %}
-        <tr><td colspan="10" class="text-muted p-4">Нет перемещений за период</td></tr>
+        <tr><td colspan="5" class="text-muted p-4">Нет перемещений за выбранный период</td></tr>
       {% endfor %}
       </tbody>
     </table>

@@ -31,7 +31,7 @@ from forms import (
 )
 from collections import defaultdict
 import sqlalchemy as sa
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 import json
 import base64
 from wtforms import StringField, SelectField, DateField, BooleanField, DecimalField, IntegerField, TextAreaField, SubmitField
@@ -11822,7 +11822,7 @@ def director_report(section='sales'):
     sections = {
         'sales': 'Продажи',
         'dynamics': 'Динамика',
-        'branches': 'Филиалы',
+        'branches': 'Продажи по складам',
         'types': 'Типы прицепов',
         'turnover': 'Оборачиваемость',
         'stock': 'Склад',
@@ -11907,14 +11907,6 @@ def director_report(section='sales'):
         report_section_urls[section_key] = url_for('main.director_report', section=section_key, **section_args)
 
     def order_scope(query):
-        if current_user.is_manager:
-            if has_customer_order_created_by:
-                query = query.filter(or_(
-                    CustomerOrder.assigned_user_id == current_user.id,
-                    CustomerOrder.created_by_user_id == current_user.id,
-                ))
-            else:
-                query = query.filter(CustomerOrder.assigned_user_id == current_user.id)
         if warehouse_id:
             query = query.filter(CustomerOrder.warehouse_id == warehouse_id)
         if manager_id:
@@ -12038,14 +12030,6 @@ def director_report(section='sales'):
                 else order.assigned_user if order and order.assigned_user
                 else None
             )
-            if current_user.is_manager:
-                allowed_by_order = order and (
-                    order.assigned_user_id == current_user.id
-                    or getattr(order, 'created_by_user_id', None) == current_user.id
-                )
-                allowed_by_trailer = False
-                if not (allowed_by_order or allowed_by_trailer):
-                    continue
             if warehouse_id and (not warehouse or warehouse.id != warehouse_id):
                 continue
             if manager_id and (not manager or manager.id != manager_id):
@@ -12108,18 +12092,6 @@ def director_report(section='sales'):
             .outerjoin(CustomerOrder, CustomerOrder.id == SalesRealization.order_id)
             .outerjoin(Customer, Customer.id == SalesRealization.customer_id)
         )
-        if current_user.is_manager:
-            if has_customer_order_created_by:
-                query = query.filter(or_(
-                    SalesRealization.assigned_user_id == current_user.id,
-                    CustomerOrder.assigned_user_id == current_user.id,
-                    CustomerOrder.created_by_user_id == current_user.id,
-                ))
-            else:
-                query = query.filter(or_(
-                    SalesRealization.assigned_user_id == current_user.id,
-                    CustomerOrder.assigned_user_id == current_user.id,
-                ))
         if warehouse_id:
             query = query.filter(SalesRealization.warehouse_id == warehouse_id)
         if manager_id:
@@ -12216,7 +12188,7 @@ def director_report(section='sales'):
             best = max(analytics_rows, key=lambda row: row['revenue'], default=None)
             return [
             {'title': 'Выручка', 'value': money(revenue), 'caption': 'реализации/отгрузки по складам'},
-                {'title': 'Складов', 'value': len(analytics_rows), 'caption': 'с продажами'},
+                {'title': 'Складов', 'value': len(analytics_rows), 'caption': 'с реализациями/отгрузками'},
                 {'title': 'Лидер', 'value': best['label'] if best else '—', 'caption': money(best['revenue']) if best else 'нет продаж'},
                 {'title': 'Продано', 'value': sold_quantity, 'caption': 'прицепных строк'},
             ]
@@ -12285,7 +12257,24 @@ def director_report(section='sales'):
             row for row in rows
             if row['revenue'] >= 3000000 or row['direction'] == 'other'
         ][:10]
-        if section in ('sales', 'dynamics'):
+        if section == 'sales':
+            buckets = defaultdict(lambda: {'orders': 0, 'quantity': 0, 'revenue': 0.0})
+            for row in rows:
+                key = 'Реализации/отгрузки' if row.get('realization') else 'Старые договоры'
+                buckets[key]['orders'] += 1
+                buckets[key]['quantity'] += _record_vehicle_quantity(row)
+                buckets[key]['revenue'] += row['revenue'] or 0
+            analytics_rows = [
+                {
+                    'label': key,
+                    'orders': value['orders'],
+                    'quantity': value['quantity'],
+                    'revenue': value['revenue'],
+                    'average': value['revenue'] / value['orders'] if value['orders'] else 0,
+                }
+                for key, value in buckets.items()
+            ]
+        elif section == 'dynamics':
             buckets = defaultdict(lambda: {'orders': 0, 'quantity': 0, 'revenue': 0.0})
             for key in report_period_labels_between():
                 buckets[key]
@@ -12444,21 +12433,61 @@ def director_report(section='sales'):
             ]
 
     elif section == 'production':
-        query = ProductionRequestLine.query.join(ProductionRequest, ProductionRequest.id == ProductionRequestLine.production_request_id)
+        query = ProducedUnit.query.outerjoin(ProductionRequestLine, ProductionRequestLine.id == ProducedUnit.production_request_line_id).outerjoin(ProductionRequest, ProductionRequest.id == ProductionRequestLine.production_request_id)
+        query = query.filter(or_(
+            and_(ProducedUnit.produced_at.isnot(None), ProducedUnit.produced_at >= period_start, ProducedUnit.produced_at <= period_end),
+            and_(ProducedUnit.produced_at.is_(None), ProducedUnit.created_at >= period_start, ProducedUnit.created_at <= period_end),
+        ))
         if warehouse_id:
-            query = query.filter(ProductionRequest.target_warehouse_id == warehouse_id)
+            query = query.filter(or_(ProducedUnit.target_warehouse_id == warehouse_id, ProductionRequest.target_warehouse_id == warehouse_id))
         if status_filter != 'all':
-            query = query.filter(ProductionRequestLine.status == status_filter)
-        rows = query.order_by(ProductionRequest.created_at.desc(), ProductionRequestLine.id.desc()).limit(300).all()
-        active_rows = [line for line in rows if (line.status or '').lower() not in ('ready', 'closed', 'cancelled', 'canceled')]
-        produced_no_vin = ProducedUnit.query.filter_by(status='produced_no_vin')
+            query = query.filter(ProducedUnit.status == status_filter)
+        if search:
+            like = f'%{search}%'
+            query = query.outerjoin(Item, Item.id == ProducedUnit.item_id).outerjoin(Trailer, Trailer.id == ProducedUnit.trailer_id).filter(or_(
+                Item.article.ilike(like),
+                Item.name.ilike(like),
+                Trailer.vin.ilike(like),
+                ProductionRequest.request_number.ilike(like),
+            ))
+        produced_units = query.order_by(ProducedUnit.produced_at.desc().nullslast(), ProducedUnit.created_at.desc(), ProducedUnit.id.desc()).limit(1000).all()
+        active_lines_query = ProductionRequestLine.query.join(ProductionRequest, ProductionRequest.id == ProductionRequestLine.production_request_id).filter(
+            ProductionRequestLine.status.in_(['planned', 'PLANNED', 'in_production', 'partial_ready'])
+        )
+        if warehouse_id:
+            active_lines_query = active_lines_query.filter(ProductionRequest.target_warehouse_id == warehouse_id)
+        active_lines = active_lines_query.all()
+        produced_no_vin = ProducedUnit.query.filter(
+            ProducedUnit.status == 'produced_no_vin',
+            or_(
+                and_(ProducedUnit.produced_at.isnot(None), ProducedUnit.produced_at >= period_start, ProducedUnit.produced_at <= period_end),
+                and_(ProducedUnit.produced_at.is_(None), ProducedUnit.created_at >= period_start, ProducedUnit.created_at <= period_end),
+            ),
+        )
         if warehouse_id:
             produced_no_vin = produced_no_vin.filter(ProducedUnit.target_warehouse_id == warehouse_id)
+        buckets = defaultdict(lambda: {'quantity': 0, 'with_vin': 0, 'without_vin': 0})
+        for unit in produced_units:
+            key = unit.target_warehouse.name if unit.target_warehouse else (
+                unit.production_request_line.production_request.target_warehouse.name
+                if unit.production_request_line and unit.production_request_line.production_request and unit.production_request_line.production_request.target_warehouse
+                else 'Без склада'
+            )
+            buckets[key]['quantity'] += 1
+            if unit.trailer_id:
+                buckets[key]['with_vin'] += 1
+            else:
+                buckets[key]['without_vin'] += 1
+        rows = sorted(
+            ({'label': key, **value} for key, value in buckets.items()),
+            key=lambda row: row['quantity'],
+            reverse=True,
+        )
         cards = [
-            {'title': 'Заказано', 'value': sum(line.quantity or 0 for line in active_rows), 'caption': 'активное производство'},
-            {'title': 'Осталось выпустить', 'value': sum(max((line.quantity or 0) - (line.produced_qty or 0), 0) for line in active_rows), 'caption': 'по активным строкам'},
-            {'title': 'Выпущено без VIN', 'value': produced_no_vin.count(), 'caption': 'ждёт менеджера'},
-            {'title': 'Просрочено', 'value': len([line for line in active_rows if line.supply_need and line.supply_need.required_by and line.supply_need.required_by < today]), 'caption': 'по сроку'},
+            {'title': 'Выпущено', 'value': len(produced_units), 'caption': 'факт за период'},
+            {'title': 'С VIN', 'value': len([unit for unit in produced_units if unit.trailer_id]), 'caption': 'привязано к прицепу'},
+            {'title': 'Без VIN', 'value': produced_no_vin.count(), 'caption': 'ждёт присвоения'},
+            {'title': 'Осталось в работе', 'value': sum(max((line.quantity or 0) - (line.produced_qty or 0), 0) for line in active_lines), 'caption': 'активные строки'},
         ]
 
     elif section == 'movements':
@@ -12472,12 +12501,27 @@ def director_report(section='sales'):
             query = query.join(Trailer, Trailer.id == StockMovement.trailer_id, isouter=True).join(Item, Item.id == Trailer.item_id, isouter=True).filter(
                 or_(Trailer.vin.ilike(like), Item.article.ilike(like), Item.name.ilike(like), StockMovement.batch_key.ilike(like))
             )
-        rows = query.order_by(StockMovement.created_at.desc(), StockMovement.id.desc()).limit(500).all()
+        movements = query.order_by(StockMovement.created_at.desc(), StockMovement.id.desc()).limit(1000).all()
+        buckets = defaultdict(lambda: {'quantity': 0, 'arrived': 0, 'in_transit': 0, 'overdue': 0})
+        for movement in movements:
+            key = status_label(movement.movement_type or 'warehouse_transfer')
+            buckets[key]['quantity'] += 1
+            if movement.status == 'arrived':
+                buckets[key]['arrived'] += 1
+            if movement.status in ('sent', 'in_transit'):
+                buckets[key]['in_transit'] += 1
+                if movement.arrival_date and movement.arrival_date < today:
+                    buckets[key]['overdue'] += 1
+        rows = sorted(
+            ({'label': key, **value} for key, value in buckets.items()),
+            key=lambda row: row['quantity'],
+            reverse=True,
+        )
         cards = [
-            {'title': 'Создано', 'value': len(rows), 'caption': 'строк перемещения'},
-            {'title': 'В пути', 'value': len([m for m in rows if m.status in ('sent', 'in_transit')]), 'caption': 'не принято'},
-            {'title': 'Принято', 'value': len([m for m in rows if m.status == 'arrived']), 'caption': 'закрыто складом'},
-            {'title': 'Просрочено', 'value': len([m for m in rows if m.status in ('sent', 'in_transit') and m.arrival_date and m.arrival_date < today]), 'caption': 'по ожидаемой дате'},
+            {'title': 'Создано', 'value': len(movements), 'caption': 'за период'},
+            {'title': 'В пути', 'value': len([m for m in movements if m.status in ('sent', 'in_transit')]), 'caption': 'не принято'},
+            {'title': 'Принято', 'value': len([m for m in movements if m.status == 'arrived']), 'caption': 'закрыто складом'},
+            {'title': 'Просрочено', 'value': len([m for m in movements if m.status in ('sent', 'in_transit') and m.arrival_date and m.arrival_date < today]), 'caption': 'по ожидаемой дате'},
         ]
 
     elif section == 'line-links':
