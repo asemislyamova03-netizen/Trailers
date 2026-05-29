@@ -11843,6 +11843,8 @@ def director_report(section='sales'):
     search = (request.args.get('q') or '').strip()
     report_direction = (request.args.get('direction') or 'all').strip()
     period = request.args.get('period', 'all' if section in ('stock', 'line-links', 'problems') else 'month')
+    if period == 'custom':
+        period = 'month'
     today = date.today()
     analytics_sections = ('sales', 'dynamics', 'branches', 'types', 'turnover')
     default_date_from = date(2025, 1, 1) if section in analytics_sections else today.replace(day=1)
@@ -11859,7 +11861,7 @@ def director_report(section='sales'):
             date_to = datetime.strptime(request.args.get('date_to') or '', '%Y-%m-%d').date()
         except ValueError:
             date_to = today
-        if period not in ('day', 'week', 'month', 'year', 'custom'):
+        if period not in ('day', 'week', 'month', 'year'):
             period = 'month'
         if date_to < date_from:
             date_from, date_to = date_to, date_from
@@ -12244,8 +12246,6 @@ def director_report(section='sales'):
             return f'{year}-W{week:02d}'
         if period == 'year':
             return str(value_date.year)
-        if period == 'custom':
-            return f'{date_from.strftime("%d.%m.%Y")} - {date_to.strftime("%d.%m.%Y")}'
         return value_date.strftime('%Y-%m')
 
     if section in ('sales', 'finance', 'dynamics', 'branches', 'types'):
