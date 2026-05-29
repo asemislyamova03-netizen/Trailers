@@ -11229,9 +11229,7 @@ def stock_movement_receive(movement_id):
         abort(403)
     if movement.status == 'arrived':
         flash('Перемещение уже принято на склад.', 'warning')
-        if current_user.is_manager:
-            return redirect(url_for('main.manager_workspace', tab=request.args.get('return_tab') or 'inbound'))
-        return redirect(url_for('main.stock_movements_list'))
+        return redirect(url_for('main.stock_movements_list', scope='needs_receive'))
     idem_key, duplicate = _reserve_idempotency_key()
     if duplicate:
         return _duplicate_redirect(idem_key, url_for('main.manager_workspace') if current_user.is_manager else url_for('main.stock_movements_list'))
@@ -11254,8 +11252,8 @@ def stock_movement_receive(movement_id):
     db.session.commit()
     flash('Прицеп принят на склад', 'success')
     if current_user.is_manager:
-        return redirect(url_for('main.manager_workspace', tab=request.args.get('return_tab') or 'inbound'))
-    return redirect(url_for('main.stock_movements_list'))
+        return redirect(url_for('main.stock_movements_list', scope='needs_receive'))
+    return redirect(url_for('main.stock_movements_list', scope='needs_receive'))
 
 
 @main_bp.route('/orders/<int:order_id>/documents-issued', methods=['POST'])

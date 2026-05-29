@@ -107,6 +107,12 @@
           <td>{{ m.arrival_date|date_format or m.received_at|date_format }}</td>
           <td class="text-end">
             {% if current_user.is_admin or current_user.is_director or current_user.is_manager %}
+              {% if m.status in ['sent', 'in_transit'] and (current_user.is_admin or current_user.is_director or current_user.warehouse_id == m.to_warehouse_id or (m.order and m.order.assigned_user_id == current_user.id)) %}
+                <form method="post" action="{{ url_for('main.stock_movement_receive', movement_id=m.id) }}" class="d-inline">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button class="btn btn-sm btn-orange">Принять</button>
+                </form>
+              {% endif %}
               <a class="btn btn-sm btn-soft" href="{{ url_for('main.stock_movement_edit', movement_id=m.id) }}">Изменить</a>
             {% endif %}
           </td>
