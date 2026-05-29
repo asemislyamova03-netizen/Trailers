@@ -76,7 +76,7 @@
     </div>
     <div class="col-12 d-flex gap-2">
       {{ form.submit(class="btn btn-orange") }}
-      <a class="btn btn-soft" href="{{ url_for('main.manager_workspace', tab=(request.args.get('return_tab') or request.form.get('return_tab') or 'production')) if current_user.is_manager else url_for('main.stock_replenishment_list') }}">Назад</a>
+      <a class="btn btn-soft" href="{{ url_for('main.trailers_list', status='IN_STOCK') if current_user.is_manager else url_for('main.stock_replenishment_list') }}">Назад</a>
     </div>
   </form>
 </div>

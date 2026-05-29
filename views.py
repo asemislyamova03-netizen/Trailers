@@ -1853,7 +1853,7 @@ def trailer_edit(trailer_id):
 @role_required('manager', 'director')
 def trailer_change_item(trailer_id):
     trailer = Trailer.query.get_or_404(trailer_id)
-    back_url = url_for('main.manager_workspace', tab='stock') if current_user.is_manager else url_for('main.trailers_list', vin=trailer.vin or '')
+    back_url = url_for('main.trailers_list', status='IN_STOCK', vin=trailer.vin or '') if current_user.is_manager else url_for('main.trailers_list', vin=trailer.vin or '')
     if current_user.is_manager and trailer.warehouse_id != current_user.warehouse_id:
         abort(403)
     ok, message = _can_change_trailer_item(trailer)
@@ -6736,7 +6736,8 @@ def lead_create():
         db.session.commit()
         flash('Заявка создана', 'success')
         if request.args.get('return_to') == 'manager_workspace' or current_user.is_manager:
-            return redirect(url_for('main.manager_workspace', tab=request.args.get('return_tab') or 'leads'))
+            return_tab = request.args.get('return_tab') if request.args.get('return_tab') in {'orders', 'funnel', 'leads', 'conversations', 'assistant'} else 'leads'
+            return redirect(url_for('main.manager_workspace', tab=return_tab))
         return redirect(url_for('main.leads_list'))
 
     return render_template('lead_form.html', form=form, title='Новая заявка', item_options=_trailer_item_options(), config_options=_trailer_config_form_context(), item_source_initial='config')
@@ -7571,7 +7572,7 @@ def stock_replenishment_create():
         db.session.commit()
         flash('Заявка на пополнение склада создана.', 'success')
         if current_user.is_manager:
-            return redirect(url_for('main.manager_workspace', tab=request.args.get('return_tab') or 'production'))
+            return redirect(url_for('main.trailers_list', status='IN_STOCK'))
         return redirect(url_for('main.stock_replenishment_list'))
 
     return render_template('stock_replenishment_form.html', form=form, title='Заказать на склад', config_options=_trailer_config_form_context())
@@ -11062,7 +11063,7 @@ def logistics_assign_vin(unit_id):
 @role_required('manager', 'director')
 def produced_unit_change_item(unit_id):
     unit = ProducedUnit.query.get_or_404(unit_id)
-    back_url = url_for('main.manager_workspace', tab='produced') if current_user.is_manager else url_for('main.logistics_workspace')
+    back_url = url_for('main.order_detail', order_id=unit.order_id) if current_user.is_manager and unit.order_id else url_for('main.production_workspace')
     if current_user.is_manager and unit.target_warehouse_id != current_user.warehouse_id:
         abort(403)
     ok, message = _can_change_produced_unit_item(unit)
@@ -11163,7 +11164,7 @@ def produced_unit_change_item(unit_id):
 @role_required('manager', 'director')
 def logistics_send_trailer():
     form = SendTrailerForm()
-    back_url = url_for('main.manager_workspace', tab='ready-transfer') if current_user.is_manager else url_for('main.logistics_workspace')
+    back_url = url_for('main.stock_movements_list', scope='outgoing') if current_user.is_manager else url_for('main.logistics_workspace')
     production_warehouse = _default_production_warehouse()
     ready_query = Trailer.query.filter(
         Trailer.warehouse_id == production_warehouse.id,
@@ -11262,7 +11263,7 @@ def stock_movement_receive(movement_id):
         return redirect(url_for('main.stock_movements_list', scope='needs_receive'))
     idem_key, duplicate = _reserve_idempotency_key()
     if duplicate:
-        return _duplicate_redirect(idem_key, url_for('main.manager_workspace') if current_user.is_manager else url_for('main.stock_movements_list'))
+        return _duplicate_redirect(idem_key, url_for('main.stock_movements_list', scope='needs_receive'))
     movement.status = 'arrived'
     movement.received_at = datetime.utcnow()
     _apply_arrived_stock_movement(movement)
