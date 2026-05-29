@@ -13,25 +13,13 @@
   </div>
   <form method="post" class="row g-3">
     {{ form.hidden_tag() }}
-    {% set item_source = request.form.get('item_source') or 'existing' %}
+    <input type="hidden" name="item_source" value="config">
     <div class="col-md-6">
       {{ form.warehouse_id.label(class="form-label") }}
       {{ form.warehouse_id(class="form-select") }}
       {% for error in form.warehouse_id.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
     </div>
-    <div class="col-md-6">
-      <label class="form-label" for="stockItemSource">Как выбрать номенклатуру</label>
-      <select class="form-select" name="item_source" id="stockItemSource">
-        <option value="existing" {% if item_source != 'config' %}selected{% endif %}>Выбрать существующую</option>
-        <option value="config" {% if item_source == 'config' %}selected{% endif %}>Собрать через конфигуратор</option>
-      </select>
-    </div>
-    <div class="col-md-6" id="stockExistingItemBlock">
-      {{ form.item_id.label(class="form-label") }}
-      {{ form.item_id(class="form-select") }}
-      {% for error in form.item_id.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
-    </div>
-    <div class="col-12 d-none" id="stockConfigBlock">
+    <div class="col-12">
       <div class="app-card p-3">
         <h2 class="h5 mb-3">Конфигуратор</h2>
         {% set cfg = request.form %}
@@ -80,20 +68,4 @@
     </div>
   </form>
 </div>
-{% endblock %}
-{% block scripts %}
-<script>
-(function () {
-  const source = document.querySelector('#stockItemSource');
-  const existing = document.querySelector('#stockExistingItemBlock');
-  const config = document.querySelector('#stockConfigBlock');
-  function sync() {
-    const isConfig = source.value === 'config';
-    existing.classList.toggle('d-none', isConfig);
-    config.classList.toggle('d-none', !isConfig);
-  }
-  source.addEventListener('change', sync);
-  sync();
-})();
-</script>
 {% endblock %}

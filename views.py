@@ -98,9 +98,9 @@ def navigation_section(endpoint: str | None = None, path: str | None = None) -> 
         return 'availability'
     if path.startswith('/trailers'):
         return 'availability'
-    if path.startswith('/stock-movements'):
-        return 'movements'
     if path.startswith('/stock-replenishment'):
+        return 'availability'
+    if path.startswith('/stock-movements'):
         return 'movements'
     if path.startswith('/realizations'):
         return 'realizations'
@@ -7307,16 +7307,10 @@ def stock_replenishment_create():
         if not warehouse_id:
             flash('Выберите склад назначения.', 'danger')
             return render_template('stock_replenishment_form.html', form=form, title='Заказать на склад', config_options=_trailer_config_form_context())
-        configured_snapshot = None
-        if request.form.get('item_source') == 'config':
-            configured_item, configured_snapshot, config_errors = _configured_item_from_request(request.form)
-            if config_errors:
-                for error in config_errors:
-                    flash(error, 'danger')
-                return render_template('stock_replenishment_form.html', form=form, title='Заказать на склад', config_options=_trailer_config_form_context())
-            form.item_id.data = configured_item.id
-        elif not form.item_id.data:
-            flash('Выберите номенклатуру или соберите прицеп через конфигуратор.', 'danger')
+        configured_item, configured_snapshot, config_errors = _configured_item_from_request(request.form)
+        if config_errors:
+            for error in config_errors:
+                flash(error, 'danger')
             return render_template('stock_replenishment_form.html', form=form, title='Заказать на склад', config_options=_trailer_config_form_context())
         idem_key, duplicate = _reserve_idempotency_key()
         if duplicate:
@@ -7324,7 +7318,7 @@ def stock_replenishment_create():
         need = SupplyNeed(
             need_type='STOCK_REPLENISHMENT',
             order_id=None,
-            item_id=form.item_id.data,
+            item_id=configured_item.id,
             warehouse_id=warehouse_id,
             quantity=form.quantity.data,
             required_by=form.required_by.data,
