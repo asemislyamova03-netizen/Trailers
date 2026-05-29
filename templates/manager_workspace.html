@@ -5,8 +5,8 @@
 {% block content %}
 <div class="compact-page-header">
   <div>
-    <h1>Рабочее место менеджера</h1>
-    <div class="text-muted small">Склад: {{ warehouses|selectattr('id', 'equalto', warehouse_id)|map(attribute='name')|first or 'не выбран' }}</div>
+    <h1>Мои сделки</h1>
+    <div class="text-muted small">Склад по умолчанию: {{ warehouses|selectattr('id', 'equalto', warehouse_id)|map(attribute='name')|first or 'не выбран' }} · наличие показывается по всем складам продаж</div>
   </div>
   <div class="d-flex gap-2 flex-wrap">
     <a href="{{ url_for('main.order_create', return_to='manager_workspace', return_tab='orders') }}" class="btn btn-orange btn-sm"><i class="bi bi-plus-lg me-1"></i>Заказ</a>
@@ -64,7 +64,7 @@
 
 <div class="compact-metrics app-card p-2 mb-3">
   <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-    <div class="small text-muted">Диалоги: {{ new_conversations_count }} · Заявки: {{ new_leads|length }} · Заказы: {{ active_orders|length }} · В наличии: {{ stock_trailers|length }} · К выдаче: {{ ready_to_ship_orders|length }}</div>
+    <div class="small text-muted">Диалоги: {{ new_conversations_count }} · Заявки: {{ new_leads|length }} · Мои сделки: {{ active_orders|length }} · В наличии по складам продаж: {{ stock_trailers|length }} · К выдаче: {{ ready_to_ship_orders|length }}</div>
     <button class="btn btn-sm btn-soft" type="button" data-bs-toggle="collapse" data-bs-target="#managerKpiCollapse">Показатели</button>
   </div>
   <div class="collapse mt-3" id="managerKpiCollapse">
@@ -73,8 +73,8 @@
     <div class="app-card kpi-card"><div><div class="kpi-title">Непрочитанные</div><div class="kpi-value">{{ unread_messages_count }}</div><div class="kpi-caption">сообщения клиентов</div></div><div class="kpi-icon"><i class="bi bi-envelope-exclamation"></i></div></div>
     <div class="app-card kpi-card"><div><div class="kpi-title">Требуют ответа</div><div class="kpi-value">{{ manager_needed_count }}</div><div class="kpi-caption">нужен менеджер</div></div><div class="kpi-icon"><i class="bi bi-person-exclamation"></i></div></div>
     <div class="app-card kpi-card"><div><div class="kpi-title">Новые заявки</div><div class="kpi-value">{{ new_leads|length }}</div><div class="kpi-caption">нужна обработка</div></div><div class="kpi-icon"><i class="bi bi-chat-left-text"></i></div></div>
-    <div class="app-card kpi-card"><div><div class="kpi-title">Заказы в работе</div><div class="kpi-value">{{ active_orders|length }}</div><div class="kpi-caption">по складу</div></div><div class="kpi-icon"><i class="bi bi-receipt"></i></div></div>
-    <div class="app-card kpi-card"><div><div class="kpi-title">В наличии</div><div class="kpi-value">{{ stock_trailers|length }}</div><div class="kpi-caption">свободные VIN</div></div><div class="kpi-icon"><i class="bi bi-box-seam"></i></div></div>
+    <div class="app-card kpi-card"><div><div class="kpi-title">Мои сделки</div><div class="kpi-value">{{ active_orders|length }}</div><div class="kpi-caption">по ответственному менеджеру</div></div><div class="kpi-icon"><i class="bi bi-receipt"></i></div></div>
+    <div class="app-card kpi-card"><div><div class="kpi-title">В наличии</div><div class="kpi-value">{{ stock_trailers|length }}</div><div class="kpi-caption">свободные VIN по складам продаж</div></div><div class="kpi-icon"><i class="bi bi-box-seam"></i></div></div>
     <div class="app-card kpi-card"><div><div class="kpi-title">В производстве</div><div class="kpi-value">{{ production_qty_left }}</div><div class="kpi-caption">осталось выпустить</div></div><div class="kpi-icon"><i class="bi bi-tools"></i></div></div>
     <div class="app-card kpi-card"><div><div class="kpi-title">Выпущено без VIN</div><div class="kpi-value">{{ produced_units_for_warehouse|length }}</div><div class="kpi-caption">для моего склада</div></div><div class="kpi-icon"><i class="bi bi-upc-scan"></i></div></div>
     <div class="app-card kpi-card"><div><div class="kpi-title">Ждёт отправки</div><div class="kpi-value">{{ ready_at_production_rows|length }}</div><div class="kpi-caption">на складе выпуска</div></div><div class="kpi-icon"><i class="bi bi-send"></i></div></div>
@@ -90,8 +90,8 @@
 </div>
 
 <ul class="nav nav-tabs mb-3" role="tablist">
-    <li class="nav-item"><button class="nav-link active" data-manager-tab="stock" data-bs-toggle="tab" data-bs-target="#stock-tab" type="button">Мой склад</button></li>
-    <li class="nav-item"><button class="nav-link" data-manager-tab="orders" data-bs-toggle="tab" data-bs-target="#orders-tab" type="button">Заказы</button></li>
+    <li class="nav-item"><button class="nav-link active" data-manager-tab="orders" data-bs-toggle="tab" data-bs-target="#orders-tab" type="button">Мои сделки</button></li>
+    <li class="nav-item"><button class="nav-link" data-manager-tab="stock" data-bs-toggle="tab" data-bs-target="#stock-tab" type="button">Наличие</button></li>
     <li class="nav-item"><button class="nav-link" data-manager-tab="leads" data-bs-toggle="tab" data-bs-target="#leads-tab" type="button">Заявки</button></li>
     <li class="nav-item"><button class="nav-link" data-manager-tab="conversations" data-bs-toggle="tab" data-bs-target="#conversations-tab" type="button">Диалоги</button></li>
     <li class="nav-item"><button class="nav-link" data-manager-tab="issue" data-bs-toggle="tab" data-bs-target="#issue-tab" type="button">К выдаче</button></li>
@@ -148,22 +148,46 @@
         </div>
     </div>
 
-    <div class="tab-pane fade" id="orders-tab">
+    <div class="tab-pane fade show active" id="orders-tab">
         <div class="app-card">
-            <div class="card-header d-flex justify-content-between align-items-center"><span>Заказы</span><a class="btn btn-sm btn-orange" href="{{ url_for('main.order_create', return_to='manager_workspace', return_tab='orders') }}">+ Заказ</a></div>
+            <div class="card-header d-flex justify-content-between align-items-center"><span>Мои сделки</span><a class="btn btn-sm btn-orange" href="{{ url_for('main.order_create', return_to='manager_workspace', return_tab='orders') }}">+ Заказ</a></div>
             <div class="table-responsive"><table class="table table-hover align-middle">
-                <thead><tr><th>Номер</th><th>Клиент</th><th>Модель</th><th>Склад</th><th>Статус</th><th>Сумма</th><th>Оплачено</th><th>Остаток</th><th></th></tr></thead>
+                <thead><tr><th>Номер</th><th>Клиент</th><th>Модель</th><th>Склад выдачи</th><th>Путь сделки</th><th>Статус</th><th>Сумма</th><th>Оплачено</th><th>Остаток</th><th></th></tr></thead>
                 <tbody>{% for order in active_orders %}
-                    <tr><td class="fw-semibold">{{ order.order_number }}</td><td>{{ order.customer.name if order.customer else '' }}</td><td>{{ order.item.article if order.item else '' }}</td><td>{{ order.warehouse.name if order.warehouse else '' }}</td><td><span class="badge text-bg-{{ order.status|status_badge_class }}">{{ order.status|status_label }}</span></td><td>{{ order.price|money }}</td><td>{{ order.confirmed_paid_amount|money }}</td><td>{{ order.remaining_amount|money }}</td><td class="text-end"><a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=order.id) }}">Открыть</a></td></tr>
-                {% else %}<tr><td colspan="9" class="text-muted p-3">Заказов нет</td></tr>{% endfor %}</tbody>
+                    <tr>
+                      <td class="fw-semibold">{{ order.order_number }}</td>
+                      <td>{{ order.customer.name if order.customer else '' }}</td>
+                      <td>{{ order.item.article if order.item else '' }}</td>
+                      <td>{{ order.warehouse.name if order.warehouse else '' }}</td>
+                      <td class="small">
+                        <span class="badge text-bg-success">Заявка</span>
+                        <span class="text-muted">→</span>
+                        <span class="badge text-bg-success">Заказ</span>
+                        <span class="text-muted">→</span>
+                        <span class="badge text-bg-{{ 'success' if order.trailer_id or order.reserved_vin_registry_id else 'secondary' }}">VIN</span>
+                        <span class="text-muted">→</span>
+                        <span class="badge text-bg-secondary">Комплектация</span>
+                        <span class="text-muted">→</span>
+                        <span class="badge text-bg-{{ 'success' if order.confirmed_paid_amount else 'secondary' }}">Оплата</span>
+                        <span class="text-muted">→</span>
+                        <span class="badge text-bg-{{ 'success' if order.documents_issued else 'secondary' }}">Документы</span>
+                        <span class="text-muted">→</span>
+                        <span class="badge text-bg-{{ 'success' if order.realization_status in ['realized', 'partial'] else 'secondary' }}">Реализация</span>
+                        <span class="text-muted">→</span>
+                        <span class="badge text-bg-{{ 'success' if order.is_shipped else 'secondary' }}">Отгрузка</span>
+                      </td>
+                      <td><span class="badge text-bg-{{ order.status|status_badge_class }}">{{ order.status|status_label }}</span></td>
+                      <td>{{ order.price|money }}</td><td>{{ order.confirmed_paid_amount|money }}</td><td>{{ order.remaining_amount|money }}</td><td class="text-end"><a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=order.id) }}">Открыть</a></td>
+                    </tr>
+                {% else %}<tr><td colspan="10" class="text-muted p-3">Сделок нет</td></tr>{% endfor %}</tbody>
             </table></div>
         </div>
     </div>
 
-    <div class="tab-pane fade show active" id="stock-tab">
+    <div class="tab-pane fade" id="stock-tab">
         <div class="app-card">
             <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-                <span>Мой склад</span>
+                <span>Наличие по складам продаж</span>
                 <div class="btn-group btn-group-sm stock-filter-group" role="group" aria-label="Фильтр склада">
                     <button class="btn btn-soft active" type="button" data-stock-filter="available">Свободные</button>
                     <button class="btn btn-soft" type="button" data-stock-filter="reserved">Резерв</button>
@@ -205,7 +229,7 @@
                             </div>
                         </td>
                     </tr>
-                {% else %}<tr><td colspan="7" class="text-muted p-3">На складе нет прицепов</td></tr>{% endfor %}
+                {% else %}<tr><td colspan="7" class="text-muted p-3">На складах продаж нет прицепов</td></tr>{% endfor %}
                     <tr id="stockEmptyRow" class="{% if not warehouse_stock_rows or stock_trailers %}d-none{% endif %}"><td colspan="7" class="text-muted p-3">В выбранной группе нет прицепов</td></tr>
                 </tbody>
             </table></div>
@@ -467,7 +491,7 @@
 {% block scripts %}
 <script>
 (function () {
-  const activeTab = {{ active_tab|tojson }} || 'stock';
+  const activeTab = {{ active_tab|tojson }} || 'orders';
   const tabButton = document.querySelector(`[data-manager-tab="${activeTab}"]`);
   if (tabButton && window.bootstrap) {
     window.bootstrap.Tab.getOrCreateInstance(tabButton).show();

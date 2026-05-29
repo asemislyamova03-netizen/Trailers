@@ -40,6 +40,48 @@
   </div>
 </div>
 
+{% set current_trailer_warehouse = order.trailer.warehouse if order.trailer and order.trailer.warehouse else none %}
+{% set source_warehouse = order.source_warehouse if order.source_warehouse else current_trailer_warehouse %}
+{% set needs_transfer = order.trailer and order.warehouse and current_trailer_warehouse and current_trailer_warehouse.id != order.warehouse.id %}
+<div class="app-card p-3 mb-3">
+  <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+    <div>
+      <h2 class="h5 mb-2">Путь техники по сделке</h2>
+      <div class="row g-3 small">
+        <div class="col-md-3">
+          <div class="text-muted">Склад источника</div>
+          <div class="fw-semibold">{{ source_warehouse.name if source_warehouse else 'не задан' }}</div>
+        </div>
+        <div class="col-md-3">
+          <div class="text-muted">Склад выдачи</div>
+          <div class="fw-semibold">{{ order.warehouse.name if order.warehouse else 'не задан' }}</div>
+        </div>
+        <div class="col-md-3">
+          <div class="text-muted">Текущий склад прицепа</div>
+          <div class="fw-semibold">{{ current_trailer_warehouse.name if current_trailer_warehouse else 'не задан' }}</div>
+        </div>
+        <div class="col-md-3">
+          <div class="text-muted">Нужно перемещение</div>
+          <div class="fw-semibold">
+            {% if needs_transfer %}
+              <span class="badge text-bg-warning">Да</span>
+            {% else %}
+              <span class="badge text-bg-success">Нет</span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+    {% if can_manage and needs_transfer and not order.is_shipped and order.status != 'cancelled' %}
+    <form method="post" action="{{ url_for('main.order_request_transfer', order_id=order.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="trailer_id" value="{{ order.trailer.id }}">
+      <button class="btn btn-orange"><i class="bi bi-truck me-1"></i>Создать перемещение</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
 <ul class="nav nav-tabs mb-3" role="tablist">
   <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#overview-tab" type="button">Обзор</button></li>
   <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#payments-tab" type="button">Оплаты</button></li>

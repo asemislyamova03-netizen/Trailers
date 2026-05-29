@@ -197,7 +197,9 @@ def upgrade():
     if _has_table('customer_order'):
         _add_column('customer_order', sa.Column('realization_status', sa.String(length=30), nullable=False, server_default='not_started'))
         _add_column('customer_order', sa.Column('realized_at', sa.DateTime(), nullable=True))
+        _add_column('customer_order', sa.Column('created_by_user_id', sa.Integer(), nullable=True))
         _create_index('ix_customer_order_realization_status', 'customer_order', ['realization_status'])
+        _create_index('ix_customer_order_created_by_user_id', 'customer_order', ['created_by_user_id'])
 
     if _has_table('customer_order_line'):
         _add_column('customer_order_line', sa.Column('trailer_id', sa.Integer(), nullable=True))

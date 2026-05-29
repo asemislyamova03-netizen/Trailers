@@ -140,14 +140,20 @@ def can_receive_movement(movement: StockMovement) -> bool:
 def can_ship_order(order: CustomerOrder) -> bool:
     if current_user.is_admin or current_user.is_director:
         return True
-    return current_user.is_manager and order.assigned_user_id == current_user.id
+    return current_user.is_manager and (
+        order.assigned_user_id == current_user.id
+        or getattr(order, 'created_by_user_id', None) == current_user.id
+    )
 
 
 def can_access_order(order: CustomerOrder) -> bool:
     if current_user.is_admin or current_user.is_director:
         return True
     if current_user.is_manager:
-        return order.assigned_user_id == current_user.id
+        return (
+            order.assigned_user_id == current_user.id
+            or getattr(order, 'created_by_user_id', None) == current_user.id
+        )
     if current_user.is_viewer:
         return True
     return False
@@ -156,7 +162,10 @@ def can_access_order(order: CustomerOrder) -> bool:
 def can_manage_order(order: CustomerOrder) -> bool:
     if current_user.is_admin or current_user.is_director:
         return True
-    return current_user.is_manager and order.assigned_user_id == current_user.id
+    return current_user.is_manager and (
+        order.assigned_user_id == current_user.id
+        or getattr(order, 'created_by_user_id', None) == current_user.id
+    )
 
 
 def _block_production_commercial_access():
@@ -1176,7 +1185,7 @@ def manager_workspace():
         warehouse_id = warehouses[0].id
     sales_warehouse_ids = [w.id for w in warehouses]
 
-    active_tab = (request.args.get('tab') or 'stock').strip() or 'stock'
+    active_tab = (request.args.get('tab') or 'orders').strip() or 'orders'
 
     stock_trailers = [
         trailer for trailer in (
@@ -2838,6 +2847,7 @@ def manager_trailer_picker():
                 warehouse_id=warehouse_id or trailer.warehouse_id,
                 source_warehouse_id=trailer.warehouse_id,
                 assigned_user_id=current_user.id if current_user.is_manager else None,
+                created_by_user_id=current_user.id,
                 quantity=1,
                 price=trailer.item.base_price if trailer.item else None,
                 prepayment_percent=30,
@@ -2894,6 +2904,7 @@ def manager_trailer_picker():
                 item_id=item.id,
                 warehouse_id=warehouse_id,
                 assigned_user_id=current_user.id if current_user.is_manager else None,
+                created_by_user_id=current_user.id,
                 quantity=quantity,
                 price=snapshot.get('calculated_price'),
                 prepayment_percent=30,
@@ -3440,8 +3451,7 @@ def contracts_list():
     if current_user.is_manager:
         query = query.filter(or_(
             CustomerOrder.assigned_user_id == current_user.id,
-            CustomerOrder.warehouse_id == current_user.warehouse_id,
-            Trailer.warehouse_id == current_user.warehouse_id,
+            CustomerOrder.created_by_user_id == current_user.id,
         ))
 
     if warehouse_id:
@@ -6531,7 +6541,12 @@ def orders_list():
     q = request.args.get('q', '').strip()
 
     query = CustomerOrder.query.join(Customer, Customer.id == CustomerOrder.customer_id).outerjoin(Item, Item.id == CustomerOrder.item_id)
-    if not current_user.can_view_all and current_user.warehouse_id:
+    if current_user.is_manager:
+        query = query.filter(or_(
+            CustomerOrder.assigned_user_id == current_user.id,
+            CustomerOrder.created_by_user_id == current_user.id,
+        ))
+    elif not current_user.can_view_all and current_user.warehouse_id:
         query = query.filter(or_(CustomerOrder.warehouse_id == current_user.warehouse_id, CustomerOrder.warehouse_id.is_(None)))
 
     if status:
@@ -6745,6 +6760,7 @@ def order_create():
             trailer_id=form.trailer_id.data or None,
             warehouse_id=form.warehouse_id.data or None,
             source_warehouse_id=selected_trailer.warehouse_id if selected_trailer else None,
+            created_by_user_id=current_user.id,
             assigned_user_id=form.assigned_user_id.data or None,
             quantity=form.quantity.data or 1,
             price=_order_price_from_form_or_config(form, configured_snapshot),
@@ -7267,8 +7283,6 @@ def lead_edit(lead_id):
 def lead_create_order(lead_id):
     _block_production_commercial_access()
     lead = Lead.query.get_or_404(lead_id)
-    if current_user.is_manager and lead.warehouse_id and lead.warehouse_id != current_user.warehouse_id:
-        abort(403)
     _ensure_customer_for_lead(lead)
     if current_user.is_manager:
         if not lead.assigned_user_id:
@@ -8345,10 +8359,11 @@ def order_request_transfer(order_id):
     if trailer.item_id != order.item_id:
         flash('Выбранный VIN не соответствует модели заказа.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
-    if trailer.status != 'IN_STOCK' or trailer.warehouse_id == order.warehouse_id:
-        flash('Для запроса перемещения нужен свободный прицеп на другом складе.', 'danger')
+    reserved_for_this_order = trailer.status == 'RESERVED' and order.trailer_id == trailer.id
+    if trailer.status not in ('IN_STOCK', 'RESERVED') or (trailer.status == 'RESERVED' and not reserved_for_this_order) or trailer.warehouse_id == order.warehouse_id:
+        flash('Для запроса перемещения нужен свободный или уже зарезервированный под эту сделку прицеп на другом складе.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
-    if not _trailer_available_for_sale(trailer, exclude_order_id=order.id):
+    if not reserved_for_this_order and not _trailer_available_for_sale(trailer, exclude_order_id=order.id):
         flash('Этот прицеп уже зарезервирован.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
     idem_key, duplicate = _reserve_idempotency_key()
@@ -8358,6 +8373,7 @@ def order_request_transfer(order_id):
     old_trailer = Trailer.query.get(order.trailer_id) if order.trailer_id else None
     order.fulfillment_source = 'other_warehouse'
     order.status = 'waiting_transfer'
+    order.source_warehouse_id = trailer.warehouse_id
     ok, message = _sync_order_trailer_links(order, old_trailer, trailer, 'TRANSFER')
     if not ok:
         flash(message, 'danger')
@@ -10202,15 +10218,9 @@ def logistics_send_trailer():
     if not order and trailer.status == 'SOLD':
         order = _find_order_for_sold_trailer(trailer)
     if current_user.is_manager:
-        if not current_user.warehouse_id:
-            flash('У менеджера не задан склад.', 'danger')
-            return redirect(back_url)
         if order and not can_manage_order(order):
             abort(403)
     target_warehouse = order.warehouse if order and order.warehouse_id else context.get('target_warehouse')
-    if current_user.is_manager and target_warehouse and target_warehouse.id != current_user.warehouse_id:
-        flash(f'Этот прицеп предназначен для склада: {target_warehouse.name}.', 'danger')
-        return redirect(back_url)
     if not target_warehouse or target_warehouse.id == production_warehouse.id:
         flash('Для этого прицепа склад назначения не задан или совпадает со складом выпуска.', 'danger')
         return redirect(back_url)
@@ -10703,7 +10713,7 @@ def director_report(section='sales'):
         if current_user.is_manager:
             query = query.filter(or_(
                 CustomerOrder.assigned_user_id == current_user.id,
-                CustomerOrder.warehouse_id == current_user.warehouse_id,
+                CustomerOrder.created_by_user_id == current_user.id,
             ))
         if warehouse_id:
             query = query.filter(CustomerOrder.warehouse_id == warehouse_id)
@@ -10772,9 +10782,9 @@ def director_report(section='sales'):
             if current_user.is_manager:
                 allowed_by_order = order and (
                     order.assigned_user_id == current_user.id
-                    or (current_user.warehouse_id and order.warehouse_id == current_user.warehouse_id)
+                    or getattr(order, 'created_by_user_id', None) == current_user.id
                 )
-                allowed_by_trailer = trailer and current_user.warehouse_id and trailer.warehouse_id == current_user.warehouse_id
+                allowed_by_trailer = False
                 if not (allowed_by_order or allowed_by_trailer):
                     continue
             if warehouse_id and (not warehouse or warehouse.id != warehouse_id):

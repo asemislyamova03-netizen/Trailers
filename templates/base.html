@@ -70,10 +70,10 @@
                     {{ nav_item('История', 'bi-clock-history', 'main.production_workspace', match='/production') }}
                 {% elif current_user.is_logistics %}
                     {{ nav_item('Реестр VIN', 'bi-upc', 'main.vin_registry_list', match='/logistics/vin-registry') }}
-                    {{ nav_item('Без VIN', 'bi-upc-scan', 'main.vin_registry_list', match='/logistics/vin-registry') }}
-                    {{ nav_item('Назначить VIN', 'bi-link-45deg', 'main.vin_registry_list', match='/logistics/vin-registry') }}
-                    {{ nav_item('Назначенные', 'bi-hourglass-split', 'main.vin_registry_list', match='/logistics/vin-registry') }}
-                    {{ nav_item('Ошибки', 'bi-exclamation-triangle', 'main.vin_registry_list', match='/logistics/vin-registry') }}
+                    {{ nav_item('Свободные VIN', 'bi-upc-scan', href=url_for('main.vin_registry_list', status='free'), match='/logistics/vin-registry') }}
+                    {{ nav_item('Назначить VIN', 'bi-link-45deg', href=url_for('main.vin_registry_list', status='reserved'), match='/logistics/vin-registry') }}
+                    {{ nav_item('Назначены, ждут подтверждения', 'bi-hourglass-split', href=url_for('main.vin_registry_list', status='assigned'), match='/logistics/vin-registry') }}
+                    {{ nav_item('Ошибки', 'bi-exclamation-triangle', href=url_for('main.vin_registry_list', status='void'), match='/logistics/vin-registry') }}
                 {% elif current_user.is_director %}
                     {{ nav_item('Панель', 'bi-speedometer2', 'main.director_dashboard', match='/director') }}
                     {{ nav_item('Диалоги', 'bi-chat-dots', 'main.conversations_list', match='/conversations') }}

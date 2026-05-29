@@ -874,6 +874,7 @@ class CustomerOrder(db.Model):
     warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=True, index=True)
     source_warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=True, index=True)
     assigned_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
 
     quantity = db.Column(db.Integer, nullable=False, default=1)
     price = db.Column(db.Numeric(12, 2), nullable=True)
@@ -912,6 +913,7 @@ class CustomerOrder(db.Model):
     warehouse = db.relationship('Warehouse', foreign_keys=[warehouse_id], backref='orders')
     source_warehouse = db.relationship('Warehouse', foreign_keys=[source_warehouse_id])
     assigned_user = db.relationship('User', foreign_keys=[assigned_user_id])
+    created_by_user = db.relationship('User', foreign_keys=[created_by_user_id])
     reserved_vin_registry = db.relationship('VinRegistry', foreign_keys=[reserved_vin_registry_id], post_update=True)
 
     @property
