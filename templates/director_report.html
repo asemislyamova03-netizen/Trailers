@@ -1,11 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Отчет: {{ title }}{% endblock %}
 {% block content %}
-<section class="hero-dashboard">
-  <div>
-    <h1>{{ title }}</h1>
-    <p>Сводка по продажам, выручке, среднему чеку, филиалам, типам прицепов и складу.</p>
-  </div>
+<section class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+  <h1 class="h3 mb-0">{{ title }}</h1>
   {% if current_user.is_director %}
     <a href="{{ url_for('main.director_dashboard') }}" class="btn btn-soft"><i class="bi bi-arrow-left me-1"></i>Панель</a>
   {% elif current_user.is_manager %}
@@ -15,7 +12,7 @@
   {% endif %}
 </section>
 
-<div class="app-card p-3 mb-4">
+<div class="app-card p-3 mb-3">
   <div class="d-flex flex-wrap gap-2 mb-3">
     {% for key, label in sections.items() %}
       <a class="btn btn-sm {{ 'btn-orange' if section == key else 'btn-soft' }}" href="{{ report_section_urls.get(key) }}">{{ label }}</a>
@@ -108,17 +105,20 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 </script>
 
-<section class="kpi-grid mb-4">
-  {% for card in cards %}
-    <div class="app-card kpi-card">
-      <div>
-        <div class="kpi-title">{{ card.title }}</div>
-        <div class="kpi-value">{{ card.value }}</div>
-        <div class="kpi-caption">{{ card.caption }}</div>
+{% if report_warning %}
+  <div class="alert alert-warning py-2">{{ report_warning }}</div>
+{% endif %}
+
+<section class="app-card p-2 mb-3">
+  <div class="d-flex flex-wrap gap-2">
+    {% for card in cards %}
+      <div class="border rounded px-3 py-2 flex-grow-1">
+        <div class="small text-muted">{{ card.title }}</div>
+        <div class="fw-bold">{{ card.value }}</div>
+        <div class="small text-muted">{{ card.caption }}</div>
       </div>
-      <div class="kpi-icon"><i class="bi bi-bar-chart"></i></div>
-    </div>
-  {% endfor %}
+    {% endfor %}
+  </div>
 </section>
 
 {% if section in ['sales', 'dynamics', 'branches', 'types', 'turnover'] %}
@@ -179,7 +179,7 @@ document.addEventListener('DOMContentLoaded', () => {
   <div class="table-responsive">
     {% if section == 'turnover' %}
     <table class="table table-hover align-middle mb-0">
-      <thead><tr><th>Тип / группа</th><th>Остаток, шт.</th><th>Продано, шт.</th><th>Выручка</th><th>Оборачиваемость</th><th>Дней запаса</th></tr></thead>
+      <thead><tr><th>{{ 'Тип / группа' if warehouse_id else 'Склад / тип' }}</th><th>Остаток, шт.</th><th>Продано, шт.</th><th>Выручка</th><th>Оборачиваемость</th><th>Дней запаса</th></tr></thead>
       <tbody>
       {% for row in analytics_rows %}
         <tr>

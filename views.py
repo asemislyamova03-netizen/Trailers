@@ -11873,10 +11873,38 @@ def director_report(section='sales'):
 
     period_start = datetime.combine(date_from, time.min)
     period_end = datetime.combine(date_to, time.max)
+    inspector = sa.inspect(db.engine)
+    table_names = set(inspector.get_table_names())
+
+    def table_columns(table_name: str) -> set[str]:
+        if table_name not in table_names:
+            return set()
+        return {column['name'] for column in inspector.get_columns(table_name)}
+
+    customer_order_columns = table_columns('customer_order')
+    has_customer_order_created_by = 'created_by_user_id' in customer_order_columns
+    sales_realization_columns = table_columns('sales_realization')
+    sales_realization_line_columns = table_columns('sales_realization_line')
+    has_sales_realization_schema = {
+        'status',
+        'realization_date',
+        'order_id',
+        'customer_id',
+        'warehouse_id',
+        'assigned_user_id',
+        'total_amount',
+    }.issubset(sales_realization_columns) and {
+        'realization_id',
+        'line_no',
+        'order_line_id',
+        'trailer_id',
+        'item_id',
+        'quantity',
+        'total_price',
+        'article_snapshot',
+        'vin_full',
+    }.issubset(sales_realization_line_columns)
     report_query_args = request.args.to_dict(flat=True)
-    report_query_args.setdefault('period', period)
-    report_query_args.setdefault('date_from', date_from.isoformat())
-    report_query_args.setdefault('date_to', date_to.isoformat())
     report_query_args.pop('section', None)
     report_section_urls = {}
     for section_key in sections:
@@ -11885,10 +11913,13 @@ def director_report(section='sales'):
 
     def order_scope(query):
         if current_user.is_manager:
-            query = query.filter(or_(
-                CustomerOrder.assigned_user_id == current_user.id,
-                CustomerOrder.created_by_user_id == current_user.id,
-            ))
+            if has_customer_order_created_by:
+                query = query.filter(or_(
+                    CustomerOrder.assigned_user_id == current_user.id,
+                    CustomerOrder.created_by_user_id == current_user.id,
+                ))
+            else:
+                query = query.filter(CustomerOrder.assigned_user_id == current_user.id)
         if warehouse_id:
             query = query.filter(CustomerOrder.warehouse_id == warehouse_id)
         if manager_id:
@@ -11896,26 +11927,85 @@ def director_report(section='sales'):
         return query
 
     def record_direction(record: dict) -> str:
-        lines = record.get('lines') or []
-        article = None
-        if lines:
-            article = next(
-                (
-                    line.article_snapshot or (line.item.article if line.item else None)
-                    for line in lines
-                    if line.article_snapshot or (line.item and line.item.article)
-                ),
-                None,
-            )
+        article = _record_primary_article(record)
         if not article and record.get('item'):
             article = record['item'].article
         group_code = _article_group_code(article)
-        vin = record.get('trailer').vin if record.get('trailer') else None
-        if not vin or not group_code:
+        if not group_code:
             return 'other'
         if group_code == '002':
             return 'light'
         return 'cargo'
+
+    def _line_article(line) -> str:
+        return (getattr(line, 'article_snapshot', None) or (line.item.article if getattr(line, 'item', None) else '') or '').strip()
+
+    def _line_total(line) -> float:
+        total = getattr(line, 'total_price', None)
+        if total is not None:
+            return float(total or 0)
+        quantity = float(getattr(line, 'quantity', None) or 1)
+        unit_price = float(getattr(line, 'unit_price', None) or 0)
+        return quantity * unit_price
+
+    def _line_is_vehicle_sale(line) -> bool:
+        line_type = (getattr(line, 'line_type', '') or '').lower()
+        if line_type == 'trailer':
+            return True
+        if getattr(line, 'trailer_id', None) or getattr(line, 'vin_full', None):
+            return True
+        if getattr(line, 'item', None) and getattr(line.item, 'requires_vin', False):
+            return True
+        article = _line_article(line)
+        return bool(_article_group_code(article))
+
+    def _record_vehicle_lines(record: dict) -> list:
+        lines = [line for line in (record.get('lines') or []) if _line_is_vehicle_sale(line)]
+        if lines:
+            return lines
+        return []
+
+    def _record_primary_article(record: dict) -> str:
+        vehicle_lines = _record_vehicle_lines(record)
+        if vehicle_lines:
+            return _line_article(vehicle_lines[0])
+        trailer = record.get('trailer')
+        if trailer and trailer.item:
+            return trailer.item.article or ''
+        item = record.get('item')
+        if item:
+            return item.article or ''
+        lines = record.get('lines') or []
+        if lines:
+            return _line_article(lines[0])
+        return ''
+
+    def _record_vehicle_quantity(record: dict) -> float:
+        vehicle_lines = _record_vehicle_lines(record)
+        if vehicle_lines:
+            quantity = sum(float(getattr(line, 'quantity', None) or 1) for line in vehicle_lines)
+            return quantity or 1
+        if record.get('trailer'):
+            return 1
+        return float(record.get('quantity') or 0)
+
+    def _record_type_allocations(record: dict) -> list[dict]:
+        vehicle_lines = _record_vehicle_lines(record)
+        if not vehicle_lines:
+            label = _article_group_code(_record_primary_article(record)) or 'Без типа'
+            return [{'label': label, 'quantity': _record_vehicle_quantity(record), 'revenue': float(record.get('revenue') or 0)}]
+        line_revenue_sum = sum(_line_total(line) for line in vehicle_lines)
+        fallback_share = (float(record.get('revenue') or 0) / len(vehicle_lines)) if vehicle_lines else 0
+        allocations = []
+        for line in vehicle_lines:
+            label = _article_group_code(_line_article(line)) or 'Без типа'
+            line_revenue = _line_total(line)
+            allocations.append({
+                'label': label,
+                'quantity': float(getattr(line, 'quantity', None) or 1),
+                'revenue': line_revenue if line_revenue_sum else fallback_share,
+            })
+        return allocations
 
     def contract_report_records():
         contracts = (
@@ -11988,9 +12078,6 @@ def director_report(section='sales'):
             if search_lower and search_lower not in haystack:
                 continue
 
-            quantity = sum(line.quantity or 0 for line in lines)
-            if quantity <= 0:
-                quantity = order.quantity if order and order.quantity else 1
             revenue = float(contract.price if contract.price is not None else (order.price if order else 0) or 0)
             record = {
                 'source': 'contract',
@@ -12003,9 +12090,10 @@ def director_report(section='sales'):
                 'manager': manager,
                 'item': item,
                 'lines': lines,
-                'quantity': quantity,
+                'quantity': order.quantity if order and order.quantity else 1,
                 'revenue': revenue,
             }
+            record['quantity'] = _record_vehicle_quantity(record)
             record['direction'] = record_direction(record)
             if report_direction != 'all' and record['direction'] != report_direction:
                 continue
@@ -12013,6 +12101,8 @@ def director_report(section='sales'):
         return result
 
     def realization_report_records():
+        if not has_sales_realization_schema:
+            return []
         query = (
             SalesRealization.query
             .filter(
@@ -12024,11 +12114,17 @@ def director_report(section='sales'):
             .outerjoin(Customer, Customer.id == SalesRealization.customer_id)
         )
         if current_user.is_manager:
-            query = query.filter(or_(
-                SalesRealization.assigned_user_id == current_user.id,
-                CustomerOrder.assigned_user_id == current_user.id,
-                CustomerOrder.created_by_user_id == current_user.id,
-            ))
+            if has_customer_order_created_by:
+                query = query.filter(or_(
+                    SalesRealization.assigned_user_id == current_user.id,
+                    CustomerOrder.assigned_user_id == current_user.id,
+                    CustomerOrder.created_by_user_id == current_user.id,
+                ))
+            else:
+                query = query.filter(or_(
+                    SalesRealization.assigned_user_id == current_user.id,
+                    CustomerOrder.assigned_user_id == current_user.id,
+                ))
         if warehouse_id:
             query = query.filter(SalesRealization.warehouse_id == warehouse_id)
         if manager_id:
@@ -12057,9 +12153,6 @@ def director_report(section='sales'):
             ).lower()
             if search_lower and search_lower not in haystack:
                 continue
-            quantity = sum(float(line.quantity or 0) for line in lines)
-            if quantity <= 0:
-                quantity = 1
             record = {
                 'source': 'realization',
                 'date': datetime.combine(realization.realization_date, time.min),
@@ -12071,9 +12164,10 @@ def director_report(section='sales'):
                 'manager': manager,
                 'item': item,
                 'lines': lines,
-                'quantity': quantity,
+                'quantity': 1,
                 'revenue': float(realization.total_amount or 0),
             }
+            record['quantity'] = _record_vehicle_quantity(record)
             record['direction'] = record_direction(record)
             if report_direction != 'all' and record['direction'] != report_direction:
                 continue
@@ -12085,28 +12179,38 @@ def director_report(section='sales'):
     problem_rows = []
     analytics_rows = []
     anomaly_rows = []
+    report_warning = None
 
-    if section in ('sales', 'finance', 'dynamics', 'branches', 'types'):
+    def combined_sales_report_records() -> tuple[list[dict], list[dict], str | None]:
         realization_rows = realization_report_records()
-        realized_order_ids = {
-            order_id for (order_id,) in
-            SalesRealization.query
-            .with_entities(SalesRealization.order_id)
-            .filter(SalesRealization.status == 'posted', SalesRealization.order_id.isnot(None))
-            .distinct()
-            .all()
-        }
+        if has_sales_realization_schema:
+            realized_order_ids = {
+                order_id for (order_id,) in
+                SalesRealization.query
+                .with_entities(SalesRealization.order_id)
+                .filter(SalesRealization.status == 'posted', SalesRealization.order_id.isnot(None))
+                .distinct()
+                .all()
+            }
+            schema_warning = None
+        else:
+            realized_order_ids = set()
+            schema_warning = 'Схема реализаций ещё не применена в БД: отчёт временно считает продажи по старым договорам. Выполните flask db upgrade.'
         legacy_contract_rows = [
             row for row in contract_report_records()
             if not row.get('order') or row['order'].id not in realized_order_ids
         ]
-        rows = realization_rows + legacy_contract_rows
-        rows.sort(key=lambda row: row['date'] or datetime.min, reverse=True)
+        combined_rows = realization_rows + legacy_contract_rows
+        combined_rows.sort(key=lambda row: row['date'] or datetime.min, reverse=True)
+        return combined_rows, legacy_contract_rows, schema_warning
+
+    if section in ('sales', 'finance', 'dynamics', 'branches', 'types'):
+        rows, legacy_contract_rows, report_warning = combined_sales_report_records()
         anomaly_rows = [
             row for row in rows
             if row['revenue'] >= 3000000 or row['direction'] == 'other'
         ][:10]
-        sold_quantity = sum(row['quantity'] or 0 for row in rows)
+        sold_quantity = sum(_record_vehicle_quantity(row) for row in rows)
         revenue = sum(row['revenue'] or 0 for row in rows)
         cards = [
             {'title': 'Выручка', 'value': money(revenue), 'caption': 'юридические продажи за период'},
@@ -12119,7 +12223,7 @@ def director_report(section='sales'):
             for row in rows:
                 key = row['date'].strftime('%Y-%m') if row.get('date') else 'без даты'
                 buckets[key]['orders'] += 1
-                buckets[key]['quantity'] += row['quantity'] or 0
+                buckets[key]['quantity'] += _record_vehicle_quantity(row)
                 buckets[key]['revenue'] += row['revenue'] or 0
             analytics_rows = [
                 {
@@ -12136,7 +12240,7 @@ def director_report(section='sales'):
             for row in rows:
                 key = row['warehouse'].name if row.get('warehouse') else 'Без филиала'
                 buckets[key]['orders'] += 1
-                buckets[key]['quantity'] += row['quantity'] or 0
+                buckets[key]['quantity'] += _record_vehicle_quantity(row)
                 buckets[key]['revenue'] += row['revenue'] or 0
             analytics_rows = sorted(
                 ({'label': key, **value, 'average': value['revenue'] / value['orders'] if value['orders'] else 0} for key, value in buckets.items()),
@@ -12146,20 +12250,10 @@ def director_report(section='sales'):
         elif section == 'types':
             buckets = defaultdict(lambda: {'orders': 0, 'quantity': 0, 'revenue': 0.0})
             for row in rows:
-                lines = row.get('lines') or []
-                if lines:
-                    line_count = len(lines)
-                    for line in lines:
-                        label = _article_group_code(line.article_snapshot or (line.item.article if line.item else None)) or 'Без типа'
-                        buckets[label]['orders'] += 1
-                        buckets[label]['quantity'] += line.quantity or 1
-                        buckets[label]['revenue'] += float(line.total_price if line.total_price is not None else ((row['revenue'] or 0) / line_count if line_count else 0))
-                else:
-                    item = row.get('item')
-                    label = _article_group_code(item.article if item else None) or 'Без типа'
-                    buckets[label]['orders'] += 1
-                    buckets[label]['quantity'] += row['quantity'] or 0
-                    buckets[label]['revenue'] += row['revenue'] or 0
+                for allocation in _record_type_allocations(row):
+                    buckets[allocation['label']]['orders'] += 1
+                    buckets[allocation['label']]['quantity'] += allocation['quantity']
+                    buckets[allocation['label']]['revenue'] += allocation['revenue']
             analytics_rows = sorted(
                 ({'label': key, **value, 'average': value['revenue'] / value['orders'] if value['orders'] else 0} for key, value in buckets.items()),
                 key=lambda row: row['quantity'],
@@ -12213,33 +12307,53 @@ def director_report(section='sales'):
             {'title': 'В пути', 'value': len([t for t in trailers if t.status == 'IN_TRANSIT' or t.lifecycle_status == 'in_transit']), 'caption': 'логистика'},
         ]
         if section == 'turnover':
-            sold_records = contract_report_records()
+            sold_records, _, turnover_warning = combined_sales_report_records()
+            if turnover_warning:
+                report_warning = turnover_warning
             period_days = max((date_to - date_from).days + 1, 1)
             stock_buckets = defaultdict(lambda: {'stock': 0, 'sold': 0, 'revenue': 0.0})
+
+            def turnover_key_for_stock(trailer: Trailer) -> tuple[str, str]:
+                warehouse_name = trailer.warehouse.name if trailer.warehouse else 'Без склада'
+                type_name = _article_group_code(trailer.item.article if trailer.item else None) or 'Без типа'
+                return (warehouse_name, type_name) if not warehouse_id else ('Выбранный склад', type_name)
+
+            def turnover_key_for_sale(record: dict, type_label: str) -> tuple[str, str]:
+                warehouse_name = record['warehouse'].name if record.get('warehouse') else 'Без склада'
+                return (warehouse_name, type_label) if not warehouse_id else ('Выбранный склад', type_label)
+
             for trailer in trailers:
-                label = _article_group_code(trailer.item.article if trailer.item else None) or 'Без типа'
-                stock_buckets[label]['stock'] += 1
+                stock_buckets[turnover_key_for_stock(trailer)]['stock'] += 1
             for record in sold_records:
-                lines = record.get('lines') or []
-                if lines:
-                    line_count = len(lines)
-                    for line in lines:
-                        label = _article_group_code(line.article_snapshot or (line.item.article if line.item else None)) or 'Без типа'
-                        stock_buckets[label]['sold'] += line.quantity or 1
-                        stock_buckets[label]['revenue'] += float(line.total_price if line.total_price is not None else ((record['revenue'] or 0) / line_count if line_count else 0))
-                else:
-                    item = record.get('item')
-                    label = _article_group_code(item.article if item else None) or 'Без типа'
-                    stock_buckets[label]['sold'] += record['quantity'] or 0
-                    stock_buckets[label]['revenue'] += record['revenue'] or 0
+                for allocation in _record_type_allocations(record):
+                    key = turnover_key_for_sale(record, allocation['label'])
+                    stock_buckets[key]['sold'] += allocation['quantity']
+                    stock_buckets[key]['revenue'] += allocation['revenue']
             analytics_rows = []
-            for label, value in stock_buckets.items():
+            total_value = {'stock': 0, 'sold': 0, 'revenue': 0.0}
+            for value in stock_buckets.values():
+                total_value['stock'] += value['stock']
+                total_value['sold'] += value['sold']
+                total_value['revenue'] += value['revenue']
+
+            total_row = None
+            if not warehouse_id:
+                total_turnover = total_value['sold'] / total_value['stock'] if total_value['stock'] else 0
+                total_row = {
+                    'label': 'Итого по всем складам',
+                    'stock': total_value['stock'],
+                    'quantity': total_value['sold'],
+                    'revenue': total_value['revenue'],
+                    'turnover': total_turnover,
+                    'days_on_stock': round(period_days / total_turnover, 1) if total_turnover else None,
+                }
+            for (warehouse_label, type_label), value in stock_buckets.items():
                 avg_stock = value['stock']
                 sold_qty = value['sold']
                 turnover = sold_qty / avg_stock if avg_stock else 0
                 days_on_stock = round(period_days / turnover, 1) if turnover else None
                 analytics_rows.append({
-                    'label': label,
+                    'label': type_label if warehouse_id else f'{warehouse_label} / {type_label}',
                     'stock': avg_stock,
                     'quantity': sold_qty,
                     'revenue': value['revenue'],
@@ -12247,11 +12361,15 @@ def director_report(section='sales'):
                     'days_on_stock': days_on_stock,
                 })
             analytics_rows.sort(key=lambda row: row['turnover'], reverse=True)
+            if total_row:
+                analytics_rows.insert(0, total_row)
             rows = trailers
+            total_stock = total_value['stock'] if not warehouse_id else len(trailers)
+            total_sold = total_value['sold'] if not warehouse_id else sum(row['quantity'] for row in analytics_rows)
             cards = [
-                {'title': 'Остаток', 'value': len(trailers), 'caption': 'прицепов в выборке'},
-                {'title': 'Продано', 'value': sum(row['quantity'] for row in analytics_rows), 'caption': 'за период'},
-                {'title': 'Оборачиваемость', 'value': round((sum(row['quantity'] for row in analytics_rows) / len(trailers)) if trailers else 0, 2), 'caption': 'продано / остаток'},
+                {'title': 'Остаток', 'value': total_stock, 'caption': 'прицепов в выборке'},
+                {'title': 'Продано', 'value': total_sold, 'caption': 'за период'},
+                {'title': 'Оборачиваемость', 'value': round((total_sold / total_stock) if total_stock else 0, 2), 'caption': 'продано / остаток'},
                 {'title': 'Период', 'value': period_days, 'caption': 'дней'},
             ]
 
@@ -12293,30 +12411,56 @@ def director_report(section='sales'):
         ]
 
     elif section == 'line-links':
-        line_query = CustomerOrderLine.query.join(CustomerOrder, CustomerOrder.id == CustomerOrderLine.order_id)
-        line_query = order_scope(line_query)
-        if status_filter != 'all':
-            line_query = line_query.filter(or_(CustomerOrderLine.fulfillment_status == status_filter, CustomerOrderLine.shipment_status == status_filter, CustomerOrderLine.realization_status == status_filter))
-        if search:
-            like = f'%{search}%'
-            line_query = line_query.outerjoin(Item, Item.id == CustomerOrderLine.item_id).filter(or_(
-                CustomerOrder.order_number.ilike(like),
-                CustomerOrderLine.article_snapshot.ilike(like),
-                Item.article.ilike(like),
-                Item.name.ilike(like),
-            ))
-        checked_lines = line_query.order_by(CustomerOrder.created_at.desc(), CustomerOrderLine.id.desc()).limit(500).all()
-        rows = []
-        for line in checked_lines:
-            mismatches = _order_line_workflow_mismatches(line)
-            if mismatches or status_filter != 'all' or search:
-                rows.append({'line': line, 'mismatches': mismatches, 'expected': _order_line_workflow_expected(line)})
-        cards = [
-            {'title': 'Проверено строк', 'value': len(checked_lines), 'caption': 'последние 500 в выборке'},
-            {'title': 'С рассинхроном', 'value': len([row for row in rows if row['mismatches']]), 'caption': 'нужно синхронизировать'},
-            {'title': 'Чистые', 'value': len(checked_lines) - len([row for row in rows if row['mismatches']]), 'caption': 'без расхождений'},
-            {'title': 'Показано', 'value': len(rows), 'caption': 'строк в таблице'},
-        ]
+        required_columns = {
+            'source_type',
+            'fulfillment_status',
+            'vin_registry_id',
+            'reservation_id',
+            'supply_need_id',
+            'production_request_line_id',
+            'stock_movement_id',
+            'realization_status',
+            'shipment_status',
+        }
+        existing_columns = {column['name'] for column in sa.inspect(db.engine).get_columns('customer_order_line')}
+        missing_columns = sorted(required_columns - existing_columns)
+        if missing_columns:
+            report_warning = (
+                'Диагностика связей строк недоступна: в БД нет колонок '
+                + ', '.join(missing_columns)
+                + '. Выполните flask db upgrade и перезапустите сервис.'
+            )
+            cards = [
+                {'title': 'Проверено строк', 'value': 0, 'caption': 'миграция не применена'},
+                {'title': 'С рассинхроном', 'value': 0, 'caption': 'ожидает миграцию'},
+                {'title': 'Чистые', 'value': 0, 'caption': 'ожидает миграцию'},
+                {'title': 'Показано', 'value': 0, 'caption': 'строк в таблице'},
+            ]
+        else:
+            line_query = CustomerOrderLine.query.join(CustomerOrder, CustomerOrder.id == CustomerOrderLine.order_id)
+            line_query = order_scope(line_query)
+            if status_filter != 'all':
+                line_query = line_query.filter(or_(CustomerOrderLine.fulfillment_status == status_filter, CustomerOrderLine.shipment_status == status_filter, CustomerOrderLine.realization_status == status_filter))
+            if search:
+                like = f'%{search}%'
+                line_query = line_query.outerjoin(Item, Item.id == CustomerOrderLine.item_id).filter(or_(
+                    CustomerOrder.order_number.ilike(like),
+                    CustomerOrderLine.article_snapshot.ilike(like),
+                    Item.article.ilike(like),
+                    Item.name.ilike(like),
+                ))
+            checked_lines = line_query.order_by(CustomerOrder.created_at.desc(), CustomerOrderLine.id.desc()).limit(500).all()
+            rows = []
+            for line in checked_lines:
+                mismatches = _order_line_workflow_mismatches(line)
+                if mismatches or status_filter != 'all' or search:
+                    rows.append({'line': line, 'mismatches': mismatches, 'expected': _order_line_workflow_expected(line)})
+            cards = [
+                {'title': 'Проверено строк', 'value': len(checked_lines), 'caption': 'последние 500 в выборке'},
+                {'title': 'С рассинхроном', 'value': len([row for row in rows if row['mismatches']]), 'caption': 'нужно синхронизировать'},
+                {'title': 'Чистые', 'value': len(checked_lines) - len([row for row in rows if row['mismatches']]), 'caption': 'без расхождений'},
+                {'title': 'Показано', 'value': len(rows), 'caption': 'строк в таблице'},
+            ]
 
     else:
         later_orders = order_scope(CustomerOrder.query).filter(
@@ -12462,6 +12606,7 @@ def director_report(section='sales'):
         analytics_rows=analytics_rows,
         chart_data=chart_data,
         anomaly_rows=anomaly_rows,
+        report_warning=report_warning,
         report_query_args=report_query_args,
         report_section_urls=report_section_urls,
     )
