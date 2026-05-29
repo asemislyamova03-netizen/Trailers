@@ -65,6 +65,7 @@
 
 <ul class="nav nav-tabs mb-3" role="tablist">
   <li class="nav-item"><button class="nav-link active" data-manager-tab="orders" data-bs-toggle="tab" data-bs-target="#orders-tab" type="button">Сделки</button></li>
+  <li class="nav-item"><button class="nav-link" data-manager-tab="funnel" data-bs-toggle="tab" data-bs-target="#funnel-tab" type="button">Воронка</button></li>
   <li class="nav-item"><button class="nav-link" data-manager-tab="conversations" data-bs-toggle="tab" data-bs-target="#conversations-tab" type="button">Диалоги</button></li>
   <li class="nav-item"><button class="nav-link" data-manager-tab="leads" data-bs-toggle="tab" data-bs-target="#leads-tab" type="button">Заявки</button></li>
   <li class="nav-item"><button class="nav-link" data-manager-tab="assistant" data-bs-toggle="tab" data-bs-target="#assistant-tab" type="button">Задачи</button></li>
@@ -96,6 +97,33 @@
             </tr>
           {% else %}
             <tr><td colspan="8" class="text-muted p-3">Сделок нет</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="tab-pane fade" id="funnel-tab">
+    <div class="app-card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Воронка сделок</span>
+        <a class="btn btn-sm btn-soft" href="{{ url_for('main.orders_list') }}">Все сделки</a>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover align-middle">
+          <thead><tr><th>Этап</th><th>Сделок</th><th>С блокером</th><th>Сумма</th><th></th></tr></thead>
+          <tbody>
+          {% for row in funnel_rows %}
+            <tr>
+              <td><span class="badge text-bg-{{ row.code|status_badge_class }}">{{ row.label }}</span></td>
+              <td class="fw-semibold">{{ row.count }}</td>
+              <td>{% if row.blockers %}<span class="text-danger">{{ row.blockers }}</span>{% else %}<span class="text-muted">0</span>{% endif %}</td>
+              <td>{{ row.amount|money }}</td>
+              <td class="text-end"><a class="btn btn-sm btn-soft" href="{{ url_for('main.orders_list', status=row.code) }}">Открыть</a></td>
+            </tr>
+          {% else %}
+            <tr><td colspan="5" class="text-muted p-3">Активных сделок нет</td></tr>
           {% endfor %}
           </tbody>
         </table>

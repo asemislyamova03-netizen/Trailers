@@ -1232,7 +1232,7 @@ def manager_workspace():
     sales_warehouse_ids = [w.id for w in warehouses]
 
     active_tab = (request.args.get('tab') or 'orders').strip() or 'orders'
-    crm_tabs = {'orders', 'leads', 'conversations', 'assistant'}
+    crm_tabs = {'orders', 'funnel', 'leads', 'conversations', 'assistant'}
     if active_tab not in crm_tabs:
         active_tab = 'orders'
 
@@ -1291,6 +1291,26 @@ def manager_workspace():
         order_scope = order_scope.filter(CustomerOrder.warehouse_id == warehouse_id)
     active_orders = order_scope.filter(CustomerOrder.status.notin_(['done', 'cancelled', 'shipped'])).order_by(CustomerOrder.created_at.desc()).limit(30).all()
     active_order_rows = [{'order': order, 'state': _order_list_state(order)} for order in active_orders]
+    order_filter_index = {code: idx for idx, (code, _label) in enumerate(ORDER_LIST_FILTERS)}
+    funnel_map = {}
+    for row in active_order_rows:
+        state = row['state']
+        order = row['order']
+        code = state.get('code') or 'problem'
+        if code not in funnel_map:
+            funnel_map[code] = {
+                'code': code,
+                'label': state.get('label') or dict(ORDER_LIST_FILTERS).get(code, code),
+                'count': 0,
+                'amount': 0,
+                'blockers': 0,
+                'sort': order_filter_index.get(code, 999),
+            }
+        funnel_map[code]['count'] += 1
+        funnel_map[code]['amount'] += float(order.price or 0)
+        if state.get('blocker'):
+            funnel_map[code]['blockers'] += 1
+    funnel_rows = sorted(funnel_map.values(), key=lambda row: (row['sort'], row['label']))
     active_order_ids = [order.id for order in active_orders]
     assigned_vins_to_confirm = (
         VinRegistry.query
@@ -1510,6 +1530,7 @@ def manager_workspace():
         manager_needed_count=manager_needed_count,
         active_orders=active_orders,
         active_order_rows=active_order_rows,
+        funnel_rows=funnel_rows,
         assigned_vins_to_confirm=assigned_vins_to_confirm,
         inbound_movements=inbound_movements,
         outgoing_movements=outgoing_movements,
