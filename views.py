@@ -1231,42 +1231,11 @@ def manager_workspace():
 
     if not warehouse_id and warehouses:
         warehouse_id = warehouses[0].id
-    sales_warehouse_ids = [w.id for w in warehouses]
 
     active_tab = (request.args.get('tab') or 'orders').strip() or 'orders'
     crm_tabs = {'orders', 'funnel', 'leads', 'conversations', 'assistant'}
     if active_tab not in crm_tabs:
         active_tab = 'orders'
-
-    stock_trailers = [
-        trailer for trailer in (
-        Trailer.query
-        .join(Item, Item.id == Trailer.item_id)
-        .join(Warehouse, Warehouse.id == Trailer.warehouse_id)
-        .filter(
-            Trailer.warehouse_id.in_(sales_warehouse_ids) if sales_warehouse_ids else sa.false(),
-            Trailer.status == 'IN_STOCK',
-            or_(Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped'),
-        )
-        .order_by(Warehouse.name, Item.article, Trailer.vin)
-        .all()
-        )
-        if _trailer_available_for_sale(trailer)
-    ]
-    reserved_trailers = (
-        Trailer.query
-        .join(Item, Item.id == Trailer.item_id)
-        .join(Warehouse, Warehouse.id == Trailer.warehouse_id)
-        .filter(Trailer.warehouse_id.in_(sales_warehouse_ids) if sales_warehouse_ids else sa.false(), Trailer.status == 'RESERVED')
-        .order_by(Warehouse.name, Item.article, Trailer.vin)
-        .all()
-    )
-    free_trailers = stock_trailers + reserved_trailers
-
-    grouped_trailers = defaultdict(list)
-    for t in free_trailers:
-        article = t.item.article if t.item and t.item.article else 'Без артикула'
-        grouped_trailers[article].append(t)
 
     new_leads = Lead.query.filter(
         or_(Lead.assigned_user_id == current_user.id, Lead.assigned_user_id.is_(None)),
@@ -1327,207 +1296,11 @@ def manager_workspace():
         .all()
         if active_order_ids else []
     )
-    inbound_movements = StockMovement.query.filter(
-        StockMovement.status.in_(['sent', 'in_transit']),
-        or_(StockMovement.order_id.in_(active_order_ids), StockMovement.to_warehouse_id == warehouse_id) if active_order_ids else StockMovement.to_warehouse_id == warehouse_id,
-    ).order_by(StockMovement.departure_date.desc().nullslast(), StockMovement.id.desc()).all()
-    outgoing_movements = StockMovement.query.filter(
-        StockMovement.status.in_(['sent', 'in_transit']),
-        or_(StockMovement.order_id.in_(active_order_ids), StockMovement.from_warehouse_id == warehouse_id) if active_order_ids else StockMovement.from_warehouse_id == warehouse_id,
-    ).order_by(StockMovement.departure_date.desc().nullslast(), StockMovement.id.desc()).all()
-    production_for_warehouse = (
-        ProductionRequestLine.query
-        .join(ProductionRequest, ProductionRequest.id == ProductionRequestLine.production_request_id)
-        .filter(
-            ProductionRequest.target_warehouse_id == warehouse_id,
-            ProductionRequestLine.status.in_(['planned', 'PLANNED', 'in_production', 'partial_ready']),
-        )
-        .order_by(ProductionRequest.created_at.desc(), ProductionRequestLine.id.desc())
-        .all()
-    )
-    pending_production_needs = (
-        SupplyNeed.query
-        .filter(
-            SupplyNeed.status == 'NEW',
-            or_(SupplyNeed.warehouse_id == warehouse_id, SupplyNeed.warehouse_id.is_(None)),
-        )
-        .order_by(SupplyNeed.required_by.asc().nullslast(), SupplyNeed.priority.asc(), SupplyNeed.created_at.asc())
-        .all()
-    )
-    production_qty_left = sum(max((line.quantity or 0) - (line.produced_qty or 0), 0) for line in production_for_warehouse)
-    produced_units_for_warehouse = (
-        ProducedUnit.query
-        .filter(
-            ProducedUnit.target_warehouse_id == warehouse_id,
-            ProducedUnit.status == 'produced_no_vin',
-        )
-        .order_by(ProducedUnit.created_at.desc(), ProducedUnit.id.desc())
-        .all()
-    )
-    production_warehouse = _default_production_warehouse()
-    ready_at_production_units = []
-    if production_warehouse:
-        ready_at_production_units = (
-            ProducedUnit.query
-            .join(Trailer, Trailer.id == ProducedUnit.trailer_id)
-            .filter(
-                ProducedUnit.target_warehouse_id == warehouse_id,
-                ProducedUnit.status == 'vin_assigned',
-                Trailer.warehouse_id == production_warehouse.id,
-                Trailer.status.in_(['IN_STOCK', 'RESERVED']),
-                ProducedUnit.target_warehouse_id != production_warehouse.id,
-            )
-            .order_by(ProducedUnit.created_at.desc(), ProducedUnit.id.desc())
-            .all()
-        )
-    ready_at_production_rows = [_produced_unit_context(unit) for unit in ready_at_production_units]
-    ready_to_ship_orders = CustomerOrder.query.filter(
-        CustomerOrder.warehouse_id == warehouse_id,
-        CustomerOrder.status.in_(['ready_to_ship', 'arrived']),
-    ).order_by(CustomerOrder.created_at.desc()).all()
-    ready_to_ship_extra = CustomerOrder.query.filter(
-        CustomerOrder.warehouse_id == warehouse_id,
-        CustomerOrder.is_shipped == False,
-        CustomerOrder.trailer_id.isnot(None),
-        CustomerOrder.status.notin_(['done', 'cancelled', 'shipped']),
-    ).order_by(CustomerOrder.created_at.desc()).all()
-    ready_to_ship_orders = list({order.id: order for order in ready_to_ship_orders + ready_to_ship_extra}.values())
-    planned_ship_orders = (
-        CustomerOrder.query
-        .filter(
-            CustomerOrder.warehouse_id == warehouse_id,
-            CustomerOrder.documents_issued == True,
-            CustomerOrder.is_shipped == False,
-            CustomerOrder.status != 'cancelled',
-        )
-        .order_by(CustomerOrder.planned_ship_date.asc().nullslast(), CustomerOrder.documents_issued_at.desc().nullslast())
-        .all()
-    )
-
-    paid_not_shipped_orders = [
-        order for order in active_orders
-        if order.confirmed_paid_amount > 0 and not order.is_shipped
-    ]
-    paid_docs_not_issued_orders = [
-        order for order in CustomerOrder.query.filter(
-            CustomerOrder.warehouse_id == warehouse_id,
-            CustomerOrder.documents_issued == False,
-            CustomerOrder.status.notin_(['done', 'cancelled', 'shipped']),
-        ).order_by(CustomerOrder.created_at.desc()).all()
-        if order.total_amount > 0 and order.confirmed_paid_amount >= order.total_amount
-    ]
-    today_start = datetime.combine(date.today(), time.min)
-    month_start = datetime(date.today().year, date.today().month, 1)
-    sales_scope_orders = (
-        CustomerOrder.query
-        .join(SalesContract, SalesContract.order_id == CustomerOrder.id)
-        .join(Trailer, Trailer.id == CustomerOrder.trailer_id)
-        .filter(
-            CustomerOrder.warehouse_id == warehouse_id,
-            CustomerOrder.documents_issued == True,
-            CustomerOrder.documents_issued_at.isnot(None),
-            CustomerOrder.status != 'cancelled',
-            Trailer.status == 'SOLD',
-        )
-        .order_by(CustomerOrder.documents_issued_at.desc())
-        .all()
-    )
-    sales_scope_orders = [
-        order for order in sales_scope_orders
-        if order.total_amount > 0 and order.confirmed_paid_amount >= order.total_amount
-    ]
-    sold_today_orders = [
-        order for order in sales_scope_orders
-        if order.documents_issued_at and order.documents_issued_at >= today_start
-    ]
-    sold_month_orders = [
-        order for order in sales_scope_orders
-        if order.documents_issued_at and order.documents_issued_at >= month_start
-    ]
-    payments = (
-        OrderPayment.query
-        .join(CustomerOrder, CustomerOrder.id == OrderPayment.order_id)
-        .filter(CustomerOrder.warehouse_id == warehouse_id)
-        .order_by(OrderPayment.paid_at.desc().nullslast(), OrderPayment.created_at.desc())
-        .limit(20)
-        .all()
-    )
-    other_stock = [
-        trailer for trailer in (
-        Trailer.query
-        .join(Item, Item.id == Trailer.item_id)
-        .join(Warehouse, Warehouse.id == Trailer.warehouse_id)
-        .filter(
-            Trailer.warehouse_id != warehouse_id,
-            Trailer.status == 'IN_STOCK',
-            or_(Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped'),
-        )
-        .order_by(Warehouse.name, Item.article, Trailer.vin)
-        .all()
-        )
-        if _trailer_available_for_sale(trailer)
-    ]
-    sold_not_shipped_trailers = []
-    for order in planned_ship_orders:
-        if order.trailer and order.trailer.id not in {trailer.id for trailer in sold_not_shipped_trailers}:
-            sold_not_shipped_trailers.append(order.trailer)
-    inbound_trailers = []
-    for movement in inbound_movements:
-        if movement.trailer and movement.trailer.id not in {trailer.id for trailer in inbound_trailers}:
-            inbound_trailers.append(movement.trailer)
-    shipped_trailers = (
-        Trailer.query
-        .join(Item, Item.id == Trailer.item_id)
-        .filter(
-            Trailer.warehouse_id == warehouse_id,
-            Trailer.status == 'SOLD',
-            Trailer.lifecycle_status == 'customer_shipped',
-        )
-        .order_by(Trailer.created_at.desc(), Trailer.id.desc())
-        .limit(50)
-        .all()
-    )
-    warehouse_stock_rows = []
-    for trailer in stock_trailers:
-        warehouse_stock_rows.append({'group': 'available', 'group_label': 'Свободен', 'trailer': trailer, 'order': None})
-    for trailer in reserved_trailers:
-        order = CustomerOrder.query.filter_by(trailer_id=trailer.id, is_shipped=False).filter(CustomerOrder.status != 'cancelled').order_by(CustomerOrder.created_at.desc()).first()
-        warehouse_stock_rows.append({'group': 'reserved', 'group_label': 'Резерв', 'trailer': trailer, 'order': order})
-    for trailer in sold_not_shipped_trailers:
-        order = CustomerOrder.query.filter_by(trailer_id=trailer.id, documents_issued=True, is_shipped=False).order_by(CustomerOrder.documents_issued_at.desc()).first()
-        warehouse_stock_rows.append({'group': 'sold_not_shipped', 'group_label': 'Продан, не отгружен', 'trailer': trailer, 'order': order})
-    for trailer in inbound_trailers:
-        movement = next((m for m in inbound_movements if m.trailer_id == trailer.id), None)
-        warehouse_stock_rows.append({'group': 'in_transit', 'group_label': 'В пути', 'trailer': trailer, 'order': movement.order if movement else None})
-    for unit in produced_units_for_warehouse:
-        need = unit.production_request_line.supply_need if unit.production_request_line else None
-        warehouse_stock_rows.append({
-            'group': 'produced_no_vin',
-            'group_label': 'Выпущен без VIN',
-            'trailer': None,
-            'unit': unit,
-            'order': need.order if need and need.order else None,
-        })
-    for row in ready_at_production_rows:
-        warehouse_stock_rows.append({
-            'group': 'ready_production',
-            'group_label': 'Готов на складе выпуска',
-            'trailer': row['unit'].trailer if row.get('unit') and row['unit'].trailer else None,
-            'unit': row.get('unit'),
-            'order': row.get('order'),
-        })
-    for trailer in shipped_trailers:
-        order = CustomerOrder.query.filter_by(trailer_id=trailer.id, is_shipped=True).order_by(CustomerOrder.shipped_at.desc().nullslast()).first()
-        warehouse_stock_rows.append({'group': 'shipped', 'group_label': 'Отгружен', 'trailer': trailer, 'order': order})
 
     return render_template(
         'manager_workspace.html',
         warehouse_id=warehouse_id,
         warehouses=warehouses,
-        grouped_trailers=grouped_trailers,
-        free_trailers=free_trailers,
-        stock_trailers=stock_trailers,
-        reserved_trailers=reserved_trailers,
         new_leads=new_leads,
         recent_conversations=recent_conversations,
         new_conversations_count=new_conversations_count,
@@ -1540,25 +1313,6 @@ def manager_workspace():
         waiting_movement_rows=waiting_movement_rows,
         blocked_order_rows=blocked_order_rows,
         assigned_vins_to_confirm=assigned_vins_to_confirm,
-        inbound_movements=inbound_movements,
-        outgoing_movements=outgoing_movements,
-        ready_to_ship_orders=ready_to_ship_orders,
-        planned_ship_orders=planned_ship_orders,
-        pending_production_needs=pending_production_needs,
-        production_for_warehouse=production_for_warehouse,
-        production_qty_left=production_qty_left,
-        produced_units_for_warehouse=produced_units_for_warehouse,
-        ready_at_production_rows=ready_at_production_rows,
-        production_warehouse=production_warehouse,
-        paid_not_shipped_orders=paid_not_shipped_orders,
-        paid_docs_not_issued_orders=paid_docs_not_issued_orders,
-        sold_today_orders=sold_today_orders,
-        sold_today_revenue=sum(float(order.price or 0) for order in sold_today_orders),
-        sold_month_orders=sold_month_orders,
-        sold_month_revenue=sum(float(order.price or 0) for order in sold_month_orders),
-        warehouse_stock_rows=warehouse_stock_rows,
-        payments=payments,
-        other_stock=other_stock,
         active_tab=active_tab,
     )
 
