@@ -56,29 +56,30 @@
                     {{ nav_item('Шаблоны договоров', 'bi-file-earmark-ruled', 'main.contract_templates_list', match='/contracts/templates') }}
                     {{ nav_item('Пользователи', 'bi-people', 'main.users_list', match='/users') }}
                 {% elif current_user.is_manager %}
-                    {{ nav_item('Рабочий стол', 'bi-speedometer2', 'main.manager_workspace', match='/manager') }}
-                    {{ nav_item('Диалоги', 'bi-chat-dots', 'main.conversations_list', match='/conversations') }}
-                    {{ nav_item('Заявки', 'bi-chat-left-text', 'main.leads_list', match='/leads') }}
-                    {{ nav_item('Kaspi', 'bi-bag-check', 'main.kaspi_order_import', match='/integrations/kaspi') }}
-                    {{ nav_item('Заказы', 'bi-receipt', 'main.orders_list', match='/orders') }}
-                    {{ nav_item('Подбор прицепа', 'bi-ui-checks-grid', 'main.manager_trailer_picker', match='/manager/trailer-picker') }}
-                    {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', match='/production') }}
-                    {{ nav_item('Мой склад', 'bi-box-seam', href=url_for('main.trailers_list', status='IN_STOCK'), match='/trailers') }}
-                    {{ nav_item('Пополнение склада', 'bi-box-arrow-in-down', 'main.stock_replenishment_list', match='/stock-replenishment') }}
-                    {{ nav_item('Оплаты', 'bi-cash-coin', 'main.orders_list') }}
-                    {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', match='/reports') }}
+                    {{ nav_item('Сделки', 'bi-speedometer2', 'main.manager_workspace', match='/manager') }}
+                    {{ nav_item('Наличие', 'bi-box-seam', href=url_for('main.trailers_list', status='IN_STOCK'), match='/trailers') }}
+                    {{ nav_item('Перемещения', 'bi-truck', 'main.stock_movements_list', match='/stock-movements') }}
+                    {{ nav_item('Отгрузки', 'bi-clipboard-check', href=url_for('main.manager_workspace', tab='issue'), match='/manager') }}
+                    {{ nav_item('Реализации', 'bi-journal-check', 'main.sales_realizations_list', match='/realizations') }}
                     {{ nav_item('Клиенты', 'bi-person-lines-fill', 'main.customers_list', match='/customers') }}
-                    {{ nav_item('Договоры', 'bi-file-earmark-text', 'main.contracts_list', match='/contracts') }}
+                    {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', match='/reports') }}
                 {% elif current_user.is_production %}
-                    {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', match='/production') }}
+                    {{ nav_item('Мои задания', 'bi-tools', 'main.production_workspace', match='/production') }}
+                    {{ nav_item('Материалы', 'bi-boxes', 'main.production_workspace', match='/production') }}
+                    {{ nav_item('Выпуск', 'bi-check2-square', 'main.production_workspace', match='/production') }}
+                    {{ nav_item('История', 'bi-clock-history', 'main.production_workspace', match='/production') }}
                 {% elif current_user.is_logistics %}
                     {{ nav_item('Реестр VIN', 'bi-upc', 'main.vin_registry_list', match='/logistics/vin-registry') }}
-                    {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', match='/reports') }}
+                    {{ nav_item('Без VIN', 'bi-upc-scan', 'main.vin_registry_list', match='/logistics/vin-registry') }}
+                    {{ nav_item('Назначить VIN', 'bi-link-45deg', 'main.vin_registry_list', match='/logistics/vin-registry') }}
+                    {{ nav_item('Назначенные', 'bi-hourglass-split', 'main.vin_registry_list', match='/logistics/vin-registry') }}
+                    {{ nav_item('Ошибки', 'bi-exclamation-triangle', 'main.vin_registry_list', match='/logistics/vin-registry') }}
                 {% elif current_user.is_director %}
                     {{ nav_item('Панель', 'bi-speedometer2', 'main.director_dashboard', match='/director') }}
                     {{ nav_item('Диалоги', 'bi-chat-dots', 'main.conversations_list', match='/conversations') }}
                     {{ nav_item('Kaspi', 'bi-bag-check', 'main.kaspi_order_import', match='/integrations/kaspi') }}
                     {{ nav_item('Заказы', 'bi-receipt', 'main.orders_list', match='/orders') }}
+                    {{ nav_item('Реализации', 'bi-journal-check', 'main.sales_realizations_list', match='/realizations') }}
                     {{ nav_item('Подбор прицепа', 'bi-ui-checks-grid', 'main.manager_trailer_picker', match='/manager/trailer-picker') }}
                     {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', match='/production') }}
                     {{ nav_item('Логистика', 'bi-truck', 'main.logistics_workspace', match='/logistics') }}

@@ -34,6 +34,25 @@
     </div>
 
     <div class="row">
+        <div class="col-md-4 mb-3">
+            {{ form.product_category_id.label(class="form-label") }}
+            {{ form.product_category_id(class="form-select") }}
+        </div>
+        <div class="col-md-4 mb-3 d-flex align-items-center">
+            <div class="form-check mt-4">
+                {{ form.is_sellable(class="form-check-input") }}
+                {{ form.is_sellable.label(class="form-check-label") }}
+            </div>
+        </div>
+        <div class="col-md-4 mb-3 d-flex align-items-center">
+            <div class="form-check mt-4">
+                {{ form.requires_vin(class="form-check-input") }}
+                {{ form.requires_vin.label(class="form-check-label") }}
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
     <div class="col-md-3 mb-3">
         {{ form.axle_count.label(class="form-label") }}
         {{ form.axle_count(class="form-control") }}

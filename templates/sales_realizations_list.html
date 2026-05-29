@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Реализации{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="h4 mb-0">Реализация товаров и услуг</h1>
+</div>
+
+<div class="app-card">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead>
+        <tr>
+          <th>Номер</th>
+          <th>Дата</th>
+          <th>Заказ</th>
+          <th>Клиент</th>
+          <th>Склад</th>
+          <th>Статус</th>
+          <th>Сумма</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for realization in realizations %}
+        <tr>
+          <td class="fw-semibold">{{ realization.number or realization.id }}</td>
+          <td>{{ realization.realization_date|date_format }}</td>
+          <td>{% if realization.order %}<a href="{{ url_for('main.order_detail', order_id=realization.order.id) }}">{{ realization.order.order_number }}</a>{% endif %}</td>
+          <td>{{ realization.customer.name if realization.customer else '' }}</td>
+          <td>{{ realization.warehouse.name if realization.warehouse else '' }}</td>
+          <td><span class="badge text-bg-{{ realization.status|status_badge_class }}">{{ realization.status|status_label }}</span></td>
+          <td>{{ realization.total_amount|money }}</td>
+          <td class="text-end"><a class="btn btn-sm btn-soft" href="{{ url_for('main.sales_realization_detail', realization_id=realization.id) }}">Открыть</a></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="8" class="text-muted p-3">Реализаций пока нет.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

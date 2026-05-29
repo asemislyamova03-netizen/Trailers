@@ -54,6 +54,11 @@ class Warehouse(db.Model):
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     is_production = db.Column(db.Boolean, nullable=False, default=False, index=True)
     warehouse_kind = db.Column(db.String(30), nullable=False, default='finished_goods', index=True)
+    is_sales_point = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    can_sell = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    can_ship_to_customer = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    primary_product_category = db.Column(db.String(40), nullable=True, index=True)
+    product_category_scope = db.Column(db.String(80), nullable=True, index=True)
 
     trailers = db.relationship('Trailer', back_populates='warehouse')
 
@@ -169,6 +174,25 @@ class IdempotencyKey(db.Model):
 
 # ---------- НОМЕНКЛАТУРА (ПРИЦЕПЫ ПО АРТИКУЛАМ + КОМПЛЕКТУЮЩИЕ) ----------
 
+class ProductCategory(db.Model):
+    __tablename__ = 'product_category'
+
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(40), nullable=False, unique=True, index=True)
+    name = db.Column(db.String(120), nullable=False)
+    kind = db.Column(db.String(40), nullable=False, default='goods', index=True)
+    is_vin_required = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    is_sellable = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    is_finished_vehicle = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f'<ProductCategory {self.code}>'
+
+
 class Item(db.Model):
     """
     Номенклатура:
@@ -181,6 +205,13 @@ class Item(db.Model):
 
     # Тип: прицеп / комплектующее
     item_type = db.Column(ItemTypeEnum, nullable=False, index=True)
+    product_category_id = db.Column(db.Integer, db.ForeignKey('product_category.id'), nullable=True, index=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('trailer_product_group.id'), nullable=True, index=True)
+    max_mass_kg = db.Column(db.Integer, nullable=True)
+    is_sellable = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    requires_vin = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    is_realization_line = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    is_internal_bom_item = db.Column(db.Boolean, nullable=False, default=False, index=True)
 
     # Артикул:
     #   для прицепов обязателен
@@ -230,6 +261,8 @@ class Item(db.Model):
 
     # Связь с прицепами (экземплярами)
     trailers = db.relationship('Trailer', back_populates='item')
+    product_category = db.relationship('ProductCategory', foreign_keys=[product_category_id], backref='items')
+    product_group = db.relationship('TrailerProductGroup', foreign_keys=[group_id], backref='items')
 
     def __repr__(self) -> str:
         return f'<Item id={self.id} type={self.item_type} article={self.article!r}>'
@@ -264,6 +297,10 @@ class ItemBillOfMaterialsLine(db.Model):
     unit = db.Column(db.String(20), nullable=False, default='шт')
     source_area_type = db.Column(db.String(40), nullable=False, default='components', index=True)
     workshop_id = db.Column(db.Integer, db.ForeignKey('production_workshop.id'), nullable=True, index=True)
+    component_category = db.Column(db.String(40), nullable=True, index=True)
+    is_required = db.Column(db.Boolean, nullable=False, default=True)
+    allow_substitute = db.Column(db.Boolean, nullable=False, default=False)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
     is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
     comment = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
@@ -272,6 +309,154 @@ class ItemBillOfMaterialsLine(db.Model):
     bom = db.relationship('ItemBillOfMaterials', backref=db.backref('lines', lazy='dynamic', cascade='all, delete-orphan'))
     component_item = db.relationship('Item', foreign_keys=[component_item_id], backref='bom_component_lines')
     workshop = db.relationship('ProductionWorkshop', backref='bom_lines')
+
+
+class InventoryBalance(db.Model):
+    __tablename__ = 'inventory_balance'
+
+    id = db.Column(db.Integer, primary_key=True)
+    warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=False, index=True)
+    storage_area_id = db.Column(db.Integer, db.ForeignKey('warehouse_storage_area.id'), nullable=True, index=True)
+    item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=False, index=True)
+    quantity = db.Column(db.Numeric(14, 3), nullable=False, default=0)
+    reserved_quantity = db.Column(db.Numeric(14, 3), nullable=False, default=0)
+    unit = db.Column(db.String(20), nullable=False, default='шт')
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    warehouse = db.relationship('Warehouse', backref='inventory_balances')
+    storage_area = db.relationship('WarehouseStorageArea', backref='inventory_balances')
+    item = db.relationship('Item', backref='inventory_balances')
+
+    __table_args__ = (
+        db.UniqueConstraint('warehouse_id', 'storage_area_id', 'item_id', name='uq_inventory_balance_place_item'),
+    )
+
+
+class InventoryOperation(db.Model):
+    __tablename__ = 'inventory_operation'
+
+    id = db.Column(db.Integer, primary_key=True)
+    operation_type = db.Column(db.String(40), nullable=False, index=True)
+    status = db.Column(db.String(30), nullable=False, default='posted', index=True)
+    source_warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=True, index=True)
+    source_area_id = db.Column(db.Integer, db.ForeignKey('warehouse_storage_area.id'), nullable=True, index=True)
+    target_warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=True, index=True)
+    target_area_id = db.Column(db.Integer, db.ForeignKey('warehouse_storage_area.id'), nullable=True, index=True)
+    production_request_line_id = db.Column(db.Integer, db.ForeignKey('production_request_line.id'), nullable=True, index=True)
+    produced_unit_id = db.Column(db.Integer, db.ForeignKey('produced_unit.id'), nullable=True, index=True)
+    stock_movement_id = db.Column(db.Integer, db.ForeignKey('stock_movement.id'), nullable=True, index=True)
+    customer_order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=True, index=True)
+    customer_order_line_id = db.Column(db.Integer, db.ForeignKey('customer_order_line.id'), nullable=True, index=True)
+    workshop_id = db.Column(db.Integer, db.ForeignKey('production_workshop.id'), nullable=True, index=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    posted_at = db.Column(db.DateTime, nullable=True)
+    comment = db.Column(db.Text, nullable=True)
+
+    source_warehouse = db.relationship('Warehouse', foreign_keys=[source_warehouse_id], backref='source_inventory_operations')
+    target_warehouse = db.relationship('Warehouse', foreign_keys=[target_warehouse_id], backref='target_inventory_operations')
+    source_area = db.relationship('WarehouseStorageArea', foreign_keys=[source_area_id])
+    target_area = db.relationship('WarehouseStorageArea', foreign_keys=[target_area_id])
+    production_request_line = db.relationship('ProductionRequestLine', backref='inventory_operations')
+    produced_unit = db.relationship('ProducedUnit', backref='inventory_operations')
+    stock_movement = db.relationship('StockMovement', backref='inventory_operations')
+    customer_order = db.relationship('CustomerOrder', backref='inventory_operations')
+    customer_order_line = db.relationship('CustomerOrderLine', backref='inventory_operations')
+    workshop = db.relationship('ProductionWorkshop', backref='inventory_operations')
+    created_by_user = db.relationship('User', foreign_keys=[created_by_user_id])
+
+
+class InventoryOperationLine(db.Model):
+    __tablename__ = 'inventory_operation_line'
+
+    id = db.Column(db.Integer, primary_key=True)
+    operation_id = db.Column(db.Integer, db.ForeignKey('inventory_operation.id'), nullable=False, index=True)
+    item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=False, index=True)
+    quantity = db.Column(db.Numeric(14, 3), nullable=False)
+    unit = db.Column(db.String(20), nullable=False, default='шт')
+    direction = db.Column(db.String(10), nullable=False, default='out', index=True)
+    comment = db.Column(db.Text, nullable=True)
+
+    operation = db.relationship('InventoryOperation', backref=db.backref('lines', lazy='dynamic', cascade='all, delete-orphan'))
+    item = db.relationship('Item', backref='inventory_operation_lines')
+
+
+class InventoryTransaction(db.Model):
+    __tablename__ = 'inventory_transaction'
+
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    transaction_type = db.Column(db.String(40), nullable=False, index=True)
+    warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=False, index=True)
+    storage_area_id = db.Column(db.Integer, db.ForeignKey('warehouse_storage_area.id'), nullable=True, index=True)
+    item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=False, index=True)
+    qty = db.Column(db.Numeric(14, 3), nullable=False)
+    unit = db.Column(db.String(20), nullable=False, default='шт')
+    related_order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=True, index=True)
+    related_order_line_id = db.Column(db.Integer, db.ForeignKey('customer_order_line.id'), nullable=True, index=True)
+    related_production_request_line_id = db.Column(db.Integer, db.ForeignKey('production_request_line.id'), nullable=True, index=True)
+    related_workshop_id = db.Column(db.Integer, db.ForeignKey('production_workshop.id'), nullable=True, index=True)
+    related_stock_movement_id = db.Column(db.Integer, db.ForeignKey('stock_movement.id'), nullable=True, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    comment = db.Column(db.Text, nullable=True)
+
+    warehouse = db.relationship('Warehouse', backref='inventory_transactions')
+    storage_area = db.relationship('WarehouseStorageArea', backref='inventory_transactions')
+    item = db.relationship('Item', backref='inventory_transactions')
+    related_order = db.relationship('CustomerOrder', foreign_keys=[related_order_id])
+    related_order_line = db.relationship('CustomerOrderLine', foreign_keys=[related_order_line_id])
+    related_production_request_line = db.relationship('ProductionRequestLine', foreign_keys=[related_production_request_line_id])
+    related_workshop = db.relationship('ProductionWorkshop', foreign_keys=[related_workshop_id])
+    related_stock_movement = db.relationship('StockMovement', foreign_keys=[related_stock_movement_id])
+    user = db.relationship('User', foreign_keys=[user_id])
+
+
+class TrailerAssemblyOperation(db.Model):
+    __tablename__ = 'trailer_assembly_operation'
+
+    id = db.Column(db.Integer, primary_key=True)
+    trailer_id = db.Column(db.Integer, db.ForeignKey('trailer.id'), nullable=False, index=True)
+    order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=True, index=True)
+    order_line_id = db.Column(db.Integer, db.ForeignKey('customer_order_line.id'), nullable=True, index=True)
+    warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=False, index=True)
+    operation_type = db.Column(db.String(30), nullable=False, index=True)
+    status = db.Column(db.String(30), nullable=False, default='draft', index=True)
+    from_item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=True, index=True)
+    to_item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=False, index=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    posted_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    posted_at = db.Column(db.DateTime, nullable=True)
+    cancelled_at = db.Column(db.DateTime, nullable=True)
+    comment = db.Column(db.Text, nullable=True)
+
+    trailer = db.relationship('Trailer', backref='assembly_operations')
+    order = db.relationship('CustomerOrder', backref='assembly_operations')
+    order_line = db.relationship('CustomerOrderLine', foreign_keys=[order_line_id], backref='assembly_operations')
+    warehouse = db.relationship('Warehouse', backref='trailer_assembly_operations')
+    from_item = db.relationship('Item', foreign_keys=[from_item_id])
+    to_item = db.relationship('Item', foreign_keys=[to_item_id])
+    created_by_user = db.relationship('User', foreign_keys=[created_by_user_id])
+    posted_by_user = db.relationship('User', foreign_keys=[posted_by_user_id])
+
+
+class TrailerAssemblyOperationLine(db.Model):
+    __tablename__ = 'trailer_assembly_operation_line'
+
+    id = db.Column(db.Integer, primary_key=True)
+    operation_id = db.Column(db.Integer, db.ForeignKey('trailer_assembly_operation.id'), nullable=False, index=True)
+    item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=False, index=True)
+    quantity = db.Column(db.Numeric(12, 3), nullable=False)
+    unit = db.Column(db.String(20), nullable=False, default='шт')
+    direction = db.Column(db.String(20), nullable=False, index=True)
+    storage_area_id = db.Column(db.Integer, db.ForeignKey('warehouse_storage_area.id'), nullable=True, index=True)
+    inventory_operation_line_id = db.Column(db.Integer, db.ForeignKey('inventory_operation_line.id'), nullable=True, index=True)
+    comment = db.Column(db.Text, nullable=True)
+
+    operation = db.relationship('TrailerAssemblyOperation', backref=db.backref('lines', lazy='dynamic', cascade='all, delete-orphan'))
+    item = db.relationship('Item', backref='trailer_assembly_lines')
+    storage_area = db.relationship('WarehouseStorageArea', backref='trailer_assembly_lines')
+    inventory_operation_line = db.relationship('InventoryOperationLine', backref='trailer_assembly_lines')
 
 
 # ---------- ПРИЦЕПЫ (КОНКРЕТНЫЕ ЭКЗЕМПЛЯРЫ С VIN) ----------
@@ -465,6 +650,76 @@ class SalesContractLine(db.Model):
     )
 
 
+class SalesRealization(db.Model):
+    __tablename__ = 'sales_realization'
+
+    id = db.Column(db.Integer, primary_key=True)
+    number = db.Column(db.String(50), nullable=True, unique=True, index=True)
+    realization_date = db.Column(db.Date, nullable=False, default=date.today, index=True)
+    order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=True, index=True)
+    customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'), nullable=False, index=True)
+    warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=True, index=True)
+    assigned_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    status = db.Column(db.String(30), nullable=False, default='draft', index=True)
+    total_amount = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    currency = db.Column(db.String(10), nullable=False, default='KZT')
+    posted_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    posted_at = db.Column(db.DateTime, nullable=True)
+    cancelled_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    cancelled_at = db.Column(db.DateTime, nullable=True)
+    cancel_reason = db.Column(db.Text, nullable=True)
+    one_c_export_status = db.Column(db.String(30), nullable=False, default='not_exported', index=True)
+    one_c_exported_at = db.Column(db.DateTime, nullable=True)
+    one_c_document_ref = db.Column(db.String(120), nullable=True, index=True)
+    one_c_export_payload_json = db.Column(db.Text, nullable=True)
+    one_c_export_error = db.Column(db.Text, nullable=True)
+    esf_status = db.Column(db.String(30), nullable=False, default='not_started', index=True)
+    esf_ref = db.Column(db.String(120), nullable=True, index=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    order = db.relationship('CustomerOrder', backref='sales_realizations')
+    customer = db.relationship('Customer', backref='sales_realizations')
+    warehouse = db.relationship('Warehouse', backref='sales_realizations')
+    assigned_user = db.relationship('User', foreign_keys=[assigned_user_id], backref='assigned_sales_realizations')
+    posted_by_user = db.relationship('User', foreign_keys=[posted_by_user_id])
+    cancelled_by_user = db.relationship('User', foreign_keys=[cancelled_by_user_id])
+    created_by_user = db.relationship('User', foreign_keys=[created_by_user_id])
+
+
+class SalesRealizationLine(db.Model):
+    __tablename__ = 'sales_realization_line'
+
+    id = db.Column(db.Integer, primary_key=True)
+    realization_id = db.Column(db.Integer, db.ForeignKey('sales_realization.id'), nullable=False, index=True)
+    line_no = db.Column(db.Integer, nullable=False, default=1)
+    line_type = db.Column(db.String(30), nullable=False, index=True)
+    order_line_id = db.Column(db.Integer, db.ForeignKey('customer_order_line.id'), nullable=True, index=True)
+    trailer_id = db.Column(db.Integer, db.ForeignKey('trailer.id'), nullable=True, index=True)
+    vin_registry_id = db.Column(db.Integer, db.ForeignKey('vin_registry.id'), nullable=True, index=True)
+    item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=True, index=True)
+    warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=True, index=True)
+    storage_area_id = db.Column(db.Integer, db.ForeignKey('warehouse_storage_area.id'), nullable=True, index=True)
+    quantity = db.Column(db.Numeric(12, 3), nullable=False, default=1)
+    unit = db.Column(db.String(20), nullable=False, default='шт')
+    unit_price = db.Column(db.Numeric(12, 2), nullable=True)
+    total_price = db.Column(db.Numeric(12, 2), nullable=True)
+    inventory_effect = db.Column(db.String(30), nullable=False, default='none', index=True)
+    article_snapshot = db.Column(db.String(80), nullable=True, index=True)
+    product_name_snapshot = db.Column(db.String(255), nullable=True)
+    vin_full = db.Column(db.String(50), nullable=True, index=True)
+    comment = db.Column(db.Text, nullable=True)
+
+    realization = db.relationship('SalesRealization', backref=db.backref('lines', lazy='dynamic', cascade='all, delete-orphan'))
+    order_line = db.relationship('CustomerOrderLine', backref='realization_lines')
+    trailer = db.relationship('Trailer', backref='realization_lines')
+    vin_registry = db.relationship('VinRegistry', foreign_keys=[vin_registry_id], backref='realization_lines')
+    item = db.relationship('Item', backref='realization_lines')
+    warehouse = db.relationship('Warehouse', backref='realization_lines')
+    storage_area = db.relationship('WarehouseStorageArea', backref='realization_lines')
+
+
 class ContractTemplate(db.Model):
     __tablename__ = 'contract_template'
 
@@ -631,6 +886,8 @@ class CustomerOrder(db.Model):
     documents_issued_at = db.Column(db.DateTime, nullable=True)
     is_shipped = db.Column(db.Boolean, nullable=False, default=False)
     shipped_at = db.Column(db.DateTime, nullable=True)
+    realization_status = db.Column(db.String(30), nullable=False, default='not_started', index=True)
+    realized_at = db.Column(db.DateTime, nullable=True)
     planned_ship_date = db.Column(db.Date, nullable=True)
     planned_ship_comment = db.Column(db.Text, nullable=True)
     cancelled_at = db.Column(db.DateTime, nullable=True)
@@ -792,7 +1049,12 @@ class CustomerOrderLine(db.Model):
     fulfillment_source = db.Column(db.String(30), nullable=True, index=True)
 
     item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=True, index=True)
+    trailer_id = db.Column(db.Integer, db.ForeignKey('trailer.id'), nullable=True, index=True)
     production_workshop_id = db.Column(db.Integer, db.ForeignKey('production_workshop.id'), nullable=True, index=True)
+    assembly_status = db.Column(db.String(30), nullable=False, default='not_required', index=True)
+    assembly_operation_id = db.Column(db.Integer, db.ForeignKey('trailer_assembly_operation.id'), nullable=True, index=True)
+    include_in_vehicle_contract = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    include_in_realization = db.Column(db.Boolean, nullable=False, default=True, index=True)
 
     quantity = db.Column(db.Integer, nullable=False, default=1)
     unit_price = db.Column(db.Numeric(12, 2), nullable=True)
@@ -817,7 +1079,9 @@ class CustomerOrderLine(db.Model):
 
     order = db.relationship('CustomerOrder', backref=db.backref('lines', lazy='dynamic', cascade='all, delete-orphan'))
     item = db.relationship('Item', backref='order_lines')
+    trailer = db.relationship('Trailer', foreign_keys=[trailer_id], backref='order_lines')
     production_workshop = db.relationship('ProductionWorkshop', backref='order_lines')
+    assembly_operation = db.relationship('TrailerAssemblyOperation', foreign_keys=[assembly_operation_id], post_update=True)
 
     __table_args__ = (
         db.UniqueConstraint('order_id', 'line_no', name='uq_customer_order_line_no'),
@@ -973,6 +1237,7 @@ class ProductionRequestLine(db.Model):
     order_line_id = db.Column(db.Integer, db.ForeignKey('customer_order_line.id'), nullable=True, index=True)
     item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=False, index=True)
     production_workshop_id = db.Column(db.Integer, db.ForeignKey('production_workshop.id'), nullable=True, index=True)
+    assembly_warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=True, index=True)
 
     quantity = db.Column(db.Integer, nullable=False, default=1)
     produced_qty = db.Column(db.Integer, nullable=False, default=0)
@@ -1002,6 +1267,7 @@ class ProductionRequestLine(db.Model):
     order_line = db.relationship('CustomerOrderLine', backref='production_lines')
     item = db.relationship('Item', backref='production_lines')
     production_workshop = db.relationship('ProductionWorkshop', backref='production_lines')
+    assembly_warehouse = db.relationship('Warehouse', foreign_keys=[assembly_warehouse_id], backref='assembly_production_lines')
     cancelled_by_user = db.relationship('User', foreign_keys=[cancelled_by_user_id])
 
 
@@ -1028,6 +1294,49 @@ class ProducedUnit(db.Model):
     target_warehouse = db.relationship('Warehouse', backref='produced_units')
     order = db.relationship('CustomerOrder', backref='produced_units')
     trailer = db.relationship('Trailer', backref='produced_unit', uselist=False)
+
+
+class ItemProductionRoute(db.Model):
+    __tablename__ = 'item_production_route'
+
+    id = db.Column(db.Integer, primary_key=True)
+    item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=False, index=True)
+    version = db.Column(db.String(40), nullable=False, default='default')
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    item = db.relationship('Item', backref='production_routes')
+
+    __table_args__ = (
+        db.UniqueConstraint('item_id', 'version', name='uq_item_production_route_version'),
+    )
+
+
+class ItemProductionRouteStep(db.Model):
+    __tablename__ = 'item_production_route_step'
+
+    id = db.Column(db.Integer, primary_key=True)
+    route_id = db.Column(db.Integer, db.ForeignKey('item_production_route.id'), nullable=False, index=True)
+    step_no = db.Column(db.Integer, nullable=False, default=1, index=True)
+    sequence_no = db.Column(db.Integer, nullable=False, default=1, index=True)
+    workshop_id = db.Column(db.Integer, db.ForeignKey('production_workshop.id'), nullable=False, index=True)
+    operation_name = db.Column(db.String(120), nullable=True)
+    input_item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=True, index=True)
+    output_item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=True, index=True)
+    input_area_type = db.Column(db.String(40), nullable=True, index=True)
+    output_area_type = db.Column(db.String(40), nullable=True, index=True)
+    planned_qty = db.Column(db.Numeric(12, 3), nullable=True)
+    planned_duration_minutes = db.Column(db.Integer, nullable=True)
+    unit = db.Column(db.String(20), nullable=False, default='шт')
+    is_required = db.Column(db.Boolean, nullable=False, default=True)
+    comment = db.Column(db.Text, nullable=True)
+
+    route = db.relationship('ItemProductionRoute', backref=db.backref('steps', lazy='dynamic', cascade='all, delete-orphan'))
+    workshop = db.relationship('ProductionWorkshop', backref='production_route_steps')
+    input_item = db.relationship('Item', foreign_keys=[input_item_id])
+    output_item = db.relationship('Item', foreign_keys=[output_item_id])
 
 
 class StockMovement(db.Model):
@@ -1146,6 +1455,7 @@ class TrailerProductGroup(db.Model):
     otts_valid_from = db.Column(db.Date, nullable=True, index=True)
     otts_valid_to = db.Column(db.Date, nullable=True, index=True)
     vehicle_category = db.Column(db.String(20), nullable=True)
+    product_category_id = db.Column(db.Integer, db.ForeignKey('product_category.id'), nullable=True, index=True)
     axle_count = db.Column(db.Integer, nullable=True)
     wheel_count = db.Column(db.Integer, nullable=True)
     max_mass_kg = db.Column(db.Integer, nullable=True)
@@ -1154,6 +1464,7 @@ class TrailerProductGroup(db.Model):
     comment = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    product_category = db.relationship('ProductCategory', foreign_keys=[product_category_id], backref='product_groups')
 
 
 class TrailerBodySize(db.Model):

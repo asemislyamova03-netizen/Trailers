@@ -16,6 +16,36 @@
   </div>
 </div>
 
+{% if assigned_vins_to_confirm %}
+<div class="app-card p-3 mb-3 border-warning">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <div>
+      <div class="fw-semibold">VIN назначен, ждёт подтверждения нанесения</div>
+      <div class="text-muted small">Подтверждение меняет общий статус VIN-реестра для менеджера, админа, директора и логиста.</div>
+    </div>
+  </div>
+  <div class="table-responsive mt-2">
+    <table class="table table-sm align-middle mb-0">
+      <tbody>
+        {% for row in assigned_vins_to_confirm %}
+        <tr>
+          <td class="fw-bold">{{ row.vin_full }}</td>
+          <td>{{ row.customer_order.order_number if row.customer_order else '' }}</td>
+          <td>{{ row.trailer.item.article if row.trailer and row.trailer.item else '' }}</td>
+          <td class="text-end">
+            <form method="post" action="{{ url_for('main.vin_registry_confirm', vin_id=row.id) }}" class="d-inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-sm btn-orange">Подтвердить нанесение VIN</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
 {% if current_user.can_view_all %}
 <form method="get" class="app-card p-3 mb-3">
     <input type="hidden" name="tab" value="{{ active_tab }}">
@@ -244,7 +274,7 @@
                         <td class="text-end">
                             <div class="d-flex gap-1 justify-content-end flex-wrap">
                                 <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.produced_unit_change_item', unit_id=unit.id) }}">Комплектация</a>
-                                <a class="btn btn-sm btn-orange" href="{{ url_for('main.logistics_assign_vin', unit_id=unit.id) }}">Привязать VIN</a>
+                                <span class="badge text-bg-warning">Ждёт VIN от логиста</span>
                             </div>
                         </td>
                     </tr>

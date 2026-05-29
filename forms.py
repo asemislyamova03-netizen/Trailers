@@ -73,6 +73,21 @@ class WarehouseForm(IdempotentFlaskForm):
     )
     is_active = BooleanField('Активен', default=True)
     is_production = BooleanField('Производственный склад / склад выпуска', default=False)
+    warehouse_kind = SelectField(
+        'Тип склада',
+        choices=[
+            ('finished_goods', 'Готовая продукция / продажи'),
+            ('assembly', 'Сборка / производственный учет'),
+            ('raw_materials', 'Сырьё / металлопрокат'),
+            ('service', 'Сервисный'),
+            ('other', 'Другое'),
+        ],
+        default='finished_goods',
+        validators=[DataRequired()],
+    )
+    can_sell = BooleanField('Можно продавать с этого склада', default=True)
+    can_ship_to_customer = BooleanField('Можно отгружать клиенту', default=True)
+    primary_product_category = SelectField('Основная категория', coerce=str, validators=[Optional()])
     submit = SubmitField('Сохранить')
 
 
@@ -83,10 +98,13 @@ class ItemForm(IdempotentFlaskForm):
         'Тип позиции',
         choices=[
             ('TRAILER', 'Прицеп'),
-            ('PART', 'Комплектующее'),
+            ('COMPONENT', 'Комплектующее'),
         ],
         validators=[DataRequired()]
     )
+    product_category_id = SelectField('Категория номенклатуры', coerce=int, validators=[Optional()])
+    is_sellable = BooleanField('Можно продавать отдельно', default=True)
+    requires_vin = BooleanField('Требует VIN', default=False)
     article = StringField(
         'Артикул',
         validators=[Optional(), Length(max=64)]

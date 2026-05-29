@@ -14,6 +14,10 @@
     {% if can_manage and order.status != 'cancelled' and not order.is_shipped %}
       <a class="btn btn-soft" href="{{ url_for('main.order_edit', order_id=order.id) }}"><i class="bi bi-pencil me-1"></i>Редактировать</a>
       <button class="btn btn-orange" data-bs-toggle="modal" data-bs-target="#paymentModal"><i class="bi bi-cash-coin me-1"></i>Добавить оплату</button>
+      <form method="post" action="{{ url_for('main.order_realization_create', order_id=order.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-soft"><i class="bi bi-journal-check me-1"></i>Создать реализацию</button>
+      </form>
     {% endif %}
     {% if current_user.is_admin %}
       <form method="post" action="{{ url_for('main.order_delete', order_id=order.id) }}" onsubmit="return confirm('Удалить заказ {{ order.order_number }}? Это можно сделать только если по заказу нет резервов, оплат, договора, VIN, производства и перемещений.');">
@@ -31,6 +35,7 @@
     <div class="col-md-2"><div class="text-muted">Остаток</div><div class="fw-semibold">{{ order.remaining_amount|money }}</div></div>
     <div class="col-md-2"><div class="text-muted">Кол-во</div><div class="fw-semibold">{{ order.quantity or 1 }} шт.</div></div>
     <div class="col-md-2"><div class="text-muted">Документы</div><div class="fw-semibold">{{ order.document_status|status_label }}</div></div>
+    <div class="col-md-2"><div class="text-muted">Реализация</div><div class="fw-semibold">{{ order.realization_status|status_label }}</div></div>
     <div class="col-md-2"><div class="text-muted">План выдачи</div><div class="fw-semibold">{{ order.planned_ship_date|date_format if order.planned_ship_date else 'не задан' }}</div></div>
   </div>
 </div>

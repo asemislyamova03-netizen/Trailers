@@ -13,6 +13,7 @@
         <tr>
             <th>ID</th>
             <th>Тип</th>
+            <th>Категория</th>
             <th>Артикул</th>
             <th>Наименование</th>
             <th>Оси</th>
@@ -28,6 +29,7 @@
         <tr>
             <td>{{ i.id }}</td>
             <td>{{ i.item_type }}</td>
+            <td>{{ i.product_category.name if i.product_category else '' }}</td>
             <td>{{ i.article or '' }}</td>
             <td>{{ i.name }}</td>
             <td>{{ i.axle_count or '' }}</td>

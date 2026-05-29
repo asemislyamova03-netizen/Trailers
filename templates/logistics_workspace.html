@@ -45,12 +45,7 @@
           <td>{% if row.customer_order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=row.customer_order.id) }}">{{ row.customer_order.order_number }}</a>{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
           <td>{% if row.trailer %}Trailer #{{ row.trailer.id }}{% else %}<span class="text-muted">не привязан</span>{% endif %}</td>
           <td>{{ row.assigned_at|date_format }}</td>
-          <td class="text-end">
-            <form method="post" action="{{ url_for('main.vin_registry_confirm', vin_id=row.id) }}" class="d-inline">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <button class="btn btn-sm btn-orange">Подтвердить нанесение VIN</button>
-            </form>
-          </td>
+          <td class="text-end"><span class="badge text-bg-warning">Ждёт подтверждения менеджера</span></td>
         </tr>
       {% else %}
         <tr><td colspan="5" class="text-muted p-3">Нет назначенных VIN без подтверждения</td></tr>

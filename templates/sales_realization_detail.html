@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Реализация {{ realization.number or realization.id }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+  <div>
+    <h1 class="h4 mb-1">Реализация {{ realization.number or realization.id }}</h1>
+    <div class="text-muted">
+      {{ realization.realization_date|date_format }} · {{ realization.customer.name if realization.customer else '' }}
+    </div>
+  </div>
+  <div class="d-flex gap-2">
+    {% if realization.order %}
+      <a class="btn btn-soft" href="{{ url_for('main.order_detail', order_id=realization.order.id) }}">Заказ</a>
+    {% endif %}
+    {% if realization.status == 'draft' %}
+      <form method="post" action="{{ url_for('main.sales_realization_post', realization_id=realization.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-orange">Провести</button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="kpi-grid mb-3">
+  <div class="app-card kpi-card"><div><div class="kpi-title">Статус</div><div class="kpi-value">{{ realization.status|status_label }}</div><div class="kpi-caption">документ реализации</div></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Сумма</div><div class="kpi-value">{{ realization.total_amount|money }}</div><div class="kpi-caption">{{ realization.currency }}</div></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">1С</div><div class="kpi-value">{{ realization.one_c_export_status|status_label }}</div><div class="kpi-caption">подготовка к экспорту</div></div></div>
+</div>
+
+<div class="app-card">
+  <div class="card-header">Строки реализации</div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead><tr><th>#</th><th>Тип</th><th>Артикул</th><th>Наименование</th><th>VIN</th><th>Кол-во</th><th>Цена</th><th>Сумма</th><th>Складской эффект</th></tr></thead>
+      <tbody>
+      {% for line in realization.lines %}
+        <tr>
+          <td>{{ line.line_no }}</td>
+          <td>{{ line.line_type }}</td>
+          <td>{{ line.article_snapshot or (line.item.article if line.item else '') }}</td>
+          <td>{{ line.product_name_snapshot or (line.item.name if line.item else '') }}</td>
+          <td>{{ line.vin_full or '' }}</td>
+          <td>{{ line.quantity }} {{ line.unit }}</td>
+          <td>{{ line.unit_price|money }}</td>
+          <td>{{ line.total_price|money }}</td>
+          <td>{{ line.inventory_effect }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="9" class="text-muted p-3">Строк нет.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

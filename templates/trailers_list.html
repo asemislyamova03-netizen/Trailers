@@ -27,6 +27,14 @@
         </select>
     </div>
     <div class="col-md-2">
+        <select name="category" class="form-select">
+            <option value="all" {% if category_filter == 'all' %}selected{% endif %}>Все категории</option>
+            {% for c in categories %}
+                <option value="{{ c.code }}" {% if category_filter == c.code %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-md-2">
         <select name="warehouse_id" class="form-select">
             <option value="">Все склады</option>
             {% for w in warehouses %}
@@ -36,7 +44,7 @@
             {% endfor %}
         </select>
     </div>
-    <div class="col-md-2">
+    <div class="col-md-1">
         <button type="submit" class="btn btn-outline-secondary w-100">Фильтр</button>
     </div>
 </form>
@@ -47,6 +55,7 @@
             <th>ID</th>
             <th>VIN</th>
             <th>Артикул</th>
+            <th>Категория</th>
             <th>Номенклатура</th>
             <th>Склад</th>
             <th>Статус</th>
@@ -59,6 +68,7 @@
             <td>{{ t.id }}</td>
             <td>{{ t.vin }}</td>
             <td>{{ t.item.article if t.item else '' }}</td>
+            <td>{{ t.item.product_category.name if t.item and t.item.product_category else 'Прицеп' }}</td>
             <td>{{ t.item.name if t.item else '' }}</td>
             <td>{{ t.warehouse.name if t.warehouse else '' }}</td>
             <td>

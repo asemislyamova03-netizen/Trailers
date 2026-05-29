@@ -22,6 +22,8 @@
                         <th>Название</th>
                         <th>Активен</th>
                         <th>Производственный</th>
+                        <th>Продажи</th>
+                        <th>Категория</th>
                         {% if current_user.is_admin %}<th></th>{% endif %}
                     </tr>
                     </thead>
@@ -32,6 +34,8 @@
                             <td class="fw-semibold">{{ w.name }}</td>
                             <td>{% if w.is_active %}<span class="badge text-bg-success">Да</span>{% else %}<span class="badge text-bg-secondary">Нет</span>{% endif %}</td>
                             <td>{% if w.is_production %}<span class="badge text-bg-warning">Склад выпуска</span>{% else %}<span class="text-muted">Нет</span>{% endif %}</td>
+                            <td>{% if w.can_sell %}<span class="badge text-bg-success">Можно</span>{% else %}<span class="badge text-bg-secondary">Нет</span>{% endif %}</td>
+                            <td>{{ w.primary_product_category or '' }}</td>
                             {% if current_user.is_admin %}
                             <td class="text-end">
                                 <form method="post" action="{{ url_for('main.warehouse_set_production_flag', warehouse_id=w.id) }}">
@@ -43,7 +47,7 @@
                             {% endif %}
                         </tr>
                     {% else %}
-                        <tr><td colspan="{{ 5 if current_user.is_admin else 4 }}" class="text-muted p-3">Складов нет</td></tr>
+                        <tr><td colspan="{{ 7 if current_user.is_admin else 6 }}" class="text-muted p-3">Складов нет</td></tr>
                     {% endfor %}
                     </tbody>
                 </table>
@@ -69,6 +73,22 @@
                 <div class="form-check mb-3">
                     {{ form.is_production(class="form-check-input") }}
                     {{ form.is_production.label(class="form-check-label") }}
+                </div>
+                <div class="mb-3">
+                    {{ form.warehouse_kind.label(class="form-label") }}
+                    {{ form.warehouse_kind(class="form-select") }}
+                </div>
+                <div class="mb-3">
+                    {{ form.primary_product_category.label(class="form-label") }}
+                    {{ form.primary_product_category(class="form-select") }}
+                </div>
+                <div class="form-check mb-2">
+                    {{ form.can_sell(class="form-check-input") }}
+                    {{ form.can_sell.label(class="form-check-label") }}
+                </div>
+                <div class="form-check mb-3">
+                    {{ form.can_ship_to_customer(class="form-check-input") }}
+                    {{ form.can_ship_to_customer.label(class="form-check-label") }}
                 </div>
                 <button type="submit" class="btn btn-orange">{{ form.submit.label.text }}</button>
             </form>

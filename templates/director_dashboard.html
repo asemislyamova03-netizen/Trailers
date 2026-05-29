@@ -53,6 +53,15 @@
         <option value="ready_to_send" {% if status_filter == 'ready_to_send' %}selected{% endif %}>Готово к отправке</option>
       </select>
     </div>
+    <div class="col-md-2">
+      <label class="form-label">Категория</label>
+      <select name="category" class="form-select">
+        <option value="all" {% if category_filter == 'all' %}selected{% endif %}>Все</option>
+        {% for c in categories %}
+          <option value="{{ c.code }}" {% if category_filter == c.code %}selected{% endif %}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
     <div class="col-md-1 d-grid">
       <button class="btn btn-orange" type="submit">Показать</button>
     </div>
@@ -265,6 +274,7 @@
       <thead>
         <tr>
           <th>Модель / артикул</th>
+          <th>Категория</th>
           {% for warehouse in warehouses %}
             {% if not warehouse_id or warehouse.id == warehouse_id %}<th>{{ warehouse.name }}</th>{% endif %}
           {% endfor %}
@@ -283,6 +293,7 @@
             {{ row.item.article or row.item.name }}
             <div class="text-muted small">{{ row.item.name }}</div>
           </td>
+          <td>{{ row.item.product_category.name if row.item.product_category else '' }}</td>
           {% for warehouse in warehouses %}
             {% if not warehouse_id or warehouse.id == warehouse_id %}<td>{{ row.warehouses[warehouse.id] }}</td>{% endif %}
           {% endfor %}
@@ -300,7 +311,7 @@
           </td>
         </tr>
       {% else %}
-        <tr><td colspan="{{ warehouses|length + 7 }}" class="text-muted p-4">Нет ненулевых строк по выбранным фильтрам</td></tr>
+        <tr><td colspan="{{ warehouses|length + 8 }}" class="text-muted p-4">Нет ненулевых строк по выбранным фильтрам</td></tr>
       {% endfor %}
       </tbody>
     </table>

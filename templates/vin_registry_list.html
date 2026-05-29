@@ -13,6 +13,7 @@
     <div class="col-md-2"><label class="form-label">Статус</label><select name="status" class="form-select"><option value="">Все</option>{% for s in ['free','reserved','assigned','confirmed','void'] %}<option value="{{ s }}" {% if filters.status == s %}selected{% endif %}>{{ s|status_label }}</option>{% endfor %}</select></div>
     <div class="col-md-2"><label class="form-label">Год</label><input name="year" value="{{ filters.year }}" class="form-control"></div>
     <div class="col-md-2"><label class="form-label">Модификация</label><input name="modification" value="{{ filters.modification }}" class="form-control"></div>
+    <div class="col-md-2"><label class="form-label">Категория</label><select name="category" class="form-select"><option value="all" {% if filters.category == 'all' %}selected{% endif %}>Все</option>{% for c in categories %}<option value="{{ c.code }}" {% if filters.category == c.code %}selected{% endif %}>{{ c.name }}</option>{% endfor %}</select></div>
     <div class="col-md-2"><label class="form-label">serial7</label><input name="serial7" value="{{ filters.serial7 }}" class="form-control"></div>
     <div class="col-md-2"><label class="form-label">Документы</label><select name="docs" class="form-select"><option value="">Все</option><option value="issued" {% if filters.docs == 'issued' %}selected{% endif %}>выданы</option><option value="not_issued" {% if filters.docs == 'not_issued' %}selected{% endif %}>не выданы</option></select></div>
     <div class="col-md-2"><label class="form-label">Заказ / клиент / VIN</label><input name="q" value="{{ filters.q }}" class="form-control"></div>
@@ -20,6 +21,7 @@
   </form>
 </div>
 
+{% if not current_user.is_manager %}
 <div class="app-card p-3 mb-3">
   <form method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -36,16 +38,18 @@
     </div>
   </form>
 </div>
+{% endif %}
 
 <div class="app-card p-3">
   <div class="table-responsive">
     <table class="table table-sm align-middle vin-registry-table">
-      <thead><tr><th>VIN</th><th></th><th>serial7</th><th>Модификация</th><th>Год</th><th>Статус</th><th>Документы</th><th>Заказ</th><th class="d-none d-lg-table-cell">Договор</th><th>Клиент</th><th class="d-none d-xl-table-cell">Прицеп</th><th class="d-none d-xl-table-cell">Кто резервировал</th><th class="d-none d-lg-table-cell">Дата</th><th class="d-none d-xl-table-cell">Комментарий</th></tr></thead>
+      <thead><tr><th>VIN</th><th></th><th>Категория</th><th>serial7</th><th>Модификация</th><th>Год</th><th>Статус</th><th>Документы</th><th>Заказ</th><th class="d-none d-lg-table-cell">Договор</th><th>Клиент</th><th class="d-none d-xl-table-cell">Прицеп</th><th class="d-none d-xl-table-cell">Кто резервировал</th><th class="d-none d-lg-table-cell">Дата</th><th class="d-none d-xl-table-cell">Комментарий</th></tr></thead>
       <tbody>
       {% for row in rows %}
         <tr>
           <td class="fw-semibold">{{ row.vin_full or '—' }}</td>
           <td><a class="btn btn-sm btn-soft" href="{{ url_for('main.vin_registry_detail', vin_id=row.id) }}">Открыть</a></td>
+          <td>{{ vin_category_name(row) if vin_category_name else '' }}</td>
           <td>{{ row.serial7 }}</td>
           <td>{{ row.vin_modification_code or '' }}</td>
           <td>{{ row.year_code or '' }}</td>
@@ -60,7 +64,7 @@
           <td class="d-none d-xl-table-cell">{{ row.comment or '' }}</td>
         </tr>
       {% else %}
-        <tr><td colspan="14" class="text-muted">VIN не найдены.</td></tr>
+        <tr><td colspan="15" class="text-muted">VIN не найдены.</td></tr>
       {% endfor %}
       </tbody>
     </table>
