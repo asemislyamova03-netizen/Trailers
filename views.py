@@ -12601,9 +12601,12 @@ def director_report(section='sales'):
         missing_columns = sorted(required_columns - existing_columns)
         if missing_columns:
             report_warning = (
-                'Диагностика связей строк недоступна: в БД нет колонок '
+                'Диагностика связей строк ждёт серверную миграцию: в БД нет колонок '
                 + ', '.join(missing_columns)
-                + '. Выполните flask db upgrade и перезапустите сервис.'
+                + '. Нужны ревизии c2d4e6f8a9b0 и d3e5f7a9b1c2. '
+                + 'На сервере выполните: cd ~/Trailers; source venv_trailers/bin/activate; '
+                + 'export FLASK_APP=app:create_app; flask db upgrade; flask db current; '
+                + 'sudo systemctl restart trailers.service.'
             )
             cards = [
                 {'title': 'Проверено строк', 'value': 0, 'caption': 'миграция не применена'},
