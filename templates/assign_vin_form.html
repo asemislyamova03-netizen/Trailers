@@ -8,12 +8,23 @@
   <div class="alert alert-secondary">Единица #{{ unit.id }}: {{ unit.item.article if unit.item else '' }} {{ unit.item.name if unit.item else '' }}</div>
   {% if reserved_vin_row %}
     <div class="alert alert-warning">По заказу зарезервирован VIN: <strong>{{ reserved_vin_row.vin_full }}</strong>.<br>Будет привязан именно этот VIN.</div>
+  {% elif expected_modification %}
+    <div class="alert alert-info">Показаны свободные VIN из реестра с модификацией <strong>{{ expected_modification }}</strong>.</div>
   {% endif %}
   <form method="post" class="row g-3">
     {{ form.hidden_tag() }}
-    <div class="col-md-6">{{ form.vin.label(class="form-label") }}{{ form.vin(class="form-control", readonly=reserved_vin_row is not none) }}{% for e in form.vin.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}</div>
+    <div class="col-md-6">
+      {{ form.vin_registry_id.label(class="form-label") }}
+      {{ form.vin_registry_id(class="form-select") }}
+      {% if not vin_options %}
+        <div class="form-text text-danger">Нет свободных VIN в реестре. Сначала логист должен загрузить VIN в реестр.</div>
+      {% else %}
+        <div class="form-text">VIN выбирается только из реестра. Ручной ввод отключён.</div>
+      {% endif %}
+      {% for e in form.vin_registry_id.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+    </div>
     <div class="col-md-6">{{ form.manufacture_date.label(class="form-label") }}{{ form.manufacture_date(class="form-control") }}</div>
-    <div class="col-12"><button class="btn btn-orange">{{ 'Привязать зарезервированный VIN' if reserved_vin_row else 'Присвоить VIN' }}</button> <a class="btn btn-soft" href="{{ back_url or url_for('main.vin_registry_list') }}">Назад</a></div>
+    <div class="col-12"><button class="btn btn-orange" {% if not vin_options %}disabled{% endif %}>{{ 'Привязать зарезервированный VIN' if reserved_vin_row else 'Присвоить VIN' }}</button> <a class="btn btn-soft" href="{{ back_url or url_for('main.vin_registry_list') }}">Назад</a></div>
   </form>
 </div>
 {% endblock %}

@@ -10819,20 +10819,40 @@ def logistics_assign_vin(unit_id):
     reserved_vin_row = context.get('vin_registry')
     if reserved_vin_row and (reserved_vin_row.status != 'reserved' or not reserved_vin_row.vin_full):
         reserved_vin_row = None
+    line = unit.production_request_line
+    expected_modification = None
+    if line and line.order_line:
+        expected_modification = _order_line_vin_modification_code(line.order_line, line.order_line.order)
+    elif line and line.supply_need and line.supply_need.vin_modification_code:
+        expected_modification = line.supply_need.vin_modification_code
+    if reserved_vin_row:
+        vin_options = [reserved_vin_row]
+    else:
+        vin_query = VinRegistry.query.filter(
+            VinRegistry.status == 'free',
+            VinRegistry.vin_full.isnot(None),
+            VinRegistry.trailer_id.is_(None),
+        )
+        if expected_modification:
+            vin_query = vin_query.filter(VinRegistry.vin_modification_code == expected_modification)
+        vin_options = vin_query.order_by(
+            VinRegistry.serial7.desc().nullslast(),
+            VinRegistry.vin_full.desc().nullslast(),
+            VinRegistry.id.desc(),
+        ).limit(100).all()
+    form.vin_registry_id.choices = [(row.id, f'{row.vin_full} · {row.serial7 or ""}') for row in vin_options]
     if unit.status != 'produced_no_vin':
         flash('По этой единице VIN уже присвоен или она недоступна.', 'warning')
         return redirect(back_url)
     if request.method == 'GET':
         form.manufacture_date.data = date.today()
         if reserved_vin_row:
-            form.vin.data = reserved_vin_row.vin_full
+            form.vin_registry_id.data = reserved_vin_row.id
     if form.validate_on_submit():
         production_warehouse = _default_production_warehouse()
         if not production_warehouse:
             flash('Производственный склад не найден. В справочнике складов отметьте нужный склад как производственный.', 'danger')
-            return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row, back_url=back_url)
-        vin = reserved_vin_row.vin_full if reserved_vin_row else (form.vin.data or '').strip().upper()
-        line = unit.production_request_line
+            return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row, back_url=back_url, expected_modification=expected_modification, vin_options=vin_options)
         order = unit.order if unit.order_id else None
         if not order and line and line.supply_need:
             order = line.supply_need.order
@@ -10843,37 +10863,24 @@ def logistics_assign_vin(unit_id):
                     abort(403)
             elif target_warehouse_id and current_user.warehouse_id != target_warehouse_id:
                 abort(403)
+        vin_registry_row = reserved_vin_row or VinRegistry.query.get(form.vin_registry_id.data)
+        if not vin_registry_row or vin_registry_row.id not in [row.id for row in vin_options]:
+            flash('Выберите доступный VIN из реестра.', 'danger')
+            return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row, back_url=back_url, expected_modification=expected_modification, vin_options=vin_options)
+        if vin_registry_row.status not in ('free', 'reserved') or not vin_registry_row.vin_full or vin_registry_row.trailer_id:
+            flash('Этот VIN уже недоступен для присвоения.', 'danger')
+            return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row, back_url=back_url, expected_modification=expected_modification, vin_options=vin_options)
+        vin = vin_registry_row.vin_full
         existing_trailer = Trailer.query.filter_by(vin=vin).first()
-        vin_registry_row = reserved_vin_row
-        parsed = None
-        if not vin_registry_row:
-            parsed, error = _parse_vin_full(vin)
-            if error:
-                form.vin.errors.append(error)
-                return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row, back_url=back_url)
-            vin_registry_row = VinRegistry.query.filter(or_(VinRegistry.vin_full == vin, VinRegistry.serial7 == parsed['serial7'])).first()
-            if vin_registry_row and not existing_trailer and vin_registry_row.status not in ('free', 'reserved'):
-                form.vin.errors.append('Этот VIN уже занят в реестре.')
-                return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row, back_url=back_url)
-            if not vin_registry_row:
-                vin_registry_row = VinRegistry(status='free', source='logistics_assign', **parsed)
-                db.session.add(vin_registry_row)
-                db.session.flush()
-                _add_vin_event(vin_registry_row, 'created', None, 'free', comment='Создан при присвоении VIN')
-            elif not vin_registry_row.vin_full:
-                vin_registry_row.prefix = parsed['prefix']
-                vin_registry_row.vin_modification_code = parsed['vin_modification_code']
-                vin_registry_row.year_code = parsed['year_code']
-                vin_registry_row.vin_full = parsed['vin_full']
         idem_key, duplicate = _reserve_idempotency_key()
         if duplicate:
             return _duplicate_redirect(idem_key, back_url)
         if existing_trailer:
-            form.vin.errors.append(
+            form.vin_registry_id.errors.append(
                 f'VIN уже есть у прицепа Trailer #{existing_trailer.id} на складе. '
                 'Нельзя присвоить этот VIN новой выпущенной единице, иначе получится дубль.'
             )
-            return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row, back_url=back_url)
+            return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row, back_url=back_url, expected_modification=expected_modification, vin_options=vin_options)
         trailer_status = 'IN_STOCK'
         if order:
             trailer_status = 'SOLD' if order.documents_issued or order.status == 'sold_not_shipped' else 'RESERVED'
@@ -10912,7 +10919,7 @@ def logistics_assign_vin(unit_id):
         db.session.commit()
         flash('VIN присвоен. Прицеп создан на производственном складе.', 'success')
         return redirect(back_url)
-    return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row, back_url=back_url)
+    return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row, back_url=back_url, expected_modification=expected_modification, vin_options=vin_options)
 
 
 @main_bp.route('/logistics/produced-units/<int:unit_id>/change-item', methods=['GET', 'POST'])

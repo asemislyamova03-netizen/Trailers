@@ -230,11 +230,48 @@
             <a class="btn btn-sm btn-soft" href="{{ url_for('main.orders_list', status='waiting_realization') }}">Какие реализации не проведены?</a>
             <a class="btn btn-sm btn-soft" href="{{ url_for('main.orders_list', status='waiting_movement') }}">Где нужно перемещение?</a>
             <a class="btn btn-sm btn-soft" href="{{ url_for('main.stock_replenishment_list') }}">Пополнение склада</a>
-            <a class="btn btn-sm btn-soft" href="{{ url_for('main.vin_registry_list', status='free') }}">VIN для выпуска</a>
+            <a class="btn btn-sm btn-soft" href="{{ url_for('main.manager_workspace', tab='assistant') }}">Выпущено без VIN</a>
             <a class="btn btn-sm btn-soft" href="{{ url_for('main.stock_movements_list') }}">Перемещения на склад</a>
           </div>
         </div>
       </div>
+      {% if stock_replenishment_needs_vin %}
+      <div class="col-12">
+        <div class="app-card p-3">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h2 class="h6 mb-0">Выпущено без VIN</h2>
+            <a class="btn btn-sm btn-soft" href="{{ url_for('main.stock_replenishment_list') }}">Все пополнения</a>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+              <thead>
+                <tr>
+                  <th>Модель</th>
+                  <th>Склад назначения</th>
+                  <th>Выпуск</th>
+                  <th class="text-end">Действие</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for unit in stock_replenishment_needs_vin %}
+                  <tr>
+                    <td>
+                      <div class="fw-semibold">{{ unit.item.article if unit.item else 'Без номенклатуры' }}</div>
+                      <div class="small text-muted">{{ unit.item.name if unit.item else '' }}</div>
+                    </td>
+                    <td>{{ unit.target_warehouse.name if unit.target_warehouse else 'не задан' }}</td>
+                    <td>{{ (unit.produced_at or unit.created_at)|date_format }}</td>
+                    <td class="text-end">
+                      <a class="btn btn-sm btn-orange" href="{{ url_for('main.logistics_assign_vin', unit_id=unit.id) }}">Присвоить VIN</a>
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      {% endif %}
     </div>
   </div>
 </div>

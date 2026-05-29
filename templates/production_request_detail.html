@@ -95,7 +95,7 @@
                     </div>
                   {% elif unit.status == 'produced_no_vin' %}
                     <div class="text-warning mt-1">Выпущено, ждёт VIN</div>
-                    {% if current_user.is_admin or current_user.is_director %}
+                    {% if current_user.is_admin or current_user.is_director or current_user.is_manager %}
                       <a class="btn btn-sm btn-orange mt-1" href="{{ url_for('main.logistics_assign_vin', unit_id=unit.id) }}">Присвоить VIN</a>
                     {% endif %}
                   {% endif %}

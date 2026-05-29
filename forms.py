@@ -749,7 +749,7 @@ class ProductionRequestLineForm(IdempotentFlaskForm):
 
 
 class AssignVinForm(IdempotentFlaskForm):
-    vin = StringField('VIN', validators=[DataRequired(), Length(max=50)])
+    vin_registry_id = SelectField('VIN из реестра', coerce=int, validators=[DataRequired()])
     manufacture_date = DateField('Дата выпуска', format='%Y-%m-%d', validators=[Optional()])
     submit = SubmitField('Присвоить VIN')
 

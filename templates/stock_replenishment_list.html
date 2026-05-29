@@ -117,7 +117,7 @@
       <div class="d-flex flex-column gap-2 align-items-start align-items-xl-end">
         {% if st.needs_vin_qty %}
           <div class="text-warning fw-semibold">Выпущено, ждёт VIN</div>
-          {% if current_user.is_admin or current_user.is_director %}
+          {% if current_user.is_admin or current_user.is_director or current_user.is_manager %}
             <a class="btn btn-sm btn-orange" href="{{ url_for('main.logistics_assign_vin', unit_id=st.needs_vin_units[0].id) }}">Присвоить VIN</a>
           {% else %}
             <span class="text-muted small">Следующий шаг менеджера: присвоить VIN выпущенной единице.</span>
