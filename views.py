@@ -175,11 +175,7 @@ def can_receive_movement(movement: StockMovement) -> bool:
     if current_user.is_admin or current_user.is_director:
         return True
     if current_user.is_manager:
-        return bool(
-            (movement.order and movement.order.assigned_user_id == current_user.id)
-            or not movement.order_id
-            or current_user.warehouse_id == movement.to_warehouse_id
-        )
+        return True
     return False
 
 
@@ -1314,10 +1310,10 @@ def manager_workspace():
         .join(SupplyNeed, SupplyNeed.id == ProductionRequestLine.supply_need_id)
         .filter(SupplyNeed.need_type.in_(['STOCK_REPLENISHMENT', 'WAREHOUSE_STOCK']))
     )
-    if current_user.is_manager and current_user.warehouse_id:
-        stock_need_scope = stock_need_scope.filter(SupplyNeed.warehouse_id == current_user.warehouse_id)
-        stock_unit_scope = stock_unit_scope.filter(ProducedUnit.target_warehouse_id == current_user.warehouse_id)
-    elif warehouse_id:
+    if request.args.get('warehouse_id', type=int):
+        stock_need_scope = stock_need_scope.filter(SupplyNeed.warehouse_id == warehouse_id)
+        stock_unit_scope = stock_unit_scope.filter(ProducedUnit.target_warehouse_id == warehouse_id)
+    elif not current_user.is_manager and warehouse_id:
         stock_need_scope = stock_need_scope.filter(SupplyNeed.warehouse_id == warehouse_id)
         stock_unit_scope = stock_unit_scope.filter(ProducedUnit.target_warehouse_id == warehouse_id)
     stock_replenishment_to_production = (
@@ -1670,8 +1666,6 @@ def trailer_edit(trailer_id):
 def trailer_change_item(trailer_id):
     trailer = Trailer.query.get_or_404(trailer_id)
     back_url = url_for('main.trailers_list', status='IN_STOCK', vin=trailer.vin or '') if current_user.is_manager else url_for('main.trailers_list', vin=trailer.vin or '')
-    if current_user.is_manager and trailer.warehouse_id != current_user.warehouse_id:
-        abort(403)
     ok, message = _can_change_trailer_item(trailer)
     if not ok:
         flash(message, 'danger')
@@ -1772,10 +1766,6 @@ def trailer_delete(trailer_id):
     if not current_user.is_admin:
         abort(403)
     trailer = Trailer.query.get_or_404(trailer_id)
-
-    if getattr(current_user, 'is_manager', False) and trailer.warehouse_id != current_user.warehouse_id:
-        flash('Нет доступа к этому прицепу', 'danger')
-        return redirect(url_for('main.trailers_list'))
 
     # если есть договоры — не даём удалить
     if trailer.sales_contracts:
@@ -6250,8 +6240,6 @@ def _fill_supply_need_form_choices(form: SupplyNeedForm) -> None:
 
 def _fill_stock_replenishment_form_choices(form: StockReplenishmentForm) -> None:
     warehouses = Warehouse.query.filter_by(is_active=True).order_by(Warehouse.name).all()
-    if getattr(current_user, 'is_manager', False) and current_user.warehouse_id:
-        warehouses = [w for w in warehouses if w.id == current_user.warehouse_id]
     form.warehouse_id.choices = [(w.id, w.name) for w in warehouses]
     form.item_id.choices = [(0, '— собрать через конфигуратор —')] + [
         (i.id, f'{i.article or ""} — {i.name}')
@@ -7387,7 +7375,7 @@ def supply_needs_list():
     status = request.args.get('status', '').strip()
     query = SupplyNeed.query.join(Item, Item.id == SupplyNeed.item_id)
 
-    if not current_user.is_admin and current_user.warehouse_id:
+    if not (current_user.is_admin or current_user.is_director or current_user.is_manager) and current_user.warehouse_id:
         query = query.filter(or_(SupplyNeed.warehouse_id == current_user.warehouse_id, SupplyNeed.warehouse_id.is_(None)))
     if status:
         query = query.filter(SupplyNeed.status == status)
@@ -7463,12 +7451,10 @@ def _stock_replenishment_stats(need: SupplyNeed):
 @role_required('manager', 'director')
 def stock_replenishment_list():
     status = request.args.get('status', '').strip()
+    warehouse_id = request.args.get('warehouse_id', type=int)
     query = SupplyNeed.query.filter(SupplyNeed.need_type.in_(['STOCK_REPLENISHMENT', 'WAREHOUSE_STOCK']))
-    if current_user.is_manager:
-        if not current_user.warehouse_id:
-            flash('Пользователь не привязан к складу.', 'warning')
-            return redirect(url_for('main.manager_workspace'))
-        query = query.filter(SupplyNeed.warehouse_id == current_user.warehouse_id)
+    if warehouse_id:
+        query = query.filter(SupplyNeed.warehouse_id == warehouse_id)
     if status:
         query = query.filter(SupplyNeed.status == status)
     needs = query.order_by(SupplyNeed.created_at.desc(), SupplyNeed.id.desc()).all()
@@ -7482,15 +7468,11 @@ def stock_replenishment_create():
     form = StockReplenishmentForm()
     _fill_stock_replenishment_form_choices(form)
 
-    if current_user.is_manager and not current_user.warehouse_id:
-        flash('Пользователь не привязан к складу. Обратитесь к администратору.', 'warning')
-        return redirect(url_for('main.manager_workspace'))
-
     if request.method == 'GET' and current_user.is_manager:
         form.warehouse_id.data = current_user.warehouse_id
 
     if form.validate_on_submit():
-        warehouse_id = current_user.warehouse_id if current_user.is_manager else form.warehouse_id.data
+        warehouse_id = form.warehouse_id.data
         if not warehouse_id:
             flash('Выберите склад назначения.', 'danger')
             return render_template('stock_replenishment_form.html', form=form, title='Заказать на склад', config_options=_trailer_config_form_context())
@@ -7804,8 +7786,6 @@ def order_detail(order_id):
     ).order_by(Trailer.vin)
     if order.warehouse_id:
         stock_query = stock_query.filter(Trailer.warehouse_id == order.warehouse_id)
-    elif current_user.is_manager:
-        stock_query = stock_query.filter(Trailer.warehouse_id == current_user.warehouse_id)
     available_stock_trailers = [
         trailer for trailer in stock_query.all()
         if _trailer_available_for_sale(trailer, exclude_order_id=order.id)
@@ -7974,7 +7954,6 @@ def order_detail(order_id):
                 and _order_is_open_for_attachment(order)
                 and not unit.trailer_id
                 and _ensure_item_matches_order(unit.item_id, order)
-                and _ensure_target_matches_order_warehouse(unit.target_warehouse_id, order)
             )
             future_produced_unit_rows.append(context)
         production_warehouse = _default_production_warehouse()
@@ -7983,7 +7962,6 @@ def order_detail(order_id):
                 ProducedUnit.query
                 .join(Trailer, Trailer.id == ProducedUnit.trailer_id)
                 .filter(
-                    ProducedUnit.target_warehouse_id == order.warehouse_id,
                     ProducedUnit.item_id == order.item_id,
                     ProducedUnit.status == 'vin_assigned',
                     Trailer.warehouse_id == production_warehouse.id,
@@ -9184,8 +9162,6 @@ def order_reserve_trailer(order_id):
     if order.is_shipped or order.status == 'cancelled':
         abort(400)
     trailer = Trailer.query.get_or_404(request.form.get('trailer_id', type=int))
-    if current_user.is_manager and trailer.warehouse_id != current_user.warehouse_id:
-        abort(403)
     if trailer.item_id != order.item_id:
         flash('Выбранный VIN не соответствует модели заказа.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
@@ -9372,16 +9348,13 @@ def order_attach_produced_unit(order_id, unit_id):
     if not _ensure_item_matches_order(unit.item_id, order):
         flash('Выпущенная единица не соответствует модели заказа.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
-    if not _ensure_target_matches_order_warehouse(unit.target_warehouse_id, order):
-        flash('Выпущенная единица предназначена для другого склада.', 'danger')
-        return redirect(url_for('main.order_detail', order_id=order.id))
     idem_key, duplicate = _reserve_idempotency_key()
     if duplicate:
         return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
     unit.order_id = order.id
     order.fulfillment_source = 'production'
     if order.status not in ('sold_not_shipped',):
-        order.status = 'produced_waiting_vin'
+        order.status = 'waiting_transfer' if unit.target_warehouse_id and order.warehouse_id and unit.target_warehouse_id != order.warehouse_id else 'produced_waiting_vin'
     add_order_event(order, 'trailer_assigned', new_value=f'ProducedUnit #{unit.id}', comment='Выпущенная единица без VIN закреплена за заказом')
     _finish_idempotency(idem_key, 'CustomerOrder', order.id)
     db.session.commit()
@@ -10241,8 +10214,6 @@ def supply_need_edit(need_id):
 @role_required('director', 'manager')
 def supply_need_create_production_request(need_id):
     need = SupplyNeed.query.get_or_404(need_id)
-    if current_user.is_manager and current_user.warehouse_id and need.warehouse_id not in (None, current_user.warehouse_id):
-        abort(403)
     if need.status != 'NEW':
         flash('Заявку на производство можно создать только из новой потребности.', 'warning')
         return redirect(request.referrer or url_for('main.supply_needs_list'))
@@ -10409,7 +10380,7 @@ def stock_movements_list():
     scope = request.args.get('scope', '').strip()
     batch_key = request.args.get('batch_key', '').strip()
     query = StockMovement.query
-    scope_warehouse_id = current_user.warehouse_id if current_user.is_manager else (to_warehouse_id or from_warehouse_id)
+    scope_warehouse_id = to_warehouse_id or from_warehouse_id
     if scope == 'incoming' and scope_warehouse_id:
         query = query.filter(StockMovement.to_warehouse_id == scope_warehouse_id)
     elif scope == 'outgoing' and scope_warehouse_id:
@@ -11045,8 +11016,6 @@ def logistics_assign_vin(unit_id):
             if order:
                 if not can_manage_order(order):
                     abort(403)
-            elif target_warehouse_id and current_user.warehouse_id != target_warehouse_id:
-                abort(403)
         vin_registry_row = reserved_vin_row or VinRegistry.query.get(form.vin_registry_id.data)
         if not vin_registry_row or vin_registry_row.id not in [row.id for row in vin_options]:
             flash('Выберите доступный VIN из реестра.', 'danger')
@@ -11111,8 +11080,6 @@ def logistics_assign_vin(unit_id):
 def produced_unit_change_item(unit_id):
     unit = ProducedUnit.query.get_or_404(unit_id)
     back_url = url_for('main.order_detail', order_id=unit.order_id) if current_user.is_manager and unit.order_id else url_for('main.production_workspace')
-    if current_user.is_manager and unit.target_warehouse_id != current_user.warehouse_id:
-        abort(403)
     ok, message = _can_change_produced_unit_item(unit)
     if not ok:
         flash(message, 'danger')
@@ -11965,8 +11932,6 @@ def director_report(section='sales'):
 
     elif section in ('stock', 'turnover'):
         query = Trailer.query.join(Item, Item.id == Trailer.item_id)
-        if current_user.is_manager and current_user.warehouse_id:
-            query = query.filter(Trailer.warehouse_id == current_user.warehouse_id)
         if warehouse_id:
             query = query.filter(Trailer.warehouse_id == warehouse_id)
         if search:
@@ -12036,8 +12001,6 @@ def director_report(section='sales'):
 
     elif section == 'production':
         query = ProductionRequestLine.query.join(ProductionRequest, ProductionRequest.id == ProductionRequestLine.production_request_id)
-        if current_user.is_manager and current_user.warehouse_id:
-            query = query.filter(ProductionRequest.target_warehouse_id == current_user.warehouse_id)
         if warehouse_id:
             query = query.filter(ProductionRequest.target_warehouse_id == warehouse_id)
         if status_filter != 'all':
@@ -12056,8 +12019,6 @@ def director_report(section='sales'):
 
     elif section == 'movements':
         query = StockMovement.query.filter(StockMovement.created_at >= period_start, StockMovement.created_at <= period_end)
-        if current_user.is_manager and current_user.warehouse_id:
-            query = query.filter(or_(StockMovement.from_warehouse_id == current_user.warehouse_id, StockMovement.to_warehouse_id == current_user.warehouse_id))
         if warehouse_id:
             query = query.filter(or_(StockMovement.from_warehouse_id == warehouse_id, StockMovement.to_warehouse_id == warehouse_id))
         if status_filter != 'all':
