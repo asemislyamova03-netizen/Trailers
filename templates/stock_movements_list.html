@@ -19,6 +19,51 @@
   </div>
 {% endif %}
 
+<form method="get" class="app-card p-3 mb-3">
+  <div class="row g-2 align-items-end">
+    <div class="col-md-2">
+      <label class="form-label">Тип</label>
+      <select name="movement_type" class="form-select">
+        <option value="">Все</option>
+        {% for value, label in movement_type_choices %}
+          <option value="{{ value }}" {% if movement_type == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Статус</label>
+      <select name="status" class="form-select">
+        <option value="">Все</option>
+        {% for value, label in status_choices %}
+          <option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Со склада</label>
+      <select name="from_warehouse_id" class="form-select">
+        <option value="">Все</option>
+        {% for warehouse in source_warehouses %}
+          <option value="{{ warehouse.id }}" {% if from_warehouse_id == warehouse.id %}selected{% endif %}>{{ warehouse.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">На склад</label>
+      <select name="to_warehouse_id" class="form-select">
+        <option value="">Все</option>
+        {% for warehouse in target_warehouses %}
+          <option value="{{ warehouse.id }}" {% if to_warehouse_id == warehouse.id %}selected{% endif %}>{{ warehouse.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2 d-flex gap-2">
+      <button class="btn btn-soft w-100">Фильтр</button>
+      <a class="btn btn-outline-secondary" href="{{ url_for('main.stock_movements_list') }}">Сброс</a>
+    </div>
+  </div>
+</form>
+
 <div class="app-card">
   <div class="table-responsive">
     <table class="table table-hover align-middle">
@@ -49,7 +94,7 @@
           <td>{{ m.to_warehouse.name if m.to_warehouse else '' }}</td>
           <td><span class="badge text-bg-{{ m.status|status_badge_class }}">{{ m.status|status_label }}</span></td>
           <td>{{ m.departure_date|date_format }}</td>
-          <td>{{ m.arrival_date|date_format }}</td>
+          <td>{{ m.arrival_date|date_format or m.received_at|date_format }}</td>
           <td class="text-end">
             {% if current_user.is_admin or current_user.is_director or current_user.is_manager %}
               <a class="btn btn-sm btn-soft" href="{{ url_for('main.stock_movement_edit', movement_id=m.id) }}">Изменить</a>

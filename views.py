@@ -6019,6 +6019,8 @@ def _stock_movement_trailer_options(from_warehouse_id: int | None = None, q: str
             'warehouse_id': trailer.warehouse_id,
             'warehouse': trailer.warehouse.name if trailer.warehouse else '',
             'status': trailer.status,
+            'status_label': status_label(trailer.status),
+            'status_badge': status_badge_class(trailer.status),
         }
         for trailer in trailers
         if trailer.id == current_trailer_id or _trailer_available_for_movement(trailer, from_warehouse_id=from_warehouse_id, exclude_movement_id=exclude_movement_id)
@@ -9593,14 +9595,35 @@ def production_request_edit(request_id):
 @login_required
 def stock_movements_list():
     status = request.args.get('status', '').strip()
+    movement_type = request.args.get('movement_type', '').strip()
+    from_warehouse_id = request.args.get('from_warehouse_id', type=int)
+    to_warehouse_id = request.args.get('to_warehouse_id', type=int)
     batch_key = request.args.get('batch_key', '').strip()
     query = StockMovement.query
     if status:
         query = query.filter_by(status=status)
+    if movement_type:
+        query = query.filter_by(movement_type=movement_type)
+    if from_warehouse_id:
+        query = query.filter_by(from_warehouse_id=from_warehouse_id)
+    if to_warehouse_id:
+        query = query.filter_by(to_warehouse_id=to_warehouse_id)
     if batch_key:
         query = query.filter_by(batch_key=batch_key)
     movements = query.order_by(StockMovement.created_at.desc(), StockMovement.id.desc()).all()
-    return render_template('stock_movements_list.html', movements=movements, status=status, batch_key=batch_key)
+    return render_template(
+        'stock_movements_list.html',
+        movements=movements,
+        status=status,
+        movement_type=movement_type,
+        from_warehouse_id=from_warehouse_id,
+        to_warehouse_id=to_warehouse_id,
+        batch_key=batch_key,
+        source_warehouses=_trailer_source_warehouses(),
+        target_warehouses=_sales_warehouses(),
+        movement_type_choices=StockMovementForm().movement_type.choices,
+        status_choices=StockMovementForm().status.choices,
+    )
 
 
 @main_bp.route('/stock-movements/new', methods=['GET', 'POST'])
@@ -9661,6 +9684,7 @@ def stock_movement_batch_create():
                 form=form,
                 title='Партийное перемещение',
                 selected_trailers=selected_trailers,
+                available_trailers=_stock_movement_trailer_options(form.from_warehouse_id.data or None, limit=100),
             )
         idem_key, duplicate = _reserve_idempotency_key()
         if duplicate:
@@ -9700,6 +9724,7 @@ def stock_movement_batch_create():
         form=form,
         title='Партийное перемещение',
         selected_trailers=selected_trailers,
+        available_trailers=_stock_movement_trailer_options(form.from_warehouse_id.data or None, limit=100),
     )
 
 
@@ -9738,6 +9763,8 @@ def stock_movement_edit(movement_id):
 def _apply_arrived_stock_movement(movement: StockMovement) -> None:
     if movement.status != 'arrived':
         return
+    movement.received_at = movement.received_at or datetime.utcnow()
+    movement.arrival_date = movement.arrival_date or date.today()
     if movement.trailer and movement.to_warehouse_id:
         movement.trailer.warehouse_id = movement.to_warehouse_id
         if movement.trailer.status == 'IN_TRANSIT':
@@ -9757,6 +9784,8 @@ def _apply_arrived_stock_movement(movement: StockMovement) -> None:
 def _apply_sent_stock_movement(movement: StockMovement) -> None:
     if movement.status not in ('sent', 'in_transit'):
         return
+    movement.moved_at = movement.moved_at or datetime.utcnow()
+    movement.departure_date = movement.departure_date or date.today()
     if movement.trailer:
         if movement.trailer.status != 'SOLD':
             movement.trailer.status = 'IN_TRANSIT'

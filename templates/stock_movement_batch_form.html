@@ -54,6 +54,24 @@
       </div>
       <datalist id="batchTrailerOptions"></datalist>
       <div class="form-text">Можно выбрать несколько VIN. Количество для VIN-прицепа всегда 1.</div>
+      <div class="table-responsive mt-2">
+        <table class="table table-sm align-middle mb-0">
+          <thead><tr><th>VIN</th><th>Модель</th><th>Склад</th><th>Статус</th><th></th></tr></thead>
+          <tbody id="availableBatchTrailers">
+            {% for trailer in available_trailers %}
+              <tr data-trailer-id="{{ trailer.id }}" data-label="{{ trailer.label }}">
+                <td class="fw-semibold">{{ trailer.vin }}</td>
+                <td>{{ trailer.item }}</td>
+                <td>{{ trailer.warehouse }}</td>
+                <td><span class="badge text-bg-{{ trailer.status_badge }}">{{ trailer.status_label }}</span></td>
+                <td class="text-end"><button class="btn btn-sm btn-soft" type="button" data-add-available-trailer>Добавить</button></td>
+              </tr>
+            {% else %}
+              <tr><td colspan="5" class="text-muted">На выбранном складе нет доступных прицепов</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <div class="col-12">
@@ -93,6 +111,7 @@
   const optionsList = document.querySelector('#batchTrailerOptions');
   const addButton = document.querySelector('#addBatchTrailer');
   const selectedBody = document.querySelector('#selectedTrailers');
+  const availableBody = document.querySelector('#availableBatchTrailers');
   let options = [];
   let timer = null;
 
@@ -121,11 +140,26 @@
         .filter((trailer) => !selected.has(String(trailer.id)))
         .map((trailer) => `<option value="${trailer.label}" data-id="${trailer.id}"></option>`)
         .join('');
+      renderAvailableRows();
     }, 180);
   }
 
-  function addSelectedTrailer() {
-    const match = options.find((trailer) => trailer.label === search.value);
+  function renderAvailableRows() {
+    if (!availableBody) return;
+    const selected = new Set(selectedIds());
+    const visible = options.filter((trailer) => !selected.has(String(trailer.id)));
+    availableBody.innerHTML = visible.length ? visible.map((trailer) => `
+      <tr data-trailer-id="${trailer.id}" data-label="${trailer.label}">
+        <td class="fw-semibold">${trailer.vin || ''}</td>
+        <td>${trailer.item || ''}</td>
+        <td>${trailer.warehouse || ''}</td>
+        <td><span class="badge text-bg-${trailer.status_badge || 'secondary'}">${trailer.status_label || trailer.status || ''}</span></td>
+        <td class="text-end"><button class="btn btn-sm btn-soft" type="button" data-add-available-trailer>Добавить</button></td>
+      </tr>
+    `).join('') : '<tr><td colspan="5" class="text-muted">На выбранном складе нет доступных прицепов</td></tr>';
+  }
+
+  function addTrailer(match) {
     if (!match || selectedIds().includes(String(match.id))) return;
     const row = document.createElement('tr');
     row.dataset.trailerId = match.id;
@@ -133,13 +167,17 @@
       <td class="fw-semibold">${match.vin}<input type="hidden" name="trailer_ids" value="${match.id}"></td>
       <td>${match.item || ''}</td>
       <td>${match.warehouse || ''}</td>
-      <td><span class="badge text-bg-secondary">${match.status || ''}</span></td>
+      <td><span class="badge text-bg-${match.status_badge || 'secondary'}">${match.status_label || match.status || ''}</span></td>
       <td class="text-end"><button class="btn btn-sm btn-outline-danger" type="button" data-remove-trailer>Убрать</button></td>
     `;
     selectedBody.appendChild(row);
     search.value = '';
     renderEmptyState();
-    refreshOptions();
+    renderAvailableRows();
+  }
+
+  function addSelectedTrailer() {
+    addTrailer(options.find((trailer) => trailer.label === search.value));
   }
 
   selectedBody.addEventListener('click', (event) => {
@@ -147,8 +185,23 @@
     if (!button) return;
     button.closest('tr').remove();
     renderEmptyState();
-    refreshOptions();
+    renderAvailableRows();
   });
+  if (availableBody) {
+    availableBody.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-add-available-trailer]');
+      if (!button) return;
+      const row = button.closest('[data-trailer-id]');
+      addTrailer(options.find((trailer) => String(trailer.id) === String(row.dataset.trailerId)) || {
+        id: row.dataset.trailerId,
+        label: row.dataset.label || '',
+        vin: row.children[0].textContent.trim(),
+        item: row.children[1].textContent.trim(),
+        warehouse: row.children[2].textContent.trim(),
+        status_label: row.children[3].textContent.trim(),
+      });
+    });
+  }
   if (search) search.addEventListener('input', refreshOptions);
   if (fromWarehouse) fromWarehouse.addEventListener('change', () => {
     search.value = '';

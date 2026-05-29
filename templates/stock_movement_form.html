@@ -34,6 +34,24 @@
         Показываются прицепы со склада отправителя в статусах IN_STOCK, RESERVED или SOLD, если они ещё не отгружены клиенту и не находятся в активном перемещении.
       </div>
       {% for error in form.trailer_id.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+      <div class="table-responsive mt-2">
+        <table class="table table-sm align-middle mb-0">
+          <thead><tr><th>VIN</th><th>Модель</th><th>Склад</th><th>Статус</th><th></th></tr></thead>
+          <tbody id="movementAvailableTrailers">
+            {% for trailer in trailer_options %}
+              <tr data-trailer-id="{{ trailer.id }}" data-label="{{ trailer.label }}">
+                <td class="fw-semibold">{{ trailer.vin }}</td>
+                <td>{{ trailer.item }}</td>
+                <td>{{ trailer.warehouse }}</td>
+                <td><span class="badge text-bg-{{ trailer.status_badge }}">{{ trailer.status_label }}</span></td>
+                <td class="text-end"><button class="btn btn-sm btn-soft" type="button" data-select-trailer>Выбрать</button></td>
+              </tr>
+            {% else %}
+              <tr><td colspan="5" class="text-muted">На выбранном складе нет доступных прицепов</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <div class="col-md-6">
@@ -81,6 +99,7 @@
   const trailerInput = document.querySelector('#trailer_search');
   const trailerSelect = document.querySelector('#movement_trailer_id');
   const optionsList = document.querySelector('#movementTrailerOptions');
+  const availableBody = document.querySelector('#movementAvailableTrailers');
   let trailerOptions = Array.from(document.querySelectorAll('#movementTrailerOptions option'));
   let searchTimer = null;
 
@@ -116,9 +135,35 @@
       optionsList.innerHTML = (data.trailers || []).map((trailer) =>
         `<option value="${trailer.label}" data-id="${trailer.id}"></option>`
       ).join('');
+      if (availableBody) {
+        const trailers = data.trailers || [];
+        availableBody.innerHTML = trailers.length ? trailers.map((trailer) => `
+          <tr data-trailer-id="${trailer.id}" data-label="${trailer.label}">
+            <td class="fw-semibold">${trailer.vin || ''}</td>
+            <td>${trailer.item || ''}</td>
+            <td>${trailer.warehouse || ''}</td>
+            <td><span class="badge text-bg-${trailer.status_badge || 'secondary'}">${trailer.status_label || trailer.status || ''}</span></td>
+            <td class="text-end"><button class="btn btn-sm btn-soft" type="button" data-select-trailer>Выбрать</button></td>
+          </tr>
+        `).join('') : '<tr><td colspan="5" class="text-muted">На выбранном складе нет доступных прицепов</td></tr>';
+      }
       trailerOptions = Array.from(document.querySelectorAll('#movementTrailerOptions option'));
       syncTrailerId();
     }, 180);
+  }
+
+  if (availableBody) {
+    availableBody.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-select-trailer]');
+      if (!button || !trailerInput || !trailerSelect) return;
+      const row = button.closest('[data-trailer-id]');
+      trailerInput.value = row.dataset.label || '';
+      const id = row.dataset.trailerId;
+      trailerSelect.value = id;
+      if (!Array.from(trailerSelect.options).some((option) => option.value === id)) {
+        trailerSelect.append(new Option(row.dataset.label || id, id, true, true));
+      }
+    });
   }
 
   if (trailerInput) trailerInput.addEventListener('input', () => { refreshTrailerOptions(); syncTrailerId(); });
