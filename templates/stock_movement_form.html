@@ -31,7 +31,7 @@
       {{ form.trailer_search(class="form-control", list="movementTrailerOptions", autocomplete="off", placeholder="Введите VIN, артикул, модель или склад") }}
       <datalist id="movementTrailerOptions">
         {% for trailer in trailer_options %}
-          <option value="{{ trailer.label }}" data-id="{{ trailer.id }}"></option>
+          <option value="{{ trailer.label }}" data-id="{{ trailer.id }}" data-warehouse-id="{{ trailer.warehouse_id or '' }}"></option>
         {% endfor %}
       </datalist>
       {{ form.trailer_id(class="form-select d-none", id="movement_trailer_id") }}
@@ -44,7 +44,7 @@
           <thead><tr><th>VIN</th><th>Модель</th><th>Склад</th><th>Статус</th><th></th></tr></thead>
           <tbody id="movementAvailableTrailers">
             {% for trailer in trailer_options %}
-              <tr data-trailer-id="{{ trailer.id }}" data-label="{{ trailer.label }}">
+              <tr data-trailer-id="{{ trailer.id }}" data-label="{{ trailer.label }}" data-warehouse-id="{{ trailer.warehouse_id or '' }}">
                 <td class="fw-semibold">{{ trailer.vin }}</td>
                 <td>{{ trailer.item }}</td>
                 <td>{{ trailer.warehouse }}</td>
@@ -114,6 +114,9 @@
     if (match) {
       const id = match.dataset.id;
       trailerSelect.value = id;
+      if (fromWarehouse && match.dataset.warehouseId) {
+        fromWarehouse.value = match.dataset.warehouseId;
+      }
       if (!Array.from(trailerSelect.options).some((option) => option.value === id)) {
         trailerSelect.append(new Option(match.value, id, true, true));
       }
@@ -138,12 +141,12 @@
       if (!response.ok) return;
       const data = await response.json();
       optionsList.innerHTML = (data.trailers || []).map((trailer) =>
-        `<option value="${trailer.label}" data-id="${trailer.id}"></option>`
+        `<option value="${trailer.label}" data-id="${trailer.id}" data-warehouse-id="${trailer.warehouse_id || ''}"></option>`
       ).join('');
       if (availableBody) {
         const trailers = data.trailers || [];
         availableBody.innerHTML = trailers.length ? trailers.map((trailer) => `
-          <tr data-trailer-id="${trailer.id}" data-label="${trailer.label}">
+          <tr data-trailer-id="${trailer.id}" data-label="${trailer.label}" data-warehouse-id="${trailer.warehouse_id || ''}">
             <td class="fw-semibold">${trailer.vin || ''}</td>
             <td>${trailer.item || ''}</td>
             <td>${trailer.warehouse || ''}</td>
@@ -165,6 +168,9 @@
       trailerInput.value = row.dataset.label || '';
       const id = row.dataset.trailerId;
       trailerSelect.value = id;
+      if (fromWarehouse && row.dataset.warehouseId) {
+        fromWarehouse.value = row.dataset.warehouseId;
+      }
       if (!Array.from(trailerSelect.options).some((option) => option.value === id)) {
         trailerSelect.append(new Option(row.dataset.label || id, id, true, true));
       }

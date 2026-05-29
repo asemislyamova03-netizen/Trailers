@@ -6326,7 +6326,10 @@ def _stock_movement_trailer_options(from_warehouse_id: int | None = None, q: str
             'id': trailer.id,
             'label': _stock_movement_trailer_label(trailer),
             'vin': trailer.vin,
-            'item': trailer.item.article if trailer.item else '',
+            'item': ' — '.join(part for part in [
+                trailer.item.article if trailer.item else '',
+                trailer.item.name if trailer.item else '',
+            ] if part),
             'warehouse_id': trailer.warehouse_id,
             'warehouse': trailer.warehouse.name if trailer.warehouse else '',
             'status': trailer.status,
@@ -10409,6 +10412,10 @@ def stock_movements_list():
 def stock_movement_create():
     form = StockMovementForm()
     _fill_stock_movement_form_choices(form)
+    if request.method == 'GET':
+        form.status.data = 'in_transit'
+        form.movement_type.data = 'warehouse_transfer'
+        form.departure_date.data = date.today()
     if form.validate_on_submit():
         if not _validate_stock_movement_selection(form):
             return render_template('stock_movement_form.html', form=form, title='Новое перемещение', trailer_options=_stock_movement_trailer_options(form.from_warehouse_id.data or None, form.trailer_search.data, form.trailer_id.data or None))
@@ -10447,9 +10454,7 @@ def stock_movement_batch_create():
 
     if request.method == 'GET':
         production_warehouse = _default_production_warehouse()
-        if current_user.warehouse_id:
-            form.from_warehouse_id.data = current_user.warehouse_id
-        elif production_warehouse:
+        if production_warehouse:
             form.from_warehouse_id.data = production_warehouse.id
         form.status.data = 'in_transit'
         form.movement_type.data = 'warehouse_transfer'
@@ -10575,6 +10580,12 @@ def _apply_sent_stock_movement(movement: StockMovement) -> None:
 def _validate_stock_movement_selection(form: StockMovementForm, current_movement_id: int | None = None) -> bool:
     from_warehouse_id = form.from_warehouse_id.data or None
     to_warehouse_id = form.to_warehouse_id.data or None
+    if not from_warehouse_id:
+        flash('Выберите склад отправителя.', 'danger')
+        return False
+    if not to_warehouse_id:
+        flash('Выберите склад назначения.', 'danger')
+        return False
     if from_warehouse_id and to_warehouse_id and from_warehouse_id == to_warehouse_id:
         flash('Нельзя создать перемещение на тот же склад.', 'danger')
         return False
