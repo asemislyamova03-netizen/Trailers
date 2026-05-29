@@ -7422,6 +7422,22 @@ def _stock_replenishment_stats(need: SupplyNeed):
             and not _active_movement_for_trailer(unit.trailer.id)
         )
     ]
+    accepted_unit_ids = {
+        unit.id for unit in units
+        if unit.trailer and unit.trailer.warehouse_id == need.warehouse_id and unit.trailer.status == 'IN_STOCK'
+    }
+    accounted_unit_ids = accepted_unit_ids | {unit.id for unit in needs_vin_units} | {unit.id for unit in needs_movement_units}
+    problem_units = [
+        unit for unit in units
+        if unit.id not in accounted_unit_ids
+        and (
+            unit.order_id
+            or unit.order_line_id
+            or (unit.trailer and _trailer_has_sale_or_document_links(unit.trailer))
+            or (unit.trailer and _active_movement_for_trailer(unit.trailer.id))
+            or (unit.status not in ('produced_no_vin', 'vin_assigned'))
+        )
+    ]
     produced_qty = len(units)
     in_production_qty = sum(line.quantity or 0 for line in lines)
     production_requests = {}
@@ -7435,6 +7451,8 @@ def _stock_replenishment_stats(need: SupplyNeed):
         'needs_vin_units': needs_vin_units,
         'needs_movement_qty': len(needs_movement_units),
         'needs_movement_units': needs_movement_units,
+        'problem_qty': len(problem_units),
+        'problem_units': problem_units,
         'accepted_qty': accepted_qty,
         'remaining_qty': max((need.quantity or 0) - accepted_qty, 0),
         'production_requests': sorted(production_requests.values(), key=lambda pr: pr.created_at or datetime.min, reverse=True),

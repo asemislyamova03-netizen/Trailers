@@ -83,6 +83,9 @@
           {% if st.needs_movement_qty %}
             <span class="badge text-bg-info">Нужно переместить: {{ st.needs_movement_qty }}</span>
           {% endif %}
+          {% if st.problem_qty %}
+            <span class="badge text-bg-danger">Проблемные выпуски: {{ st.problem_qty }}</span>
+          {% endif %}
           <span class="text-muted small">{{ need.created_at|date_format }}</span>
         </div>
         <div class="fw-semibold stock-need-title">{{ need.item.article if need.item else '' }}</div>
@@ -100,6 +103,9 @@
         <div class="stock-need-metric"><div class="label">Без VIN</div><div class="value">{{ st.needs_vin_qty }}</div></div>
         <div class="stock-need-metric"><div class="label">К перемещению</div><div class="value">{{ st.needs_movement_qty }}</div></div>
         <div class="stock-need-metric"><div class="label">На складе</div><div class="value">{{ st.accepted_qty }}</div></div>
+        {% if st.problem_qty %}
+          <div class="stock-need-metric border-danger-subtle"><div class="label text-danger">Проблемы</div><div class="value text-danger">{{ st.problem_qty }}</div></div>
+        {% endif %}
         <div class="stock-need-metric"><div class="label">Осталось</div><div class="value">{{ st.remaining_qty }}</div></div>
         {% if st.needs_vin_qty %}
           <div class="stock-need-next-step bg-warning-subtle text-warning-emphasis">
@@ -110,6 +116,11 @@
           <div class="stock-need-next-step bg-info-subtle text-info-emphasis">
             <div class="fw-semibold">VIN уже присвоен</div>
             <div class="small">Следующий шаг: отправить прицеп на склад {{ need.warehouse.name if need.warehouse else '' }}.</div>
+          </div>
+        {% elif st.problem_qty %}
+          <div class="stock-need-next-step bg-danger-subtle text-danger-emphasis">
+            <div class="fw-semibold">Проблемные выпуски</div>
+            <div class="small">Выпуск не попал ни в VIN, ни в перемещение, ни на склад. Проверьте связь с продажей, перемещением или старым заказом.</div>
           </div>
         {% endif %}
       </div>
@@ -148,6 +159,23 @@
               <input type="hidden" name="reason" value="Очистка из пополнения склада">
               <button class="btn btn-sm btn-outline-danger">Удалить выпуск</button>
             </form>
+          {% endif %}
+        {% elif st.problem_qty %}
+          {% set problem_unit = st.problem_units[0] %}
+          <div class="text-danger fw-semibold">Проблемный выпуск</div>
+          <div class="small text-muted">
+            #{{ problem_unit.id }}
+            {% if problem_unit.trailer %} · {{ problem_unit.trailer.vin }} · {{ problem_unit.trailer.status|status_label }}{% endif %}
+            {% if problem_unit.order_id or problem_unit.order_line_id %} · есть связь с заказом{% endif %}
+          </div>
+          {% if current_user.is_admin %}
+            <form method="post" action="{{ url_for('main.produced_unit_admin_delete', unit_id=problem_unit.id) }}" onsubmit="return confirm('Удалить ошибочный выпуск? Если прицеп/VIN уже связан с продажей, будет удалена только производственная связь.');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="reason" value="Очистка проблемного выпуска из пополнения склада">
+              <button class="btn btn-sm btn-outline-danger">Удалить выпуск</button>
+            </form>
+          {% else %}
+            <span class="text-muted small">Нужна админская очистка или проверка PR.</span>
           {% endif %}
         {% elif need.status == 'NEW' and (current_user.is_admin or current_user.is_director or current_user.is_manager) %}
           <form method="post" action="{{ url_for('main.supply_need_create_production_request', need_id=need.id) }}">
