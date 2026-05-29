@@ -8997,6 +8997,15 @@ def order_realization_create(order_id):
     if order.status == 'cancelled' or order.is_shipped:
         flash('Реализацию нельзя создать по отменённому или уже отгруженному заказу.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
+    existing_realization = (
+        SalesRealization.query
+        .filter(SalesRealization.order_id == order.id, SalesRealization.status.in_(['draft', 'posted']))
+        .order_by(SalesRealization.created_at.desc(), SalesRealization.id.desc())
+        .first()
+    )
+    if existing_realization:
+        flash('По заказу уже есть реализация. Откройте существующий документ вместо создания дубля.', 'warning')
+        return redirect(url_for('main.sales_realization_detail', realization_id=existing_realization.id))
     idem_key, duplicate = _reserve_idempotency_key()
     if duplicate:
         return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
