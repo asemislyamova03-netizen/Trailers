@@ -12,6 +12,9 @@
     {% if realization.order %}
       <a class="btn btn-soft" href="{{ url_for('main.order_detail', order_id=realization.order.id) }}">Заказ</a>
     {% endif %}
+    {% if realization.status in ['draft', 'posted'] %}
+      <a class="btn btn-soft" href="{{ url_for('main.sales_realization_edit', realization_id=realization.id) }}">Редактировать</a>
+    {% endif %}
     {% if realization.status == 'draft' %}
       <form method="post" action="{{ url_for('main.sales_realization_post', realization_id=realization.id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

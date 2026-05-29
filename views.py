@@ -8746,6 +8746,71 @@ def sales_realization_detail(realization_id):
     return render_template('sales_realization_detail.html', realization=realization)
 
 
+@main_bp.route('/realizations/<int:realization_id>/edit', methods=['GET', 'POST'])
+@role_required('manager', 'director')
+def sales_realization_edit(realization_id):
+    realization = SalesRealization.query.get_or_404(realization_id)
+    if current_user.is_manager and realization.assigned_user_id != current_user.id:
+        abort(403)
+    if realization.status not in ('draft', 'posted'):
+        flash('Редактировать можно только черновик или проведённую реализацию.', 'danger')
+        return redirect(url_for('main.sales_realization_detail', realization_id=realization.id))
+
+    form = FlaskForm()
+    if form.validate_on_submit():
+        old_total = realization.total_amount
+        realization_date_raw = (request.form.get('realization_date') or '').strip()
+        if realization_date_raw:
+            try:
+                realization.realization_date = datetime.strptime(realization_date_raw, '%Y-%m-%d').date()
+            except ValueError:
+                flash('Дата реализации указана неверно.', 'danger')
+                return render_template('sales_realization_form.html', form=form, realization=realization)
+
+        total = Decimal('0')
+        for line in realization.lines:
+            qty = line.quantity or 1
+            if line.inventory_effect != 'trailer_unit':
+                qty_raw = (request.form.get(f'line_{line.id}_quantity') or '').strip()
+                if qty_raw:
+                    try:
+                        qty = Decimal(qty_raw.replace(',', '.'))
+                    except Exception:
+                        flash(f'Количество в строке #{line.line_no} указано неверно.', 'danger')
+                        return render_template('sales_realization_form.html', form=form, realization=realization)
+                    if qty <= 0:
+                        flash(f'Количество в строке #{line.line_no} должно быть больше 0.', 'danger')
+                        return render_template('sales_realization_form.html', form=form, realization=realization)
+                    line.quantity = qty
+
+            price_raw = (request.form.get(f'line_{line.id}_unit_price') or '').strip()
+            try:
+                unit_price = Decimal(price_raw.replace(',', '.')) if price_raw else Decimal('0')
+            except Exception:
+                flash(f'Цена в строке #{line.line_no} указана неверно.', 'danger')
+                return render_template('sales_realization_form.html', form=form, realization=realization)
+            line.unit_price = unit_price
+            line.total_price = unit_price * Decimal(line.quantity or 1)
+            line.comment = (request.form.get(f'line_{line.id}_comment') or '').strip() or None
+            total += Decimal(line.total_price or 0)
+
+        realization.total_amount = total
+        realization.updated_at = datetime.utcnow()
+        if realization.order:
+            add_order_event(
+                realization.order,
+                'comment_added',
+                old_value=str(old_total or ''),
+                new_value=str(realization.total_amount or ''),
+                comment=f'Отредактирована реализация {realization.number or realization.id}',
+            )
+        db.session.commit()
+        flash('Реализация обновлена. VIN и прицепы не изменялись.', 'success')
+        return redirect(url_for('main.sales_realization_detail', realization_id=realization.id))
+
+    return render_template('sales_realization_form.html', form=form, realization=realization)
+
+
 @main_bp.route('/orders/<int:order_id>/realizations/new', methods=['POST'])
 @login_required
 def order_realization_create(order_id):
