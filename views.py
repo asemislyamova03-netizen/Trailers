@@ -102,6 +102,15 @@ def _sales_warehouses():
     return query.order_by(Warehouse.name).all()
 
 
+def _trailer_source_warehouses():
+    query = Warehouse.query.filter(Warehouse.is_active == True)
+    if hasattr(Warehouse, 'can_sell'):
+        query = query.filter(or_(Warehouse.can_sell == True, Warehouse.is_production == True))
+    elif hasattr(Warehouse, 'is_sales_point'):
+        query = query.filter(or_(Warehouse.is_sales_point == True, Warehouse.is_production == True))
+    return query.order_by(Warehouse.name).all()
+
+
 def _default_product_category_for_item_type(item_type: str | None):
     code = 'component' if (item_type or '').upper() == 'COMPONENT' else 'light_trailer'
     return ProductCategory.query.filter_by(code=code).first()
@@ -1639,14 +1648,14 @@ def trailers_list():
     if warehouse_id:
         query = query.filter(Trailer.warehouse_id == warehouse_id)
     elif getattr(current_user, 'is_manager', False):
-        sales_warehouse_ids = [warehouse.id for warehouse in _sales_warehouses()]
-        query = query.filter(Trailer.warehouse_id.in_(sales_warehouse_ids) if sales_warehouse_ids else sa.false())
+        source_warehouse_ids = [warehouse.id for warehouse in _trailer_source_warehouses()]
+        query = query.filter(Trailer.warehouse_id.in_(source_warehouse_ids) if source_warehouse_ids else sa.false())
 
     if category_filter and category_filter != 'all':
         query = query.filter(ProductCategory.code == category_filter)
 
     trailers = query.order_by(Trailer.id.desc()).all()
-    warehouses = _sales_warehouses() if getattr(current_user, 'is_manager', False) else Warehouse.query.order_by(Warehouse.name).all()
+    warehouses = _trailer_source_warehouses() if getattr(current_user, 'is_manager', False) else Warehouse.query.order_by(Warehouse.name).all()
     categories = ProductCategory.query.filter_by(is_active=True).order_by(ProductCategory.sort_order, ProductCategory.name).all()
 
     return render_template(
@@ -4250,11 +4259,11 @@ def _trailer_item_options():
 
 
 def _order_trailer_options(current_order_id: int | None = None, current_trailer_id: int | None = None):
-    sales_warehouse_ids = [warehouse.id for warehouse in _sales_warehouses()]
+    source_warehouse_ids = [warehouse.id for warehouse in _trailer_source_warehouses()]
     trailers = (
         Trailer.query
         .filter(
-            or_(Trailer.warehouse_id.in_(sales_warehouse_ids), Trailer.id == current_trailer_id) if sales_warehouse_ids else Trailer.id == current_trailer_id,
+            or_(Trailer.warehouse_id.in_(source_warehouse_ids), Trailer.id == current_trailer_id) if source_warehouse_ids else Trailer.id == current_trailer_id,
             or_(Trailer.status == 'IN_STOCK', Trailer.id == current_trailer_id),
             or_(Trailer.id == current_trailer_id, Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped'),
         )
@@ -6052,9 +6061,10 @@ def _set_stock_movement_trailer_search_label(form: StockMovementForm) -> None:
 
 
 def _fill_stock_movement_form_choices(form: StockMovementForm, current_movement_id: int | None = None) -> None:
-    warehouses = _sales_warehouses()
-    form.from_warehouse_id.choices = [(0, '— нет —')] + [(w.id, w.name) for w in warehouses]
-    form.to_warehouse_id.choices = [(0, '— нет —')] + [(w.id, w.name) for w in warehouses]
+    source_warehouses = _trailer_source_warehouses()
+    target_warehouses = _sales_warehouses()
+    form.from_warehouse_id.choices = [(0, '— нет —')] + [(w.id, w.name) for w in source_warehouses]
+    form.to_warehouse_id.choices = [(0, '— нет —')] + [(w.id, w.name) for w in target_warehouses]
     _apply_stock_movement_trailer_search(form, exclude_movement_id=current_movement_id)
     current_trailer_id = form.trailer_id.data or 0
     form.trailer_id.choices = [(0, '— без VIN —')] + [
@@ -6074,9 +6084,8 @@ def _fill_stock_movement_form_choices(form: StockMovementForm, current_movement_
 
 
 def _fill_stock_movement_batch_form_choices(form: StockMovementBatchForm) -> None:
-    warehouses = _sales_warehouses()
-    form.from_warehouse_id.choices = [(w.id, w.name) for w in warehouses]
-    form.to_warehouse_id.choices = [(w.id, w.name) for w in warehouses]
+    form.from_warehouse_id.choices = [(w.id, w.name) for w in _trailer_source_warehouses()]
+    form.to_warehouse_id.choices = [(w.id, w.name) for w in _sales_warehouses()]
 
 
 def _selected_trailers_from_request() -> list[Trailer]:
@@ -9762,11 +9771,14 @@ def _validate_stock_movement_selection(form: StockMovementForm, current_movement
     if from_warehouse_id and to_warehouse_id and from_warehouse_id == to_warehouse_id:
         flash('Нельзя создать перемещение на тот же склад.', 'danger')
         return False
-    for warehouse_id in (from_warehouse_id, to_warehouse_id):
-        warehouse = Warehouse.query.get(warehouse_id) if warehouse_id else None
-        if warehouse and not getattr(warehouse, 'can_sell', True):
-            flash('Перемещения продаж можно создавать только между складами продаж.', 'danger')
-            return False
+    from_warehouse = Warehouse.query.get(from_warehouse_id) if from_warehouse_id else None
+    to_warehouse = Warehouse.query.get(to_warehouse_id) if to_warehouse_id else None
+    if from_warehouse and not (getattr(from_warehouse, 'can_sell', True) or getattr(from_warehouse, 'is_production', False)):
+        flash('Со склада можно выбрать склад продаж или производственный склад.', 'danger')
+        return False
+    if to_warehouse and not getattr(to_warehouse, 'can_sell', True):
+        flash('На склад можно выбрать только склад продаж.', 'danger')
+        return False
     trailer_id = form.trailer_id.data or None
     if not trailer_id:
         return True
@@ -9789,11 +9801,14 @@ def _validate_batch_movement_selection(form: StockMovementBatchForm, trailers: l
     if from_warehouse_id and to_warehouse_id and from_warehouse_id == to_warehouse_id:
         flash('Нельзя создать перемещение на тот же склад.', 'danger')
         return False
-    for warehouse_id in (from_warehouse_id, to_warehouse_id):
-        warehouse = Warehouse.query.get(warehouse_id) if warehouse_id else None
-        if warehouse and not getattr(warehouse, 'can_sell', True):
-            flash('Партийные перемещения доступны только между складами продаж.', 'danger')
-            return False
+    from_warehouse = Warehouse.query.get(from_warehouse_id) if from_warehouse_id else None
+    to_warehouse = Warehouse.query.get(to_warehouse_id) if to_warehouse_id else None
+    if from_warehouse and not (getattr(from_warehouse, 'can_sell', True) or getattr(from_warehouse, 'is_production', False)):
+        flash('Со склада можно выбрать склад продаж или производственный склад.', 'danger')
+        return False
+    if to_warehouse and not getattr(to_warehouse, 'can_sell', True):
+        flash('На склад можно выбрать только склад продаж.', 'danger')
+        return False
     invalid = [
         trailer.vin for trailer in trailers
         if not _trailer_available_for_movement(trailer, from_warehouse_id=from_warehouse_id)
