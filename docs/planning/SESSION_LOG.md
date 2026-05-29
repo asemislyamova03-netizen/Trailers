@@ -503,3 +503,16 @@
 Следующий шаг: Сделать слой `can_change_order_line_source` и маршруты смены `production -> stock` / `stock -> production` без перехода к BOM, 1С, ИИ и закупкам.
 
 ---
+
+Дата: 2026-05-29
+Проект: trailers
+Модуль: orders / safe editing / source workflow
+Что делали: Продолжили Итерацию 1 и отделяли редактирование шапки заказа от изменения строк, VIN, резервов и производственных потребностей.
+Что сделано: POST старого редактирования заказа со строками теперь обновляет только шапку; добавлены helper-ы `can_change_order_line_source`, `change_line_source_production_to_stock`, `change_line_source_stock_to_production`; в карточке заказа добавлены отдельные формы смены источника строки.
+Какие файлы изменены: `views.py`, `templates/order_detail.html`, `docs/planning/CURRENT_STATE.md`, `docs/planning/NEXT_ACTIONS.md`, `docs/planning/SESSION_LOG.md`.
+Где остановились: Локально проходят `py_compile`, `git diff --check`, карточка заказа и основные страницы рендерятся без 500.
+Что осталось: Проверить на серверных данных реальные сценарии `production -> stock`, `stock -> production` и блокировки при начатом производстве/договоре/документах/реализации/перемещении.
+Блокеры: Нет.
+Следующий шаг: Закоммитить/запушить фикс, обновить сервер и проверить на реальном заказе.
+
+---

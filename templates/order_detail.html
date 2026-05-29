@@ -12,7 +12,7 @@
   </div>
   <div class="d-flex gap-2 flex-wrap">
     {% if can_manage and order.status != 'cancelled' and not order.is_shipped %}
-      <a class="btn btn-soft" href="{{ url_for('main.order_edit', order_id=order.id) }}"><i class="bi bi-pencil me-1"></i>Редактировать</a>
+      <a class="btn btn-soft" href="{{ url_for('main.order_edit', order_id=order.id) }}"><i class="bi bi-pencil me-1"></i>Редактировать шапку</a>
       <button class="btn btn-orange" data-bs-toggle="modal" data-bs-target="#paymentModal"><i class="bi bi-cash-coin me-1"></i>Добавить оплату</button>
       <form method="post" action="{{ url_for('main.order_realization_create', order_id=order.id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -205,25 +205,76 @@
             <tr>
               <td></td>
               <td colspan="8">
-                <form method="post" action="{{ url_for('main.order_line_update', order_id=order.id, line_id=line.id) }}" class="row g-2 align-items-end">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <input type="hidden" name="form_token" value="{{ form_token() }}">
-                  <div class="col-md-2">
-                    <label class="form-label small mb-1">Кол-во</label>
-                    <input class="form-control form-control-sm" name="quantity" type="number" min="1" value="{{ line.quantity or 1 }}" {% if not row.can_edit_quantity %}readonly title="{{ row.edit_quantity_message }}"{% endif %}>
-                  </div>
-                  <div class="col-md-3">
-                    <label class="form-label small mb-1">Цена за 1 ед.</label>
-                    <input class="form-control form-control-sm" name="unit_price" value="{{ line.unit_price if line.unit_price is not none else '' }}">
-                  </div>
-                  <div class="col-md-5">
-                    <label class="form-label small mb-1">Комментарий по позиции</label>
-                    <input class="form-control form-control-sm" name="note" value="{{ line.note or '' }}">
-                  </div>
-                  <div class="col-md-2">
-                    <button class="btn btn-sm btn-soft w-100">Сохранить строку</button>
-                  </div>
-                </form>
+                <div class="d-flex flex-column gap-2">
+                  <form method="post" action="{{ url_for('main.order_line_update', order_id=order.id, line_id=line.id) }}" class="row g-2 align-items-end">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="form_token" value="{{ form_token() }}">
+                    <div class="col-md-2">
+                      <label class="form-label small mb-1">Кол-во</label>
+                      <input class="form-control form-control-sm" name="quantity" type="number" min="1" value="{{ line.quantity or 1 }}" {% if not row.can_edit_quantity %}readonly title="{{ row.edit_quantity_message }}"{% endif %}>
+                    </div>
+                    <div class="col-md-3">
+                      <label class="form-label small mb-1">Цена за 1 ед.</label>
+                      <input class="form-control form-control-sm" name="unit_price" value="{{ line.unit_price if line.unit_price is not none else '' }}">
+                    </div>
+                    <div class="col-md-5">
+                      <label class="form-label small mb-1">Комментарий по позиции</label>
+                      <input class="form-control form-control-sm" name="note" value="{{ line.note or '' }}">
+                    </div>
+                    <div class="col-md-2">
+                      <button class="btn btn-sm btn-soft w-100">Сохранить строку</button>
+                    </div>
+                  </form>
+
+                  {% if row.can_change_source %}
+                    {% if (line.fulfillment_source or '') == 'production' %}
+                    <form method="post" action="{{ url_for('main.order_line_source_to_stock', order_id=order.id, line_id=line.id) }}" class="row g-2 align-items-end border-top pt-2">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <div class="col-md-5">
+                        <label class="form-label small mb-1">Изменить источник на наличие</label>
+                        <select name="trailer_id" class="form-select form-select-sm" required>
+                          <option value="">Выберите VIN из наличия</option>
+                          {% for trailer in row.source_change_trailers %}
+                          <option value="{{ trailer.id }}">{{ trailer.vin }} · {{ trailer.warehouse.name if trailer.warehouse else '' }}</option>
+                          {% endfor %}
+                        </select>
+                      </div>
+                      <div class="col-md-5">
+                        <label class="form-label small mb-1">Комментарий</label>
+                        <input class="form-control form-control-sm" name="comment" placeholder="Причина смены источника">
+                      </div>
+                      <div class="col-md-2">
+                        <button class="btn btn-sm btn-outline-primary w-100" {% if not row.source_change_trailers %}disabled{% endif %}>Сменить источник</button>
+                      </div>
+                    </form>
+                    {% elif (line.fulfillment_source or '') in ['stock', 'other_warehouse', 'transit'] %}
+                    <form method="post" action="{{ url_for('main.order_line_source_to_production', order_id=order.id, line_id=line.id) }}" class="row g-2 align-items-end border-top pt-2">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <div class="col-md-4">
+                        <label class="form-label small mb-1">Изменить источник на производство</label>
+                        <select name="item_id" class="form-select form-select-sm" required>
+                          {% for item in add_line_items %}
+                          <option value="{{ item.id }}" {% if item.id == line.item_id %}selected{% endif %}>{{ item.article or '' }} {{ item.name }}</option>
+                          {% endfor %}
+                        </select>
+                      </div>
+                      <div class="col-md-2">
+                        <label class="form-label small mb-1">Кол-во</label>
+                        <input class="form-control form-control-sm" name="quantity" type="number" min="1" value="{{ line.quantity or 1 }}">
+                      </div>
+                      <div class="col-md-4">
+                        <label class="form-label small mb-1">Комментарий</label>
+                        <input class="form-control form-control-sm" name="comment" placeholder="Причина смены источника">
+                      </div>
+                      <div class="col-md-2">
+                        <button class="btn btn-sm btn-outline-primary w-100">Сменить источник</button>
+                      </div>
+                    </form>
+                    {% endif %}
+                  {% elif row.source_change_message %}
+                    <div class="small text-muted border-top pt-2">Источник нельзя изменить: {{ row.source_change_message }}.</div>
+                  {% endif %}
+                </div>
               </td>
             </tr>
             {% endif %}

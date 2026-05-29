@@ -4986,6 +4986,215 @@ def _can_edit_order_line_quantity(line: CustomerOrderLine) -> tuple[bool, str]:
     return True, ''
 
 
+def _line_has_posted_realization(line: CustomerOrderLine) -> bool:
+    return any(row.realization and row.realization.status == 'posted' for row in line.realization_lines)
+
+
+def _line_has_any_realization(line: CustomerOrderLine) -> bool:
+    return bool(line.realization_lines)
+
+
+def _active_stock_reservation_for_line(line: CustomerOrderLine) -> Reservation | None:
+    return next((row for row in line.reservations if row.status == 'ACTIVE' and row.trailer_id), None)
+
+
+def can_change_order_line_source(line: CustomerOrderLine) -> tuple[bool, list[str]]:
+    blockers = []
+    order = line.order
+    if not order:
+        blockers.append('нет заказа')
+        return False, blockers
+    if order.status == 'cancelled':
+        blockers.append('заказ отменён')
+    if order.documents_issued:
+        blockers.append('выданы документы')
+    if order.is_shipped or line.status == 'shipped':
+        blockers.append('заказ или позиция уже отгружены')
+    if line.contract_lines:
+        blockers.append('есть строка договора')
+    if _line_has_any_realization(line):
+        blockers.append('есть реализация')
+    if line.movements:
+        blockers.append('есть перемещение')
+    if line.produced_units:
+        blockers.append('есть выпуск')
+    if line.production_outputs:
+        blockers.append('есть производственные результаты')
+    if line.assembly_operation_id:
+        blockers.append('есть операция комплектации')
+    for need in _line_active_supply_needs(line):
+        if _supply_need_started(need) or _supply_need_has_produced_output(need):
+            blockers.append(f'производство по потребности #{need.id} уже начато')
+    return not blockers, blockers
+
+
+def _ensure_can_change_line_source(line: CustomerOrderLine) -> tuple[bool, str]:
+    ok, blockers = can_change_order_line_source(line)
+    if not ok:
+        return False, 'Нельзя изменить источник обеспечения: ' + '; '.join(blockers) + '.'
+    if (line.quantity or 1) != 1:
+        return False, 'Смена источника сейчас доступна только для строки с количеством 1. Для нескольких VIN используйте отдельные строки заказа.'
+    return True, ''
+
+
+def _release_line_stock_links(line: CustomerOrderLine, reason: str) -> None:
+    order = line.order
+    trailer_ids = set()
+    if line.trailer_id:
+        trailer_ids.add(line.trailer_id)
+    reservation = _active_stock_reservation_for_line(line)
+    if reservation and reservation.trailer_id:
+        trailer_ids.add(reservation.trailer_id)
+
+    vin_rows = list(_active_vin_rows_for_order_line(line))
+    trailer_ids.update(row.trailer_id for row in vin_rows if row.trailer_id)
+
+    for row in vin_rows:
+        if row.docs_issued_at:
+            raise ValueError('Нельзя снять источник: по VIN уже выданы документы.')
+        if row.status == 'reserved' and not row.trailer_id:
+            _free_reserved_vin_row(row, order, reason)
+        else:
+            _release_assigned_vin_from_order(row, order, reason)
+            row.order_line_id = None
+
+    for row in line.reservations:
+        if row.status == 'ACTIVE':
+            row.status = 'CANCELLED'
+            row.note = ((row.note or '') + f'\nРезерв отменён. Причина: {reason}').strip()
+
+    for trailer_id in trailer_ids:
+        trailer = Trailer.query.get(trailer_id)
+        if not trailer:
+            continue
+        if _active_movement_for_trailer(trailer.id):
+            raise ValueError('Нельзя снять источник: по прицепу есть активное перемещение.')
+        trailer.status = 'IN_STOCK'
+        trailer.lifecycle_status = 'in_stock'
+
+    line.trailer_id = None
+
+
+def change_line_source_production_to_stock(line_id: int, trailer_id: int, user_id: int, comment: str | None = None) -> CustomerOrderLine:
+    line = CustomerOrderLine.query.get_or_404(line_id)
+    order = line.order
+    ok, message = _ensure_can_change_line_source(line)
+    if not ok:
+        raise ValueError(message)
+    if (line.fulfillment_source or '').lower() != 'production':
+        raise ValueError('Эта позиция не находится в источнике "производство".')
+
+    trailer = Trailer.query.get_or_404(trailer_id)
+    if line.item_id and trailer.item_id != line.item_id:
+        raise ValueError('Выбранный прицеп не соответствует номенклатуре строки заказа.')
+    if not _trailer_available_for_sale(trailer, exclude_order_id=order.id):
+        raise ValueError('Выбранный прицеп уже недоступен для резерва.')
+
+    reason = comment or 'Смена источника обеспечения: производство -> наличие'
+    for need in _line_active_supply_needs(line):
+        if _supply_need_started(need) or _supply_need_has_produced_output(need):
+            raise ValueError(f'Производство по потребности #{need.id} уже начато.')
+        _cancel_supply_need_and_production_lines(need, reason, user_id)
+
+    source_type = 'TRANSFER' if order.warehouse_id and trailer.warehouse_id != order.warehouse_id else 'STOCK'
+    line.fulfillment_source = 'other_warehouse' if source_type == 'TRANSFER' else 'stock'
+    line.trailer_id = trailer.id
+    line.item_id = trailer.item_id
+    line.status = 'reserved'
+    if line.unit_price is None and trailer.item:
+        line.unit_price = trailer.item.base_price
+        line.total_price = trailer.item.base_price
+    _apply_snapshot(line, _line_snapshot_from_item(trailer.item))
+
+    trailer.status = 'RESERVED'
+    trailer.lifecycle_status = 'reserved'
+    db.session.add(Reservation(
+        order_id=order.id,
+        order_line_id=line.id,
+        trailer_id=trailer.id,
+        item_id=trailer.item_id,
+        source_type=source_type,
+        status='ACTIVE',
+        priority=10,
+        note=reason,
+    ))
+    row = _ensure_vin_registry_for_trailer(trailer)
+    if row:
+        row.customer_order_id = order.id
+        row.order_line_id = line.id
+        row.supply_need_id = None
+        if row.status == 'free':
+            old_status = row.status
+            row.status = 'assigned'
+            row.assigned_by_user_id = user_id
+            row.assigned_at = datetime.utcnow()
+            _add_vin_event(row, 'assigned', old_status, row.status, comment=reason)
+        if not order.reserved_vin_registry_id:
+            order.reserved_vin_registry_id = row.id
+
+    if not order.trailer_id:
+        order.trailer_id = trailer.id
+    order.source_warehouse_id = trailer.warehouse_id
+    _sync_order_totals_from_lines(order)
+    _refresh_order_status(order)
+    add_order_event(order, 'trailer_reserved', new_value=trailer.vin or trailer.id, comment=f'Позиция #{line.line_no}: {reason}')
+    return line
+
+
+def change_line_source_stock_to_production(line_id: int, target_item_id: int, qty: int, user_id: int, comment: str | None = None) -> CustomerOrderLine:
+    line = CustomerOrderLine.query.get_or_404(line_id)
+    order = line.order
+    ok, message = _ensure_can_change_line_source(line)
+    if not ok:
+        raise ValueError(message)
+    if (line.fulfillment_source or '').lower() not in ('stock', 'other_warehouse', 'transit'):
+        raise ValueError('Эта позиция не находится в источнике "наличие".')
+    if _line_has_posted_realization(line):
+        raise ValueError('По позиции уже есть проведённая реализация.')
+
+    item = Item.query.get_or_404(target_item_id)
+    reason = comment or 'Смена источника обеспечения: наличие -> производство'
+    old_trailer_id = line.trailer_id or (_active_stock_reservation_for_line(line).trailer_id if _active_stock_reservation_for_line(line) else None)
+    _release_line_stock_links(line, reason)
+
+    quantity = max(int(qty or 1), 1)
+    line.fulfillment_source = 'production'
+    line.item_id = item.id
+    line.quantity = quantity
+    line.status = 'waiting_production'
+    if line.unit_price is None:
+        line.unit_price = item.base_price
+    line.total_price = (line.unit_price * quantity) if line.unit_price is not None else None
+    _apply_snapshot(line, _line_snapshot_from_item(item))
+
+    need = SupplyNeed(
+        order_id=order.id,
+        order_line_id=line.id,
+        item_id=item.id,
+        warehouse_id=order.warehouse_id,
+        quantity=quantity,
+        status='NEW',
+        priority=10,
+        need_type='CUSTOMER_ORDER',
+        required_by=order.expected_date,
+        note=reason,
+    )
+    _apply_snapshot(need, _line_snapshot_from_item(item))
+    db.session.add(need)
+
+    if order.trailer_id == old_trailer_id:
+        order.trailer_id = None
+    _sync_order_totals_from_lines(order)
+    if order.trailer_id == old_trailer_id:
+        order.trailer_id = None
+    if not any(row.trailer_id for row in order.reservations.filter_by(status='ACTIVE').all()):
+        order.trailer_id = None
+        order.source_warehouse_id = None
+    _refresh_order_status(order)
+    add_order_event(order, 'production_need_created', new_value=item.article or item.name, comment=f'Позиция #{line.line_no}: {reason}')
+    return line
+
+
 def _active_vin_rows_for_order_line(line: CustomerOrderLine) -> list[VinRegistry]:
     return (
         VinRegistry.query
@@ -7461,6 +7670,23 @@ def order_detail(order_id):
         can_edit_qty, edit_qty_message = _can_edit_order_line_quantity(line)
         can_delete_line, delete_message = _can_delete_order_line(line)
         can_ship_line, ship_message = _order_line_can_ship(line)
+        can_change_source, source_blockers = can_change_order_line_source(line)
+        source_change_trailers = []
+        if can_change_source and (line.fulfillment_source or '').lower() == 'production' and (line.quantity or 1) == 1:
+            source_change_trailers = [
+                trailer for trailer in (
+                    Trailer.query
+                    .filter(
+                        Trailer.item_id == line.item_id,
+                        Trailer.status == 'IN_STOCK',
+                        or_(Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped'),
+                    )
+                    .order_by(Trailer.vin)
+                    .limit(80)
+                    .all()
+                )
+                if _trailer_available_for_sale(trailer, exclude_order_id=order.id)
+            ]
         order_line_rows.append({
             'line': line,
             'vin_rows': vin_rows,
@@ -7477,6 +7703,9 @@ def order_detail(order_id):
             'delete_message': delete_message,
             'can_ship': can_ship_line,
             'ship_message': ship_message,
+            'can_change_source': can_change_source and (line.quantity or 1) == 1,
+            'source_change_message': '; '.join(source_blockers) if source_blockers else '',
+            'source_change_trailers': source_change_trailers,
         })
     add_line_stock_trailers = [
         trailer for trailer in (
@@ -7696,6 +7925,26 @@ def order_edit(order_id):
         form.assigned_user_id.data = order.assigned_user_id or 0
 
     if form.validate_on_submit():
+        if order.lines.count() > 0:
+            order.order_number = (form.order_number.data or '').strip() or order.order_number
+            if form.order_date.data:
+                order.created_at = datetime.combine(form.order_date.data, time.min)
+            order.lead_id = form.lead_id.data or None
+            order.customer_id = form.customer_id.data
+            order.warehouse_id = form.warehouse_id.data or None
+            order.assigned_user_id = form.assigned_user_id.data or None
+            order.expected_date = form.expected_date.data
+            order.planned_ship_date = form.planned_ship_date.data
+            order.planned_ship_comment = (form.planned_ship_comment.data or '').strip() or None
+            order.note = (form.note.data or '').strip() or None
+            order.manager_comment = (form.manager_comment.data or '').strip() or None
+            order.prepayment_percent = form.prepayment_percent.data
+            _refresh_order_status(order)
+            add_order_event(order, 'comment_added', comment='Обновлена шапка заказа без изменения строк, VIN, резервов и потребностей')
+            db.session.commit()
+            flash('Шапка заказа обновлена. Строки, VIN, резервы и потребности не изменялись.', 'success')
+            return redirect(url_for('main.order_detail', order_id=order.id))
+
         old_status = order.status
         old_trailer_id = order.trailer_id
         old_trailer = Trailer.query.get(old_trailer_id) if old_trailer_id else None
@@ -7991,6 +8240,49 @@ def order_line_create_missing_production(order_id, line_id):
     add_order_event(order, 'production_need_created', new_value=missing_qty, comment=f'Досоздано производство по позиции #{line.line_no}')
     db.session.commit()
     flash(f'Создана недостающая потребность: {missing_qty} шт.', 'success')
+    return redirect(url_for('main.order_detail', order_id=order.id))
+
+
+@main_bp.route('/orders/<int:order_id>/lines/<int:line_id>/source/stock', methods=['POST'])
+@login_required
+def order_line_source_to_stock(order_id, line_id):
+    order = CustomerOrder.query.get_or_404(order_id)
+    _ensure_can_manage_order(order)
+    line = CustomerOrderLine.query.filter_by(id=line_id, order_id=order.id).first_or_404()
+    trailer_id = request.form.get('trailer_id', type=int)
+    comment = (request.form.get('comment') or '').strip() or None
+    if not trailer_id:
+        flash('Выберите прицеп из наличия для смены источника.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    try:
+        change_line_source_production_to_stock(line.id, trailer_id, current_user.id, comment)
+        db.session.commit()
+        flash('Источник позиции изменён на наличие. Производственная потребность отменена.', 'success')
+    except ValueError as exc:
+        db.session.rollback()
+        flash(str(exc), 'danger')
+    return redirect(url_for('main.order_detail', order_id=order.id))
+
+
+@main_bp.route('/orders/<int:order_id>/lines/<int:line_id>/source/production', methods=['POST'])
+@login_required
+def order_line_source_to_production(order_id, line_id):
+    order = CustomerOrder.query.get_or_404(order_id)
+    _ensure_can_manage_order(order)
+    line = CustomerOrderLine.query.filter_by(id=line_id, order_id=order.id).first_or_404()
+    target_item_id = request.form.get('item_id', type=int) or line.item_id
+    quantity = request.form.get('quantity', type=int) or line.quantity or 1
+    comment = (request.form.get('comment') or '').strip() or None
+    if not target_item_id:
+        flash('Выберите номенклатуру для производства.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    try:
+        change_line_source_stock_to_production(line.id, target_item_id, quantity, current_user.id, comment)
+        db.session.commit()
+        flash('Источник позиции изменён на производство. Старый резерв VIN/прицепа снят.', 'success')
+    except ValueError as exc:
+        db.session.rollback()
+        flash(str(exc), 'danger')
     return redirect(url_for('main.order_detail', order_id=order.id))
 
 
