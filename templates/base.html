@@ -14,9 +14,9 @@
 <body>
 {% set endpoint = request.endpoint or '' %}
 {% set path = request.path or '' %}
-{% macro nav_item(label, icon, endpoint_name=None, href=None, match=None) -%}
+{% macro nav_item(label, icon, endpoint_name=None, href=None, match=None, active=None) -%}
     {% set target = href or url_for(endpoint_name) %}
-    {% set is_active = (endpoint == endpoint_name) or (match and path.startswith(match)) %}
+    {% set is_active = active if active is not none else ((endpoint == endpoint_name) or (match and path.startswith(match))) %}
     <a class="sidebar-link {{ 'active' if is_active else '' }}" href="{{ target }}">
         <i class="bi {{ icon }}"></i><span>{{ label }}</span>
     </a>
@@ -64,16 +64,13 @@
                     {{ nav_item('Клиенты', 'bi-person-lines-fill', 'main.customers_list', match='/customers') }}
                     {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', match='/reports') }}
                 {% elif current_user.is_production %}
-                    {{ nav_item('Мои задания', 'bi-tools', 'main.production_workspace', match='/production') }}
-                    {{ nav_item('Материалы', 'bi-boxes', 'main.production_workspace', match='/production') }}
-                    {{ nav_item('Выпуск', 'bi-check2-square', 'main.production_workspace', match='/production') }}
-                    {{ nav_item('История', 'bi-clock-history', 'main.production_workspace', match='/production') }}
+                    {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', match='/production') }}
                 {% elif current_user.is_logistics %}
-                    {{ nav_item('Реестр VIN', 'bi-upc', 'main.vin_registry_list', match='/logistics/vin-registry') }}
-                    {{ nav_item('Свободные VIN', 'bi-upc-scan', href=url_for('main.vin_registry_list', status='free'), match='/logistics/vin-registry') }}
-                    {{ nav_item('Назначить VIN', 'bi-link-45deg', href=url_for('main.vin_registry_list', status='reserved'), match='/logistics/vin-registry') }}
-                    {{ nav_item('Назначены, ждут подтверждения', 'bi-hourglass-split', href=url_for('main.vin_registry_list', status='assigned'), match='/logistics/vin-registry') }}
-                    {{ nav_item('Ошибки', 'bi-exclamation-triangle', href=url_for('main.vin_registry_list', status='void'), match='/logistics/vin-registry') }}
+                    {{ nav_item('Все VIN', 'bi-upc', 'main.vin_registry_list', active=(endpoint == 'main.vin_registry_list' and not request.args.get('status'))) }}
+                    {{ nav_item('Свободные VIN', 'bi-upc-scan', href=url_for('main.vin_registry_list', status='free'), active=(endpoint == 'main.vin_registry_list' and request.args.get('status') == 'free')) }}
+                    {{ nav_item('В резерве', 'bi-link-45deg', href=url_for('main.vin_registry_list', status='reserved'), active=(endpoint == 'main.vin_registry_list' and request.args.get('status') == 'reserved')) }}
+                    {{ nav_item('Назначены', 'bi-hourglass-split', href=url_for('main.vin_registry_list', status='assigned'), active=(endpoint == 'main.vin_registry_list' and request.args.get('status') == 'assigned')) }}
+                    {{ nav_item('Аннулированы', 'bi-exclamation-triangle', href=url_for('main.vin_registry_list', status='void'), active=(endpoint == 'main.vin_registry_list' and request.args.get('status') == 'void')) }}
                 {% elif current_user.is_director %}
                     {{ nav_item('Панель', 'bi-speedometer2', 'main.director_dashboard', match='/director') }}
                     {{ nav_item('Диалоги', 'bi-chat-dots', 'main.conversations_list', match='/conversations') }}

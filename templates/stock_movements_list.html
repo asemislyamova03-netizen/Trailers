@@ -4,7 +4,7 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
   <h1 class="h3 mb-0">Перемещения</h1>
-  {% if current_user.is_admin or current_user.is_director or current_user.is_logistics %}
+  {% if current_user.is_admin or current_user.is_director or current_user.is_manager %}
     <div class="d-flex gap-2">
       <a class="btn btn-soft" href="{{ url_for('main.stock_movement_create') }}">Одно перемещение</a>
       <a class="btn btn-orange" href="{{ url_for('main.stock_movement_batch_create') }}">Партия перемещения</a>
@@ -51,7 +51,7 @@
           <td>{{ m.departure_date|date_format }}</td>
           <td>{{ m.arrival_date|date_format }}</td>
           <td class="text-end">
-            {% if current_user.is_admin or current_user.is_director or current_user.is_logistics %}
+            {% if current_user.is_admin or current_user.is_director or current_user.is_manager %}
               <a class="btn btn-sm btn-soft" href="{{ url_for('main.stock_movement_edit', movement_id=m.id) }}">Изменить</a>
             {% endif %}
           </td>

@@ -1,11 +1,19 @@
 {% extends "base.html" %}
 {% block title %}Реестр VIN{% endblock %}
 {% block content %}
+{% set active_status = filters.status or '' %}
 <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
   <div>
-    <h1 class="h3 mb-1">Реестр VIN</h1>
+    <h1 class="h3 mb-1">Реестр VIN{% if active_status %}: {{ active_status|status_label }}{% endif %}</h1>
     <div class="text-muted">Свободные serial7, резервы под заказы, назначенные и подтверждённые VIN.</div>
   </div>
+</div>
+
+<div class="d-flex flex-wrap gap-2 mb-3">
+  <a class="btn btn-sm {% if not active_status %}btn-orange{% else %}btn-soft{% endif %}" href="{{ url_for('main.vin_registry_list') }}">Все</a>
+  {% for s in ['free','reserved','assigned','confirmed','void'] %}
+    <a class="btn btn-sm {% if active_status == s %}btn-orange{% else %}btn-soft{% endif %}" href="{{ url_for('main.vin_registry_list', status=s) }}">{{ s|status_label }}</a>
+  {% endfor %}
 </div>
 
 <div class="app-card p-3 mb-3">

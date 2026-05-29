@@ -7943,6 +7943,43 @@ def _refresh_order_realization_status(order: CustomerOrder) -> None:
         order.realization_status = 'partial'
 
 
+def _resolve_realization_trailer_for_line(order: CustomerOrder, source_line: CustomerOrderLine, source_lines_count: int):
+    if source_line.line_type != 'TRAILER':
+        return None, None, None
+
+    vin_row = (
+        VinRegistry.query
+        .filter(
+            VinRegistry.order_line_id == source_line.id,
+            VinRegistry.status.in_(['reserved', 'assigned', 'confirmed']),
+        )
+        .order_by(
+            VinRegistry.confirmed_at.desc().nullslast(),
+            VinRegistry.assigned_at.desc().nullslast(),
+            VinRegistry.id.desc(),
+        )
+        .first()
+    )
+    trailer = source_line.trailer or (vin_row.trailer if vin_row and vin_row.trailer_id else None)
+
+    if not trailer and source_lines_count == 1 and order.trailer_id:
+        trailer = order.trailer
+
+    if vin_row and vin_row.trailer_id and trailer and vin_row.trailer_id != trailer.id:
+        return None, None, f'Позиция #{source_line.line_no}: VIN связан с другим прицепом. Проверьте строку заказа и VIN-реестр.'
+
+    if trailer and vin_row and vin_row.vin_full and trailer.vin and trailer.vin != vin_row.vin_full:
+        return None, None, f'Позиция #{source_line.line_no}: VIN строки не совпадает с VIN прицепа.'
+
+    if not trailer:
+        return None, None, f'Позиция #{source_line.line_no}: нет однозначно привязанного прицепа/VIN для реализации.'
+
+    if _posted_realization_for_trailer(trailer.id):
+        return None, None, f'Позиция #{source_line.line_no}: VIN {trailer.vin or trailer.id} уже есть в проведённой реализации.'
+
+    return trailer, vin_row, None
+
+
 def _build_sales_realization_from_order(order: CustomerOrder) -> SalesRealization:
     realization = SalesRealization(
         number=_next_number('RLS', SalesRealization, 'number'),
@@ -7958,26 +7995,19 @@ def _build_sales_realization_from_order(order: CustomerOrder) -> SalesRealizatio
     db.session.add(realization)
     db.session.flush()
     total = Decimal('0')
-    for idx, source_line in enumerate(_order_realization_lines_source(order), start=1):
+    source_lines = _order_realization_lines_source(order)
+    for idx, source_line in enumerate(source_lines, start=1):
         item = source_line.item
         line_type = 'component'
         inventory_effect = 'ship_from_stock'
-        trailer = source_line.trailer or (order.trailer if source_line.line_type == 'TRAILER' else None)
+        trailer = None
         vin_row = None
         if source_line.line_type == 'TRAILER':
             line_type = 'trailer'
             inventory_effect = 'trailer_unit'
-            if not trailer:
-                trailer = order.trailer
-            vin_row = (
-                VinRegistry.query
-                .filter(
-                    VinRegistry.order_line_id == source_line.id,
-                    VinRegistry.status.in_(['reserved', 'assigned', 'confirmed']),
-                )
-                .order_by(VinRegistry.confirmed_at.desc().nullslast(), VinRegistry.assigned_at.desc().nullslast(), VinRegistry.id.desc())
-                .first()
-            )
+            trailer, vin_row, error = _resolve_realization_trailer_for_line(order, source_line, len(source_lines))
+            if error:
+                raise ValueError(error)
         if item and item.is_internal_bom_item:
             continue
         line_total = source_line.total_price or ((source_line.unit_price or 0) * Decimal(source_line.quantity or 1))
@@ -8031,18 +8061,40 @@ def order_realization_create(order_id):
     if order.status == 'cancelled' or order.is_shipped:
         flash('Реализацию нельзя создать по отменённому или уже отгруженному заказу.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
-    if order.trailer_id and _posted_realization_for_trailer(order.trailer_id):
-        flash('Этот VIN уже есть в проведённой реализации.', 'danger')
-        return redirect(url_for('main.order_detail', order_id=order.id))
     idem_key, duplicate = _reserve_idempotency_key()
     if duplicate:
         return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
-    realization = _build_sales_realization_from_order(order)
+    try:
+        realization = _build_sales_realization_from_order(order)
+    except ValueError as exc:
+        db.session.rollback()
+        flash(str(exc), 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
     _finish_idempotency(idem_key, 'SalesRealization', realization.id)
     add_order_event(order, 'realization_created', new_value=realization.number, comment='Создана реализация товаров и услуг')
     db.session.commit()
     flash('Реализация создана в черновике.', 'success')
     return redirect(url_for('main.sales_realization_detail', realization_id=realization.id))
+
+
+@main_bp.route('/realizations/<int:realization_id>/delete', methods=['POST'])
+@role_required('manager', 'director')
+def sales_realization_delete(realization_id):
+    realization = SalesRealization.query.get_or_404(realization_id)
+    if current_user.is_manager and realization.assigned_user_id != current_user.id:
+        abort(403)
+    if realization.status != 'draft':
+        flash('Удалить можно только черновик реализации.', 'danger')
+        return redirect(url_for('main.sales_realization_detail', realization_id=realization.id))
+    order = realization.order
+    number = realization.number or realization.id
+    db.session.delete(realization)
+    if order:
+        _refresh_order_realization_status(order)
+        add_order_event(order, 'realization_cancelled', old_value=number, comment='Удалён черновик реализации')
+    db.session.commit()
+    flash('Черновик реализации удалён.', 'success')
+    return redirect(url_for('main.order_detail', order_id=order.id) if order else url_for('main.sales_realizations_list'))
 
 
 @main_bp.route('/realizations/<int:realization_id>/post', methods=['POST'])

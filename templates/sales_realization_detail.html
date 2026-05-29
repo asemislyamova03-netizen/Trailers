@@ -17,6 +17,10 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button class="btn btn-orange">Провести</button>
       </form>
+      <form method="post" action="{{ url_for('main.sales_realization_delete', realization_id=realization.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-outline-danger">Удалить черновик</button>
+      </form>
     {% endif %}
   </div>
 </div>
