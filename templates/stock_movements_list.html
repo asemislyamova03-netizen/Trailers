@@ -84,6 +84,7 @@
           <th>Тип</th>
           <th>Прицеп</th>
           <th>Заказ</th>
+          <th>Позиция</th>
           <th>Со склада</th>
           <th>На склад</th>
           <th>Статус</th>
@@ -100,6 +101,7 @@
           <td>{{ m.movement_type|status_label }}</td>
           <td class="fw-semibold">{{ m.trailer.vin if m.trailer else '' }}</td>
           <td>{% if m.order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=m.order.id) }}">{{ m.order.order_number }}</a>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+          <td>{% if m.order_line %}<span class="fw-semibold">#{{ m.order_line.line_no }}</span><div class="small text-muted">{{ m.order_line.article_snapshot or (m.order_line.item.article if m.order_line.item else '') }}</div>{% else %}<span class="text-muted">—</span>{% endif %}</td>
           <td>{{ m.from_warehouse.name if m.from_warehouse else '' }}</td>
           <td>{{ m.to_warehouse.name if m.to_warehouse else '' }}</td>
           <td><span class="badge text-bg-{{ m.status|status_badge_class }}">{{ m.status|status_label }}</span></td>
@@ -118,7 +120,7 @@
           </td>
         </tr>
       {% else %}
-        <tr><td colspan="11" class="text-muted p-3">Перемещений нет</td></tr>
+        <tr><td colspan="12" class="text-muted p-3">Перемещений нет</td></tr>
       {% endfor %}
       </tbody>
     </table>
