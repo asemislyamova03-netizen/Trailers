@@ -223,15 +223,18 @@
                     </div>
                     <div class="col-md-3">
                       <label class="form-label small mb-1">Цена за 1 ед.</label>
-                      <input class="form-control form-control-sm" name="unit_price" value="{{ line.unit_price if line.unit_price is not none else '' }}">
+                      <input class="form-control form-control-sm" name="unit_price" value="{{ line.unit_price if line.unit_price is not none else '' }}" {% if not row.can_edit_details %}readonly title="{{ row.edit_details_message }}"{% endif %}>
                     </div>
                     <div class="col-md-5">
                       <label class="form-label small mb-1">Комментарий по позиции</label>
-                      <input class="form-control form-control-sm" name="note" value="{{ line.note or '' }}">
+                      <input class="form-control form-control-sm" name="note" value="{{ line.note or '' }}" {% if not row.can_edit_details %}readonly title="{{ row.edit_details_message }}"{% endif %}>
                     </div>
                     <div class="col-md-2">
-                      <button class="btn btn-sm btn-soft w-100">Сохранить строку</button>
+                      <button class="btn btn-sm btn-soft w-100" {% if not row.can_edit_details %}disabled title="{{ row.edit_details_message }}"{% endif %}>Сохранить строку</button>
                     </div>
+                    {% if not row.can_edit_details %}
+                    <div class="col-12 small text-muted">{{ row.edit_details_message }}</div>
+                    {% endif %}
                   </form>
 
                   {% if row.vin_link_candidates or row.can_create_vin_from_trailer or row.vin_link_message %}

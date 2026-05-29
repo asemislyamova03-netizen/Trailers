@@ -4949,6 +4949,8 @@ def _order_line_operation_blockers(line: CustomerOrderLine) -> list[str]:
         blockers.append('есть перемещение')
     if line.contract_lines:
         blockers.append('есть строка договора')
+    if _line_has_any_realization(line):
+        blockers.append('есть реализация')
     if line.production_outputs:
         blockers.append('есть производственные результаты')
     return blockers
@@ -4968,7 +4970,17 @@ def _order_line_quantity_blockers(line: CustomerOrderLine) -> list[str]:
         blockers.append('есть перемещение')
     if line.contract_lines:
         blockers.append('есть строка договора')
+    if _line_has_any_realization(line):
+        blockers.append('есть реализация')
     return blockers
+
+
+def _can_edit_order_line_details(line: CustomerOrderLine) -> tuple[bool, str]:
+    if not line.order or line.order.documents_issued or line.order.is_shipped or line.order.status == 'cancelled':
+        return False, 'Позиции можно менять только до выдачи документов и отгрузки.'
+    if _line_has_any_realization(line):
+        return False, 'По позиции уже есть реализация. Меняйте цену, количество и комментарий в документе реализации.'
+    return True, ''
 
 
 def _can_delete_order_line(line: CustomerOrderLine) -> tuple[bool, str]:
@@ -7808,6 +7820,7 @@ def order_detail(order_id):
         vin_count = len(vin_rows)
         shortage_qty = max((line.quantity or 1) - production_qty, 0) if line.fulfillment_source == 'production' else 0
         can_edit_qty, edit_qty_message = _can_edit_order_line_quantity(line)
+        can_edit_details, edit_details_message = _can_edit_order_line_details(line)
         can_delete_line, delete_message = _can_delete_order_line(line)
         can_ship_line, ship_message = _order_line_can_ship(line)
         can_change_source, source_blockers = can_change_order_line_source(line)
@@ -7857,8 +7870,10 @@ def order_detail(order_id):
             'production_qty': production_qty,
             'shortage_qty': shortage_qty,
             'trailer': (vin_rows[0].trailer if vin_rows and vin_rows[0].trailer else (active_reservation.trailer if active_reservation else None)),
-            'can_edit_quantity': can_edit_qty,
-            'edit_quantity_message': edit_qty_message,
+            'can_edit_quantity': can_edit_qty and can_edit_details,
+            'edit_quantity_message': edit_details_message or edit_qty_message,
+            'can_edit_details': can_edit_details,
+            'edit_details_message': edit_details_message,
             'can_delete': can_delete_line,
             'delete_message': delete_message,
             'can_ship': can_ship_line,
@@ -8221,6 +8236,10 @@ def order_line_update(order_id, line_id):
     line = CustomerOrderLine.query.filter_by(id=line_id, order_id=order.id).first_or_404()
     if order.status == 'cancelled' or order.documents_issued or order.is_shipped:
         flash('Позиции можно менять только до выдачи документов и отгрузки.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    can_edit_details, edit_details_message = _can_edit_order_line_details(line)
+    if not can_edit_details:
+        flash(edit_details_message, 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
 
     quantity = max(request.form.get('quantity', type=int) or 1, 1)
