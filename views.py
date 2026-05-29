@@ -12207,7 +12207,7 @@ def director_report(section='sales'):
         if section == 'dynamics':
             best = max(analytics_rows, key=lambda row: row['revenue'], default=None)
             return [
-                {'title': 'Выручка', 'value': money(revenue), 'caption': 'за выбранный период'},
+            {'title': 'Выручка', 'value': money(revenue), 'caption': 'реализации/отгрузки'},
                 {'title': 'Продано', 'value': sold_quantity, 'caption': 'прицепных строк'},
                 {'title': 'Периодов', 'value': len(analytics_rows), 'caption': 'точек динамики'},
                 {'title': 'Лучший период', 'value': best['label'] if best else '—', 'caption': money(best['revenue']) if best else 'нет продаж'},
@@ -12215,7 +12215,7 @@ def director_report(section='sales'):
         if section == 'branches':
             best = max(analytics_rows, key=lambda row: row['revenue'], default=None)
             return [
-                {'title': 'Выручка', 'value': money(revenue), 'caption': 'по складам'},
+            {'title': 'Выручка', 'value': money(revenue), 'caption': 'реализации/отгрузки по складам'},
                 {'title': 'Складов', 'value': len(analytics_rows), 'caption': 'с продажами'},
                 {'title': 'Лидер', 'value': best['label'] if best else '—', 'caption': money(best['revenue']) if best else 'нет продаж'},
                 {'title': 'Продано', 'value': sold_quantity, 'caption': 'прицепных строк'},
@@ -12223,13 +12223,13 @@ def director_report(section='sales'):
         if section == 'types':
             best = max(analytics_rows, key=lambda row: row['quantity'], default=None)
             return [
-                {'title': 'Выручка', 'value': money(revenue), 'caption': 'по типам'},
+            {'title': 'Выручка', 'value': money(revenue), 'caption': 'реализации/отгрузки по типам'},
                 {'title': 'Типов', 'value': len(analytics_rows), 'caption': 'в выборке'},
                 {'title': 'Топ тип', 'value': best['label'] if best else '—', 'caption': f"{best['quantity']} шт." if best else 'нет продаж'},
                 {'title': 'Старые договоры', 'value': len(legacy_contract_rows), 'caption': 'без реализации'},
             ]
         return [
-            {'title': 'Выручка', 'value': money(revenue), 'caption': 'реализации + legacy-договоры'},
+            {'title': 'Выручка', 'value': money(revenue), 'caption': 'реализации + старые договоры'},
             {'title': 'Документов', 'value': documents_count, 'caption': 'продажных документов'},
             {'title': 'Продано', 'value': sold_quantity, 'caption': 'прицепных строк'},
             {'title': 'Средний чек', 'value': money(average), 'caption': 'выручка / документы'},
