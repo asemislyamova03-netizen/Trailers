@@ -22,12 +22,12 @@
     <div class="col-md-2">
       <label class="form-label">Период</label>
       <select name="period" class="form-select" id="reportPeriod">
-        <option value="day" {% if period == 'day' %}selected{% endif %}>День</option>
-        <option value="week" {% if period == 'week' %}selected{% endif %}>Неделя</option>
-        <option value="month" {% if period == 'month' %}selected{% endif %}>Месяц</option>
-        <option value="year" {% if period == 'year' %}selected{% endif %}>Год</option>
+        <option value="day" {% if period == 'day' %}selected{% endif %}>По дням</option>
+        <option value="week" {% if period == 'week' %}selected{% endif %}>По неделям</option>
+        <option value="month" {% if period == 'month' %}selected{% endif %}>По месяцам</option>
+        <option value="year" {% if period == 'year' %}selected{% endif %}>По годам</option>
         <option value="all" {% if period == 'all' %}selected{% endif %}>Всё время</option>
-        <option value="custom" {% if period == 'custom' %}selected{% endif %}>Период</option>
+        <option value="custom" {% if period == 'custom' %}selected{% endif %}>Без группировки</option>
       </select>
     </div>
     <div class="col-md-2">
@@ -93,17 +93,6 @@
     </div>
   </form>
 </div>
-
-<script>
-document.addEventListener('DOMContentLoaded', () => {
-  const periodSelect = document.getElementById('reportPeriod');
-  document.querySelectorAll('[data-report-date]').forEach((input) => {
-    input.addEventListener('change', () => {
-      if (periodSelect) periodSelect.value = 'custom';
-    });
-  });
-});
-</script>
 
 {% if report_warning %}
   <div class="alert alert-warning py-2">{{ report_warning }}</div>

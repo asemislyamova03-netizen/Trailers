@@ -11848,16 +11848,7 @@ def director_report(section='sales'):
     if period == 'all':
         date_from = date(2000, 1, 1)
         date_to = today
-    elif period == 'day':
-        date_from = today
-        date_to = today
-    elif period == 'week':
-        date_from = today - timedelta(days=today.weekday())
-        date_to = today
-    elif period == 'year':
-        date_from = today.replace(month=1, day=1)
-        date_to = today
-    elif period == 'custom':
+    else:
         try:
             date_from = datetime.strptime(request.args.get('date_from') or '', '%Y-%m-%d').date()
         except ValueError:
@@ -11866,10 +11857,10 @@ def director_report(section='sales'):
             date_to = datetime.strptime(request.args.get('date_to') or '', '%Y-%m-%d').date()
         except ValueError:
             date_to = today
-    else:
-        period = 'month'
-        date_from = today.replace(day=1)
-        date_to = today
+        if period not in ('day', 'week', 'month', 'year', 'custom'):
+            period = 'month'
+        if date_to < date_from:
+            date_from, date_to = date_to, date_from
 
     period_start = datetime.combine(date_from, time.min)
     period_end = datetime.combine(date_to, time.max)
@@ -12204,24 +12195,67 @@ def director_report(section='sales'):
         combined_rows.sort(key=lambda row: row['date'] or datetime.min, reverse=True)
         return combined_rows, legacy_contract_rows, schema_warning
 
+    def _sales_summary_cards(rows: list[dict], legacy_contract_rows: list[dict], analytics_rows: list[dict]) -> list[dict]:
+        revenue = sum(row['revenue'] or 0 for row in rows)
+        sold_quantity = sum(_record_vehicle_quantity(row) for row in rows)
+        documents_count = len(rows)
+        average = revenue / documents_count if documents_count else 0
+        if section == 'dynamics':
+            best = max(analytics_rows, key=lambda row: row['revenue'], default=None)
+            return [
+                {'title': 'Выручка', 'value': money(revenue), 'caption': 'за выбранный период'},
+                {'title': 'Продано', 'value': sold_quantity, 'caption': 'прицепных строк'},
+                {'title': 'Периодов', 'value': len(analytics_rows), 'caption': 'точек динамики'},
+                {'title': 'Лучший период', 'value': best['label'] if best else '—', 'caption': money(best['revenue']) if best else 'нет продаж'},
+            ]
+        if section == 'branches':
+            best = max(analytics_rows, key=lambda row: row['revenue'], default=None)
+            return [
+                {'title': 'Выручка', 'value': money(revenue), 'caption': 'по складам'},
+                {'title': 'Складов', 'value': len(analytics_rows), 'caption': 'с продажами'},
+                {'title': 'Лидер', 'value': best['label'] if best else '—', 'caption': money(best['revenue']) if best else 'нет продаж'},
+                {'title': 'Продано', 'value': sold_quantity, 'caption': 'прицепных строк'},
+            ]
+        if section == 'types':
+            best = max(analytics_rows, key=lambda row: row['quantity'], default=None)
+            return [
+                {'title': 'Выручка', 'value': money(revenue), 'caption': 'по типам'},
+                {'title': 'Типов', 'value': len(analytics_rows), 'caption': 'в выборке'},
+                {'title': 'Топ тип', 'value': best['label'] if best else '—', 'caption': f"{best['quantity']} шт." if best else 'нет продаж'},
+                {'title': 'Старые договоры', 'value': len(legacy_contract_rows), 'caption': 'без реализации'},
+            ]
+        return [
+            {'title': 'Выручка', 'value': money(revenue), 'caption': 'реализации + legacy-договоры'},
+            {'title': 'Документов', 'value': documents_count, 'caption': 'продажных документов'},
+            {'title': 'Продано', 'value': sold_quantity, 'caption': 'прицепных строк'},
+            {'title': 'Средний чек', 'value': money(average), 'caption': 'выручка / документы'},
+        ]
+
+    def report_period_label(value: datetime | date | None) -> str:
+        if not value:
+            return 'без даты'
+        value_date = value.date() if isinstance(value, datetime) else value
+        if period == 'day':
+            return value_date.strftime('%d.%m.%Y')
+        if period == 'week':
+            year, week, _ = value_date.isocalendar()
+            return f'{year}-W{week:02d}'
+        if period == 'year':
+            return str(value_date.year)
+        if period == 'custom':
+            return f'{date_from.strftime("%d.%m.%Y")} - {date_to.strftime("%d.%m.%Y")}'
+        return value_date.strftime('%Y-%m')
+
     if section in ('sales', 'finance', 'dynamics', 'branches', 'types'):
         rows, legacy_contract_rows, report_warning = combined_sales_report_records()
         anomaly_rows = [
             row for row in rows
             if row['revenue'] >= 3000000 or row['direction'] == 'other'
         ][:10]
-        sold_quantity = sum(_record_vehicle_quantity(row) for row in rows)
-        revenue = sum(row['revenue'] or 0 for row in rows)
-        cards = [
-            {'title': 'Выручка', 'value': money(revenue), 'caption': 'юридические продажи за период'},
-            {'title': 'Продано', 'value': sold_quantity, 'caption': 'шт. по реализациям + старым договорам'},
-            {'title': 'Средний чек', 'value': money(revenue / len(rows) if rows else 0), 'caption': 'по закрытым продажам'},
-            {'title': 'Старые договоры', 'value': len(legacy_contract_rows), 'caption': 'учтены без реализации'},
-        ]
         if section in ('sales', 'dynamics'):
             buckets = defaultdict(lambda: {'orders': 0, 'quantity': 0, 'revenue': 0.0})
             for row in rows:
-                key = row['date'].strftime('%Y-%m') if row.get('date') else 'без даты'
+                key = report_period_label(row.get('date'))
                 buckets[key]['orders'] += 1
                 buckets[key]['quantity'] += _record_vehicle_quantity(row)
                 buckets[key]['revenue'] += row['revenue'] or 0
@@ -12259,6 +12293,7 @@ def director_report(section='sales'):
                 key=lambda row: row['quantity'],
                 reverse=True,
             )
+        cards = _sales_summary_cards(rows, legacy_contract_rows, analytics_rows)
         if section == 'finance':
             rows = (
                 OrderPayment.query
