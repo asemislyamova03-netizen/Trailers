@@ -4896,6 +4896,13 @@ def _line_active_supply_needs(line: CustomerOrderLine) -> list[SupplyNeed]:
     ]
 
 
+def _line_active_movements(line: CustomerOrderLine) -> list[StockMovement]:
+    return [
+        movement for movement in line.movements
+        if (movement.status or '').lower() in ('draft', 'sent', 'in_transit')
+    ]
+
+
 def _order_line_operation_blockers(line: CustomerOrderLine) -> list[str]:
     blockers = []
     if any(row.status == 'ACTIVE' for row in line.reservations):
@@ -4994,8 +5001,10 @@ def can_change_order_line_source(line: CustomerOrderLine) -> tuple[bool, list[st
         blockers.append('есть строка договора')
     if _line_has_any_realization(line):
         blockers.append('есть реализация')
-    if line.movements:
-        blockers.append('есть перемещение')
+    if _line_active_movements(line):
+        blockers.append('есть активное перемещение')
+    if any(row.status == 'confirmed' for row in _active_vin_rows_for_order_line(line)):
+        blockers.append('VIN уже подтверждён')
     if line.produced_units:
         blockers.append('есть выпуск')
     if line.production_outputs:
@@ -5032,6 +5041,8 @@ def _release_line_stock_links(line: CustomerOrderLine, reason: str) -> None:
     for row in vin_rows:
         if row.docs_issued_at:
             raise ValueError('Нельзя снять источник: по VIN уже выданы документы.')
+        if row.status == 'confirmed':
+            raise ValueError('Нельзя снять источник: VIN уже подтверждён менеджером.')
         if row.status == 'reserved' and not row.trailer_id:
             _free_reserved_vin_row(row, order, reason)
         else:
