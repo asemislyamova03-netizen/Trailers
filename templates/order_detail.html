@@ -542,7 +542,7 @@
           {% if not order_contract %}<div class="text-muted small mt-2">Для выдачи документов сначала создайте договор.</div>{% endif %}
           {% if document_blockers %}<div class="text-muted small mt-2">Для документов: {{ document_blockers|join('; ') }}.</div>{% endif %}
           {% else %}
-          <div class="text-muted">Документальный статус закрыт. Дальше доступна только физическая отгрузка, если она ещё не выполнена.</div>
+          <div class="text-muted">Документальный статус закрыт. Отдельная отгрузка больше не используется: проведение реализации товаров и услуг закрывает выдачу по заказу.</div>
           {% endif %}
           {% else %}
           <div class="text-muted">Действия недоступны для вашей роли или состояния заказа.</div>

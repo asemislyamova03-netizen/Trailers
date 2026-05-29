@@ -6358,6 +6358,15 @@ def _stock_movement_trailer_label(trailer: Trailer) -> str:
     return ' — '.join(part for part in parts if part)
 
 
+STOCK_MOVEMENT_ACTIVE_TYPE_CHOICES = [
+    ('warehouse_transfer', 'Между складами'),
+    ('production_arrival', 'Поступление с производства'),
+]
+STOCK_MOVEMENT_FILTER_TYPE_CHOICES = STOCK_MOVEMENT_ACTIVE_TYPE_CHOICES + [
+    ('customer_shipment', 'Отгрузка клиенту (архив)'),
+]
+
+
 def _stock_movement_trailer_options(from_warehouse_id: int | None = None, q: str | None = None, current_trailer_id: int | None = None, exclude_movement_id: int | None = None, limit: int = 50):
     query = (
         Trailer.query
@@ -6431,11 +6440,12 @@ def _set_stock_movement_trailer_search_label(form: StockMovementForm) -> None:
             form.trailer_search.data = _stock_movement_trailer_label(trailer)
 
 
-def _fill_stock_movement_form_choices(form: StockMovementForm, current_movement_id: int | None = None) -> None:
+def _fill_stock_movement_form_choices(form: StockMovementForm, current_movement_id: int | None = None, include_customer_shipment: bool = False) -> None:
     source_warehouses = _trailer_source_warehouses()
     target_warehouses = _sales_warehouses()
     form.from_warehouse_id.choices = [(0, '— нет —')] + [(w.id, w.name) for w in source_warehouses]
     form.to_warehouse_id.choices = [(0, '— нет —')] + [(w.id, w.name) for w in target_warehouses]
+    form.movement_type.choices = STOCK_MOVEMENT_FILTER_TYPE_CHOICES if include_customer_shipment else STOCK_MOVEMENT_ACTIVE_TYPE_CHOICES
     _apply_stock_movement_trailer_search(form, exclude_movement_id=current_movement_id)
     current_trailer_id = form.trailer_id.data or 0
     form.trailer_id.choices = [(0, '— без VIN —')] + [
@@ -10085,7 +10095,7 @@ def stock_movements_list():
         batch_key=batch_key,
         source_warehouses=_trailer_source_warehouses(),
         target_warehouses=_sales_warehouses(),
-        movement_type_choices=StockMovementForm().movement_type.choices,
+        movement_type_choices=STOCK_MOVEMENT_FILTER_TYPE_CHOICES,
         status_choices=StockMovementForm().status.choices,
     )
 
@@ -10202,7 +10212,7 @@ def stock_movement_edit(movement_id):
         form.to_warehouse_id.data = movement.to_warehouse_id or 0
         form.trailer_id.data = movement.trailer_id or 0
         form.order_id.data = movement.order_id or 0
-    _fill_stock_movement_form_choices(form, current_movement_id=movement.id)
+    _fill_stock_movement_form_choices(form, current_movement_id=movement.id, include_customer_shipment=(movement.movement_type == 'customer_shipment'))
     if form.validate_on_submit():
         if not _validate_stock_movement_selection(form, current_movement_id=movement.id):
             return render_template('stock_movement_form.html', form=form, title='Редактирование перемещения', trailer_options=_stock_movement_trailer_options(form.from_warehouse_id.data or None, form.trailer_search.data, form.trailer_id.data or None, movement.id))

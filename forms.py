@@ -775,7 +775,6 @@ class StockMovementForm(IdempotentFlaskForm):
         choices=[
             ('warehouse_transfer', 'Между складами'),
             ('production_arrival', 'Поступление с производства'),
-            ('customer_shipment', 'Отгрузка клиенту'),
         ],
         validators=[DataRequired()]
     )
