@@ -45,6 +45,7 @@
           <th>Потребность</th>
           <th>Склад</th>
           <th>Количество</th>
+          <th>Выпуск / VIN</th>
           <th>Срок</th>
           <th>Статус</th>
           <th>Комментарии</th>
@@ -82,6 +83,30 @@
               <div class="small text-muted">Выпущено: {{ l.produced_qty or 0 }}</div>
               <div class="small text-muted">Осталось: {{ remaining if remaining > 0 else 0 }}</div>
             </td>
+            <td class="small">
+              {% set units = l.produced_units.order_by().all() %}
+              {% for unit in units %}
+                <div class="mb-2">
+                  <span class="badge text-bg-{{ unit.status|status_badge_class }}">#{{ unit.id }} {{ unit.status|status_label }}</span>
+                  {% if unit.trailer %}
+                    <div class="mt-1">
+                      <span class="fw-semibold">{{ unit.trailer.vin }}</span>
+                      <span class="text-muted"> · {{ unit.trailer.warehouse.name if unit.trailer.warehouse else 'склад не задан' }}</span>
+                    </div>
+                  {% elif unit.status == 'produced_no_vin' %}
+                    <div class="text-warning mt-1">Выпущено, ждёт VIN</div>
+                    {% if current_user.is_admin or current_user.is_director %}
+                      <a class="btn btn-sm btn-orange mt-1" href="{{ url_for('main.logistics_assign_vin', unit_id=unit.id) }}">Присвоить VIN</a>
+                    {% endif %}
+                  {% endif %}
+                  {% if unit.trailer and unit.target_warehouse and unit.trailer.warehouse_id != unit.target_warehouse_id %}
+                    <div class="text-info mt-1">Нужно переместить на {{ unit.target_warehouse.name }}</div>
+                  {% endif %}
+                </div>
+              {% else %}
+                <span class="text-muted">Ещё не выпускали</span>
+              {% endfor %}
+            </td>
             <td>{{ need.required_by|date_format if need and need.required_by else '—' }}</td>
             <td><span class="badge text-bg-{{ l.status|status_badge_class }}">{{ l.status|status_label }}</span></td>
             <td class="small">
@@ -96,7 +121,7 @@
             </td>
           </tr>
         {% else %}
-          <tr><td colspan="7" class="text-muted p-3">Позиции не добавлены</td></tr>
+          <tr><td colspan="8" class="text-muted p-3">Позиции не добавлены</td></tr>
         {% endfor %}
       </tbody>
     </table>
