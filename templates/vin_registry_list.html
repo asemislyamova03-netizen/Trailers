@@ -5,8 +5,21 @@
 <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
   <div>
     <h1 class="h3 mb-1">Реестр VIN{% if active_status %}: {{ active_status|status_label }}{% endif %}</h1>
-    <div class="text-muted">Свободные serial7, резервы под заказы, назначенные и подтверждённые VIN.</div>
+    <div class="text-muted">
+      {% if active_status == 'free' %}Свободные VIN для назначения.
+      {% elif active_status == 'reserved' %}VIN в резерве, которые можно назначить на технику.
+      {% elif active_status == 'assigned' %}Назначенные VIN, которые ждут подтверждения менеджера.
+      {% elif active_status == 'confirmed' %}Подтверждённые VIN.
+      {% elif active_status == 'void' %}Ошибочные и аннулированные VIN.
+      {% else %}Свободные serial7, резервы под заказы, назначенные и подтверждённые VIN.
+      {% endif %}
+    </div>
   </div>
+  {% if current_user.is_admin or current_user.is_director or current_user.is_logistics %}
+  <button class="btn btn-orange btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#vinUploadCollapse">
+    <i class="bi bi-upload me-1"></i>Загрузка VIN
+  </button>
+  {% endif %}
 </div>
 
 <div class="d-flex flex-wrap gap-2 mb-3">
@@ -29,8 +42,9 @@
   </form>
 </div>
 
-{% if not current_user.is_manager %}
-<div class="app-card p-3 mb-3">
+{% if current_user.is_admin or current_user.is_director or current_user.is_logistics %}
+<div class="collapse mb-3" id="vinUploadCollapse">
+<div class="app-card p-3">
   <form method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="row g-2">
@@ -45,6 +59,7 @@
       </div>
     </div>
   </form>
+</div>
 </div>
 {% endif %}
 

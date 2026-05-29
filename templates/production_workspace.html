@@ -2,105 +2,106 @@
 {% block title %}Производство{% endblock %}
 {% block content %}
 <div class="compact-page-header">
-  <div><h1>Производство</h1><div class="text-muted small">Задания, выпуск единиц и комментарии по проблемам</div></div>
+  <div>
+    <h1>Производство</h1>
+    <div class="text-muted small">Задания, выпуск единиц, VIN к нанесению и производственные комментарии</div>
+  </div>
   <span class="badge text-bg-success fs-6">Сегодня выпущено: {{ today_units|length }}</span>
 </div>
 
-<div class="nav nav-tabs mb-3">
-  <a class="nav-link {% if active_tab == 'todo' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='todo') }}">К выполнению</a>
+<div class="nav nav-tabs mb-3 overflow-auto flex-nowrap">
+  <a class="nav-link {% if active_tab == 'todo' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='todo') }}">Мои задания</a>
   <a class="nav-link {% if active_tab == 'in_work' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='in_work') }}">В работе</a>
+  <a class="nav-link {% if active_tab == 'done_today' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='done_today') }}">Выпуск</a>
   <a class="nav-link {% if active_tab == 'overdue' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='overdue') }}">Просрочено</a>
-  <a class="nav-link {% if active_tab == 'done_today' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='done_today') }}">Выпущено сегодня</a>
 </div>
 
 {% if active_tab == 'done_today' %}
-<div class="row g-3">
-{% for unit in today_units %}
-  {% set vin_row = production_vin_row_for_unit(unit) %}
-  <div class="col-12 col-md-6 col-xl-4">
-    <div class="app-card h-100">
-      <div class="card-body">
-        <div class="d-flex justify-content-between gap-2">
-          <h2 class="h6 mb-1">Единица #{{ unit.id }}</h2>
-          <span class="badge text-bg-{{ unit.status|status_badge_class }}">{{ unit.status|status_label }}</span>
-        </div>
-        <dl class="row small mb-0">
-          <dt class="col-5">Модель</dt><dd class="col-7">{{ unit.item.article if unit.item else '' }} {{ unit.item.name if unit.item else '' }}</dd>
-          <dt class="col-5">Тип</dt><dd class="col-7"><span class="badge text-bg-{{ unit.production_request_line.supply_need.need_type|status_badge_class if unit.production_request_line and unit.production_request_line.supply_need else 'secondary' }}">{{ unit.production_request_line.supply_need.need_type|status_label if unit.production_request_line and unit.production_request_line.supply_need else 'Без потребности' }}</span></dd>
-          <dt class="col-5">Склад</dt><dd class="col-7">{{ unit.target_warehouse.name if unit.target_warehouse else '' }}</dd>
-          <dt class="col-5">Дата выпуска</dt><dd class="col-7">{{ unit.produced_at|date_format }}</dd>
-          <dt class="col-5">VIN</dt><dd class="col-7">{{ unit.trailer.vin if unit.trailer else (vin_row.vin_full if vin_row else 'ждёт логиста') }}</dd>
-          {% if vin_row and vin_row.docs_issued_at %}<dt class="col-5">Важно</dt><dd class="col-7 text-danger">Документы уже выданы. Нанести именно этот VIN.</dd>{% endif %}
-        </dl>
-      </div>
-    </div>
+<div class="app-card">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead><tr><th>Ед.</th><th>Модель</th><th>Склад</th><th>VIN</th><th>Статус</th><th>Дата</th></tr></thead>
+      <tbody>
+      {% for unit in today_units %}
+        {% set vin_row = production_vin_row_for_unit(unit) %}
+        <tr>
+          <td class="fw-semibold">#{{ unit.id }}</td>
+          <td><div class="fw-semibold">{{ unit.item.article if unit.item else '' }}</div><div class="small text-muted">{{ unit.item.name if unit.item else '' }}</div></td>
+          <td>{{ unit.target_warehouse.name if unit.target_warehouse else '' }}</td>
+          <td>{% if unit.trailer %}<span class="fw-semibold">{{ unit.trailer.vin }}</span>{% elif vin_row %}<span class="fw-semibold">{{ vin_row.vin_full }}</span>{% else %}<span class="text-muted">ждёт логиста</span>{% endif %}{% if vin_row and vin_row.docs_issued_at %}<div class="small text-danger">Документы выданы</div>{% endif %}</td>
+          <td><span class="badge text-bg-{{ unit.status|status_badge_class }}">{{ unit.status|status_label }}</span></td>
+          <td>{{ unit.produced_at|date_format }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="text-muted p-3">Сегодня выпусков нет</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
   </div>
-{% else %}
-  <div class="col-12"><div class="alert alert-secondary">Сегодня выпусков нет</div></div>
-{% endfor %}
 </div>
 {% else %}
-<div class="row g-3">
-{% for line in lines %}
-  {% set vin_row = production_vin_row_for_line(line) %}
-  {% set config_parts = production_config_summary(line) %}
-  <div class="col-12 col-md-6 col-xl-4">
-    <div class="app-card h-100">
-      <div class="card-body">
-        <div class="d-flex justify-content-between gap-2">
-          <h2 class="h6 mb-1">{{ line.article_snapshot or (line.item.article if line.item else '') or '—' }}</h2>
-          <span class="badge text-bg-{{ line.status|status_badge_class }}">{{ line.status|status_label }}</span>
-        </div>
-        <div class="small text-muted mb-2">{{ line.production_request.request_number }}</div>
-        <dl class="row small mb-2">
-          <dt class="col-5">Модель</dt><dd class="col-7">{{ line.product_name_snapshot or (line.item.name if line.item else '—') }}</dd>
-          <dt class="col-5">Тип</dt><dd class="col-7"><span class="badge text-bg-{{ line.supply_need.need_type|status_badge_class if line.supply_need else 'secondary' }}">{{ line.supply_need.need_type|status_label if line.supply_need else 'Без потребности' }}</span></dd>
-          <dt class="col-5">Кузов</dt><dd class="col-7">{{ line.inner_dimensions_text or line.overall_dimensions_text or (line.item.size_body if line.item else '') }}</dd>
-          <dt class="col-5">Склад</dt><dd class="col-7">{{ line.production_request.target_warehouse.name if line.production_request.target_warehouse else '' }}</dd>
-          <dt class="col-5">Срок</dt><dd class="col-7">{{ line.supply_need.required_by|date_format if line.supply_need else '' }}</dd>
-          <dt class="col-5">Выпущено</dt><dd class="col-7">{{ line.produced_qty or 0 }} из {{ line.quantity }}</dd>
-          <dt class="col-5">VIN к нанесению</dt><dd class="col-7">{% if vin_row %}<span class="fw-bold">{{ vin_row.vin_full }}</span>{% else %}<span class="text-muted">не зарезервирован</span>{% endif %}</dd>
-        </dl>
-        {% if config_parts %}
-          <div class="small mb-2">{% for part in config_parts %}<span class="badge text-bg-light me-1 mb-1">{{ part }}</span>{% endfor %}</div>
-        {% endif %}
-        {% if vin_row and vin_row.docs_issued_at %}<div class="alert alert-danger py-2 small">Документы уже выданы. Нанести именно этот VIN.</div>{% endif %}
-        {% if not current_user.is_production %}
-          <div class="alert alert-info py-2 small">Просмотр для менеджера. Выпуск отмечает только производственный пользователь.</div>
-        {% endif %}
-        <div class="production-notes small mb-2">
-          {% if line.production_request.note %}<div><strong>Заявка:</strong> {{ line.production_request.note }}</div>{% endif %}
-          {% if line.note %}<div><strong>Позиция:</strong> {{ line.note }}</div>{% endif %}
-          {% if line.supply_need and line.supply_need.note %}<div><strong>Потребность:</strong> {{ line.supply_need.note }}</div>{% endif %}
-          {% if line.supply_need and line.supply_need.order and line.supply_need.order.manager_comment %}<div><strong>Менеджер:</strong> {{ line.supply_need.order.manager_comment }}</div>{% endif %}
-          {% if line.supply_need and line.supply_need.order and line.supply_need.order.note %}<div><strong>Заказ:</strong> {{ line.supply_need.order.note }}</div>{% endif %}
-        </div>
-        {% if line.production_comment %}<div class="alert alert-warning py-2 small"><strong>Производство:</strong> {{ line.production_comment }}</div>{% endif %}
-        <div class="d-flex gap-2 flex-wrap">
-          {% if line.status not in ['ready', 'closed', 'cancelled'] %}
-          {% if line.status in ['planned', 'PLANNED', 'draft', 'DRAFT', 'waiting_production'] %}
-          <form method="post" action="{{ url_for('main.production_line_start', line_id=line.id) }}">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button class="btn btn-sm btn-primary-app" {% if not current_user.is_production %}disabled{% endif %}>Взять в работу</button>
-          </form>
-          {% endif %}
-          <form method="post" action="{{ url_for('main.production_line_produce_one', line_id=line.id) }}">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button class="btn btn-sm btn-success" {% if not current_user.is_production %}disabled{% endif %}>Выпущено 1 шт.</button>
-          </form>
-          {% endif %}
-        </div>
-        <form method="post" action="{{ url_for('main.production_line_comment', line_id=line.id, tab=active_tab) }}" class="mt-2">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <textarea name="production_comment" class="form-control form-control-sm" rows="2" placeholder="Проблема / комментарий" {% if not current_user.is_production %}disabled{% endif %}>{{ line.production_comment or '' }}</textarea>
-          <button class="btn btn-sm btn-outline-secondary mt-2" {% if not current_user.is_production %}disabled{% endif %}>Сохранить</button>
-        </form>
-      </div>
-    </div>
+<div class="app-card">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead><tr><th>Задание</th><th>Модель</th><th>Склад</th><th>Срок</th><th>Выпуск</th><th>VIN</th><th>Статус</th><th class="text-end">Действия</th></tr></thead>
+      <tbody>
+      {% for line in lines %}
+        {% set vin_row = production_vin_row_for_line(line) %}
+        {% set config_parts = production_config_summary(line) %}
+        <tr>
+          <td>
+            <div class="fw-semibold">{{ line.production_request.request_number }}</div>
+            <div class="small text-muted">#{{ line.id }}</div>
+          </td>
+          <td>
+            <div class="fw-semibold">{{ line.article_snapshot or (line.item.article if line.item else '') or '—' }}</div>
+            <div class="small text-muted">{{ line.product_name_snapshot or (line.item.name if line.item else '—') }}</div>
+            {% if config_parts %}<div class="small">{% for part in config_parts[:3] %}<span class="badge text-bg-light me-1">{{ part }}</span>{% endfor %}</div>{% endif %}
+          </td>
+          <td>{{ line.production_request.target_warehouse.name if line.production_request.target_warehouse else '' }}</td>
+          <td>{{ line.supply_need.required_by|date_format if line.supply_need else '' }}</td>
+          <td>{{ line.produced_qty or 0 }} / {{ line.quantity }}</td>
+          <td>{% if vin_row %}<span class="fw-semibold">{{ vin_row.vin_full }}</span>{% else %}<span class="text-muted">не зарезервирован</span>{% endif %}{% if vin_row and vin_row.docs_issued_at %}<div class="small text-danger">Нанести именно этот VIN</div>{% endif %}</td>
+          <td><span class="badge text-bg-{{ line.status|status_badge_class }}">{{ line.status|status_label }}</span></td>
+          <td class="text-end">
+            <div class="d-flex gap-1 justify-content-end flex-wrap">
+              {% if line.status not in ['ready', 'closed', 'cancelled'] %}
+                {% if line.status in ['planned', 'PLANNED', 'draft', 'DRAFT', 'waiting_production'] %}
+                <form method="post" action="{{ url_for('main.production_line_start', line_id=line.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button class="btn btn-sm btn-primary-app" {% if not current_user.is_production %}disabled{% endif %}>В работу</button>
+                </form>
+                {% endif %}
+                <form method="post" action="{{ url_for('main.production_line_produce_one', line_id=line.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button class="btn btn-sm btn-success" {% if not current_user.is_production %}disabled{% endif %}>+1</button>
+                </form>
+              {% endif %}
+              <button class="btn btn-sm btn-soft" type="button" data-bs-toggle="collapse" data-bs-target="#productionComment{{ line.id }}">Комментарий</button>
+            </div>
+          </td>
+        </tr>
+        <tr class="collapse" id="productionComment{{ line.id }}">
+          <td colspan="8">
+            <div class="small mb-2">
+              {% if line.production_request.note %}<div><strong>Заявка:</strong> {{ line.production_request.note }}</div>{% endif %}
+              {% if line.note %}<div><strong>Позиция:</strong> {{ line.note }}</div>{% endif %}
+              {% if line.supply_need and line.supply_need.note %}<div><strong>Потребность:</strong> {{ line.supply_need.note }}</div>{% endif %}
+              {% if line.supply_need and line.supply_need.order and line.supply_need.order.manager_comment %}<div><strong>Менеджер:</strong> {{ line.supply_need.order.manager_comment }}</div>{% endif %}
+            </div>
+            <form method="post" action="{{ url_for('main.production_line_comment', line_id=line.id, tab=active_tab) }}" class="d-flex gap-2">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <textarea name="production_comment" class="form-control form-control-sm" rows="1" placeholder="Проблема / комментарий" {% if not current_user.is_production %}disabled{% endif %}>{{ line.production_comment or '' }}</textarea>
+              <button class="btn btn-sm btn-outline-secondary" {% if not current_user.is_production %}disabled{% endif %}>Сохранить</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="8" class="text-muted p-3">Производственных заданий нет</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
   </div>
-{% else %}
-  <div class="col-12"><div class="alert alert-secondary">Производственных заданий нет</div></div>
-{% endfor %}
 </div>
 {% endif %}
 {% endblock %}
