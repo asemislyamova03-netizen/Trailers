@@ -5387,6 +5387,7 @@ def _apply_realization_shipment_effect(realization: SalesRealization) -> None:
     for line in realization.lines:
         if line.order_line:
             _set_line_source_state(line.order_line, line.order_line.fulfillment_source, 'shipped')
+            _sync_order_line_workflow_links(line.order_line)
             affected_lines.append(line.order_line)
             for reservation in line.order_line.reservations:
                 if reservation.status == 'ACTIVE':
@@ -5407,6 +5408,8 @@ def _revert_realization_shipment_effect(realization: SalesRealization) -> None:
     for line in realization.lines:
         if line.order_line and line.order_line.status == 'shipped':
             _set_line_source_state(line.order_line, line.order_line.fulfillment_source, 'NEW')
+        if line.order_line:
+            _sync_order_line_workflow_links(line.order_line)
         if line.inventory_effect == 'trailer_unit' and line.trailer:
             line.trailer.status = 'RESERVED'
             line.trailer.lifecycle_status = 'reserved'
@@ -8914,6 +8917,7 @@ def _build_sales_realization_from_order(order: CustomerOrder) -> SalesRealizatio
             product_name_snapshot=source_line.product_name_snapshot or (item.name if item else None),
             vin_full=(vin_row.vin_full if vin_row else (trailer.vin if trailer else None)),
         ))
+        _sync_order_line_workflow_links(source_line)
     realization.total_amount = total
     return realization
 
@@ -8968,10 +8972,13 @@ def sales_realization_edit(realization_id):
             if not kept_lines:
                 flash('В реализации должна остаться хотя бы одна строка.', 'danger')
                 return render_template('sales_realization_form.html', form=form, realization=realization)
+            touched_order_lines = [line.order_line for line in current_lines if line.id in remove_line_ids and line.order_line]
             for line in current_lines:
                 if line.id in remove_line_ids:
                     db.session.delete(line)
             db.session.flush()
+            for order_line in touched_order_lines:
+                _sync_order_line_workflow_links(order_line)
             for index, line in enumerate(kept_lines, start=1):
                 line.line_no = index
 
@@ -9000,6 +9007,8 @@ def sales_realization_edit(realization_id):
             line.unit_price = unit_price
             line.total_price = unit_price * Decimal(line.quantity or 1)
             line.comment = (request.form.get(f'line_{line.id}_comment') or '').strip() or None
+            if line.order_line:
+                _sync_order_line_workflow_links(line.order_line)
             total += Decimal(line.total_price or 0)
 
         realization.total_amount = total
