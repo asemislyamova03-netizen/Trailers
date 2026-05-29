@@ -46,7 +46,7 @@
 <div class="compact-page-header">
   <div>
     <h1>Пополнение складов</h1>
-    <div class="text-muted small">Заявки на производство без клиента. После выпуска логист присваивает VIN, прицеп попадает в наличие склада.</div>
+    <div class="text-muted small">Заявки на производство без клиента. Логист ведёт VIN-реестр, менеджер присваивает VIN выпущенной единице.</div>
   </div>
   <a href="{{ url_for('main.stock_replenishment_create') }}" class="btn btn-orange btn-sm"><i class="bi bi-plus-lg me-1"></i>Заказать на склад</a>
 </div>
@@ -104,7 +104,7 @@
         {% if st.needs_vin_qty %}
           <div class="stock-need-next-step bg-warning-subtle text-warning-emphasis">
             <div class="fw-semibold">Выпущено без VIN</div>
-            <div class="small">Следующий шаг: логист присваивает VIN выпущенной единице. После этого появится отправка на склад.</div>
+            <div class="small">Следующий шаг: менеджер выбирает VIN из реестра и присваивает его выпущенной единице. После этого появится отправка на склад.</div>
           </div>
         {% elif st.needs_movement_qty %}
           <div class="stock-need-next-step bg-info-subtle text-info-emphasis">
@@ -120,7 +120,7 @@
           {% if current_user.is_admin or current_user.is_director %}
             <a class="btn btn-sm btn-orange" href="{{ url_for('main.logistics_assign_vin', unit_id=st.needs_vin_units[0].id) }}">Присвоить VIN</a>
           {% else %}
-            <span class="text-muted small">Следующий шаг у логиста: присвоить VIN выпущенной единице.</span>
+            <span class="text-muted small">Следующий шаг менеджера: присвоить VIN выпущенной единице.</span>
           {% endif %}
         {% elif st.needs_movement_qty %}
           {% set move_unit = st.needs_movement_units[0] %}

@@ -70,7 +70,7 @@
                 {% elif current_user.is_logistics %}
                     {{ nav_item('VIN-реестр', 'bi-upc', 'main.vin_registry_list', active=(endpoint == 'main.vin_registry_list' and not request.args.get('status') and not request.args.get('upload'))) }}
                     {{ nav_item('Свободные VIN', 'bi-upc-scan', href=url_for('main.vin_registry_list', status='free'), active=(endpoint == 'main.vin_registry_list' and request.args.get('status') == 'free')) }}
-                    {{ nav_item('Назначить VIN', 'bi-link-45deg', href=url_for('main.vin_registry_list', status='reserved'), active=(endpoint == 'main.vin_registry_list' and request.args.get('status') == 'reserved')) }}
+                    {{ nav_item('Зарезервированные VIN', 'bi-link-45deg', href=url_for('main.vin_registry_list', status='reserved'), active=(endpoint == 'main.vin_registry_list' and request.args.get('status') == 'reserved')) }}
                     {{ nav_item('Загрузка VIN', 'bi-upload', href=url_for('main.vin_registry_list', upload=1), active=(endpoint == 'main.vin_registry_list' and request.args.get('upload'))) }}
                     {{ nav_item('Ждут подтверждения', 'bi-hourglass-split', href=url_for('main.vin_registry_list', status='assigned'), active=(endpoint == 'main.vin_registry_list' and request.args.get('status') == 'assigned')) }}
                     {{ nav_item('Ошибки', 'bi-exclamation-triangle', href=url_for('main.vin_registry_list', status='void'), active=(endpoint == 'main.vin_registry_list' and request.args.get('status') == 'void')) }}

@@ -61,7 +61,7 @@
           <td class="fw-semibold">#{{ unit.id }}</td>
           <td><div class="fw-semibold">{{ unit.item.article if unit.item else '' }}</div><div class="small text-muted">{{ unit.item.name if unit.item else '' }}</div></td>
           <td>{{ unit.target_warehouse.name if unit.target_warehouse else '' }}</td>
-          <td>{% if unit.trailer %}<span class="fw-semibold">{{ unit.trailer.vin }}</span>{% elif vin_row %}<span class="fw-semibold">{{ vin_row.vin_full }}</span>{% else %}<span class="text-muted">ждёт логиста</span>{% endif %}{% if vin_row and vin_row.docs_issued_at %}<div class="small text-danger">Документы выданы</div>{% endif %}</td>
+          <td>{% if unit.trailer %}<span class="fw-semibold">{{ unit.trailer.vin }}</span>{% elif vin_row %}<span class="fw-semibold">{{ vin_row.vin_full }}</span>{% else %}<span class="text-muted">ждёт менеджера</span>{% endif %}{% if vin_row and vin_row.docs_issued_at %}<div class="small text-danger">Документы выданы</div>{% endif %}</td>
           <td><span class="badge text-bg-{{ unit.status|status_badge_class }}">{{ unit.status|status_label }}</span></td>
           <td>{{ unit.produced_at|date_format }}</td>
         </tr>

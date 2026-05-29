@@ -9720,7 +9720,7 @@ def vin_registry_cancel_reservation(vin_id):
 
 
 @main_bp.route('/logistics/vin-registry/<int:vin_id>/assign', methods=['POST'])
-@role_required('logistics', 'director')
+@role_required('manager', 'director')
 def vin_registry_assign(vin_id):
     row = VinRegistry.query.get_or_404(vin_id)
     if row.status not in ('free', 'reserved') or not row.vin_full:
@@ -10810,12 +10810,12 @@ def logistics_workspace():
 
 
 @main_bp.route('/logistics/produced-units/<int:unit_id>/assign-vin', methods=['GET', 'POST'])
-@role_required('logistics', 'director')
+@role_required('manager', 'director')
 def logistics_assign_vin(unit_id):
     unit = ProducedUnit.query.get_or_404(unit_id)
     form = AssignVinForm()
     context = _produced_unit_context(unit)
-    back_url = url_for('main.vin_registry_list') if current_user.is_logistics else url_for('main.logistics_workspace')
+    back_url = url_for('main.stock_replenishment_list') if current_user.is_manager else url_for('main.logistics_workspace')
     reserved_vin_row = context.get('vin_registry')
     if reserved_vin_row and (reserved_vin_row.status != 'reserved' or not reserved_vin_row.vin_full):
         reserved_vin_row = None
@@ -10836,6 +10836,13 @@ def logistics_assign_vin(unit_id):
         order = unit.order if unit.order_id else None
         if not order and line and line.supply_need:
             order = line.supply_need.order
+        if current_user.is_manager:
+            target_warehouse_id = unit.target_warehouse_id or (line.supply_need.warehouse_id if line and line.supply_need else None)
+            if order:
+                if not can_manage_order(order):
+                    abort(403)
+            elif target_warehouse_id and current_user.warehouse_id != target_warehouse_id:
+                abort(403)
         existing_trailer = Trailer.query.filter_by(vin=vin).first()
         vin_registry_row = reserved_vin_row
         parsed = None
@@ -11852,7 +11859,7 @@ def director_report(section='sales'):
         cards = [
             {'title': 'Заказано', 'value': sum(line.quantity or 0 for line in active_rows), 'caption': 'активное производство'},
             {'title': 'Осталось выпустить', 'value': sum(max((line.quantity or 0) - (line.produced_qty or 0), 0) for line in active_rows), 'caption': 'по активным строкам'},
-            {'title': 'Выпущено без VIN', 'value': produced_no_vin.count(), 'caption': 'ждёт логиста'},
+            {'title': 'Выпущено без VIN', 'value': produced_no_vin.count(), 'caption': 'ждёт менеджера'},
             {'title': 'Просрочено', 'value': len([line for line in active_rows if line.supply_need and line.supply_need.required_by and line.supply_need.required_by < today]), 'caption': 'по сроку'},
         ]
 

@@ -120,7 +120,7 @@
     </div>
   </div>
   {% endif %}
-  {% if row.status in ['free', 'reserved'] and row.vin_full and (current_user.is_admin or current_user.is_director or current_user.is_logistics) %}
+  {% if row.status in ['free', 'reserved'] and row.vin_full and (current_user.is_admin or current_user.is_director or current_user.is_manager) %}
   <div class="col-lg-4">
     <div class="app-card p-3 h-100">
       <h3 class="h6">Привязать к прицепу</h3>

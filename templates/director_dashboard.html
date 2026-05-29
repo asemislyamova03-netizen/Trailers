@@ -85,7 +85,7 @@
   <div class="app-card kpi-card"><div><div class="kpi-title">Заказы в работе</div><div class="kpi-value">{{ active_orders|length }}</div><div class="kpi-caption">без завершенных и отгруженных</div></div><div class="kpi-icon"><i class="bi bi-list-task"></i></div></div>
   <div class="app-card kpi-card"><div><div class="kpi-title">Заказано в производство</div><div class="kpi-value">{{ production_ordered }}</div><div class="kpi-caption">активные заявки</div></div><div class="kpi-icon"><i class="bi bi-tools"></i></div></div>
   <div class="app-card kpi-card"><div><div class="kpi-title">Реально в производстве</div><div class="kpi-value">{{ production_left }}</div><div class="kpi-caption">клиенты {{ production_customer_left }} · склад {{ production_stock_left }}</div></div><div class="kpi-icon"><i class="bi bi-hammer"></i></div></div>
-  <div class="app-card kpi-card"><div><div class="kpi-title">Выпущено без VIN</div><div class="kpi-value">{{ produced_no_vin_units|length }}</div><div class="kpi-caption">ждёт логиста</div></div><div class="kpi-icon"><i class="bi bi-upc-scan"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Выпущено без VIN</div><div class="kpi-value">{{ produced_no_vin_units|length }}</div><div class="kpi-caption">ждёт менеджера</div></div><div class="kpi-icon"><i class="bi bi-upc-scan"></i></div></div>
   <div class="app-card kpi-card"><div><div class="kpi-title">Готово с VIN</div><div class="kpi-value">{{ ready_with_vin_units|length }}</div><div class="kpi-caption">на складе выпуска</div></div><div class="kpi-icon"><i class="bi bi-send"></i></div></div>
 </section>
 
