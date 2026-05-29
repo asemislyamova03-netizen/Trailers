@@ -788,7 +788,7 @@ def _duplicate_redirect(key, fallback_url=None):
 
 @main_bp.app_template_filter('status_label')
 def status_label(value):
-    labels = {'draft': 'Черновик', 'new': 'Новая', 'waiting_payment': 'Ждём оплату', 'prepaid': 'Предоплата', 'confirmed': 'Подтверждён', 'waiting_production': 'Ожидает производства', 'in_production': 'В производстве', 'produced_waiting_vin': 'Выпущен, ждёт VIN', 'waiting_transfer': 'Ждёт отправки', 'in_transit': 'В пути', 'arrived': 'Прибыл', 'ready_to_ship': 'Готов к выдаче', 'sold_not_shipped': 'Продан, не отгружен', 'customer_shipped': 'Физически отгружен клиенту', 'shipped': 'Отгружен', 'done': 'Завершён', 'cancelled': 'Отменён', 'canceled': 'Отменён', 'produced_no_vin': 'Выпущен без VIN', 'vin_assigned': 'VIN присвоен', 'planned': 'Запланирована', 'partial_ready': 'Частично выпущена', 'ready': 'Готово', 'closed': 'Закрыта', 'sent': 'Отправлено', 'in_progress': 'В работе', 'approved': 'Утверждена', 'ready_production_warehouse': 'Готов на складе выпуска', 'stock': 'Из наличия', 'other_warehouse': 'С другого склада', 'production': 'Под производство', 'transit': 'В пути', 'free': 'Свободен', 'reserved': 'Зарезервирован', 'assigned': 'Назначен', 'void': 'Аннулирован', 'not_started': 'Не начаты', 'partial': 'Частично', 'realized': 'Реализовано', 'posted': 'Проведено', 'exported': 'Экспортировано', 'invoice_sent': 'Счёт отправлен', 'contract_ready': 'Договор готов', 'documents_ready': 'Документы готовы', 'documents_issued': 'Документы выданы', 'unpaid': 'Не оплачено', 'paid': 'Оплачено', 'order_created': 'Заказ создан', 'order_line_added': 'Позиция добавлена', 'order_status_changed': 'Статус заказа изменён', 'payment_added': 'Оплата добавлена', 'payment_cancelled': 'Оплата отменена', 'trailer_reserved': 'Прицеп зарезервирован', 'trailer_assigned': 'Прицеп назначен', 'production_need_created': 'Создана потребность', 'production_started': 'Производство начато', 'produced_without_vin': 'Выпущено без VIN', 'transfer_requested': 'Запрошено перемещение', 'transfer_started': 'Перемещение начато', 'trailer_received': 'Прицеп принят', 'reservation_cancelled': 'Резерв отменён', 'realization_created': 'Реализация создана', 'realization_posted': 'Реализация проведена', 'uploaded': 'Загружен', 'assigned': 'Назначен', 'voided': 'Аннулирован', 'comment_added': 'Комментарий добавлен'}
+    labels = {'draft': 'Черновик', 'new': 'Новая', 'waiting_payment': 'Ждём оплату', 'prepaid': 'Предоплата', 'confirmed': 'Подтверждён', 'waiting_production': 'Ожидает производства', 'in_production': 'В производстве', 'produced_waiting_vin': 'Выпущен, ждёт VIN', 'waiting_transfer': 'Ждёт отправки', 'in_transit': 'В пути', 'arrived': 'Прибыл', 'ready_to_ship': 'Готов к выдаче', 'sold_not_shipped': 'Продан, не отгружен', 'customer_shipped': 'Физически отгружен клиенту', 'shipped': 'Отгружен', 'done': 'Завершён', 'cancelled': 'Отменён', 'canceled': 'Отменён', 'produced_no_vin': 'Выпущен без VIN', 'vin_assigned': 'VIN присвоен', 'planned': 'Запланирована', 'partial_ready': 'Частично выпущена', 'ready': 'Готово', 'closed': 'Закрыта', 'sent': 'Отправлено', 'in_progress': 'В работе', 'approved': 'Утверждена', 'ready_production_warehouse': 'Готов на складе выпуска', 'none': 'Не выбран', 'stock': 'Из наличия', 'other_warehouse': 'С другого склада', 'production': 'Под производство', 'assembly': 'Комплектация', 'external': 'Внешний источник', 'component': 'Комплектующее', 'stock_reserved': 'Зарезервировано из наличия', 'production_requested': 'Заказано в производство', 'production_started': 'Производство начато', 'vin_confirmed': 'VIN подтверждён', 'assembly_required': 'Нужна комплектация', 'assembly_completed': 'Комплектация завершена', 'movement_required': 'Нужно перемещение', 'ready_for_documents': 'Готово к документам', 'transit': 'В пути', 'free': 'Свободен', 'reserved': 'Зарезервирован', 'assigned': 'Назначен', 'void': 'Аннулирован', 'not_started': 'Не начаты', 'partial': 'Частично', 'realized': 'Реализовано', 'posted': 'Проведено', 'exported': 'Экспортировано', 'invoice_sent': 'Счёт отправлен', 'contract_ready': 'Договор готов', 'documents_ready': 'Документы готовы', 'documents_issued': 'Документы выданы', 'unpaid': 'Не оплачено', 'paid': 'Оплачено', 'order_created': 'Заказ создан', 'order_line_added': 'Позиция добавлена', 'order_status_changed': 'Статус заказа изменён', 'payment_added': 'Оплата добавлена', 'payment_cancelled': 'Оплата отменена', 'trailer_reserved': 'Прицеп зарезервирован', 'trailer_assigned': 'Прицеп назначен', 'production_need_created': 'Создана потребность', 'production_started': 'Производство начато', 'produced_without_vin': 'Выпущено без VIN', 'transfer_requested': 'Запрошено перемещение', 'transfer_started': 'Перемещение начато', 'trailer_received': 'Прицеп принят', 'reservation_cancelled': 'Резерв отменён', 'realization_created': 'Реализация создана', 'realization_posted': 'Реализация проведена', 'uploaded': 'Загружен', 'assigned': 'Назначен', 'voided': 'Аннулирован', 'comment_added': 'Комментарий добавлен'}
     labels.update({
         'ai_handling': 'ИИ ведёт диалог',
         'manager_needed': 'Нужен менеджер',
@@ -829,15 +829,15 @@ def status_label(value):
 @main_bp.app_template_filter('status_badge_class')
 def status_badge_class(value):
     value = (value or '').lower()
-    if value in ('draft', 'new', 'planned', 'manual', 'website', 'phone', 'other', 'customer_order'):
+    if value in ('draft', 'new', 'planned', 'manual', 'website', 'phone', 'other', 'customer_order', 'none'):
         return 'secondary'
-    if value in ('in_progress', 'in_production', 'sent', 'in_transit', 'manager_handling', 'telegram', 'qr_started'):
+    if value in ('in_progress', 'in_production', 'sent', 'in_transit', 'manager_handling', 'telegram', 'qr_started', 'production_started', 'assembly_required', 'movement_required'):
         return 'primary'
-    if value in ('waiting_payment', 'waiting_production', 'waiting_transfer', 'produced_waiting_vin', 'produced_no_vin', 'invoice_sent', 'partial', 'not_started', 'manager_needed', 'waiting_client'):
+    if value in ('waiting_payment', 'waiting_production', 'waiting_transfer', 'produced_waiting_vin', 'produced_no_vin', 'invoice_sent', 'partial', 'not_started', 'manager_needed', 'waiting_client', 'production_requested'):
         return 'warning'
-    if value in ('prepaid', 'partial_ready', 'ai_handling', 'whatsapp', 'instagram', 'stock_replenishment', 'warehouse_stock'):
+    if value in ('prepaid', 'partial_ready', 'ai_handling', 'whatsapp', 'instagram', 'stock_replenishment', 'warehouse_stock', 'other_warehouse', 'assembly', 'external', 'component'):
         return 'info'
-    if value in ('ready', 'arrived', 'ready_to_ship', 'sold_not_shipped', 'customer_shipped', 'done', 'vin_assigned', 'confirmed', 'paid', 'documents_ready', 'documents_issued', 'contract_ready', 'contract_signed', 'sigex_signed', 'order_created', 'in_stock', 'sold', 'document_ready', 'org_signed'):
+    if value in ('ready', 'arrived', 'ready_to_ship', 'sold_not_shipped', 'customer_shipped', 'done', 'vin_assigned', 'vin_confirmed', 'confirmed', 'paid', 'documents_ready', 'documents_issued', 'contract_ready', 'contract_signed', 'sigex_signed', 'order_created', 'in_stock', 'stock', 'stock_reserved', 'ready_for_documents', 'assembly_completed', 'sold', 'document_ready', 'org_signed'):
         return 'success'
     if value in ('cancelled', 'canceled', 'closed', 'spam', 'decommissioned', 'fail', 'expired'):
         return 'dark'
@@ -11818,6 +11818,7 @@ def director_dashboard():
 @main_bp.route('/reports/<section>')
 @role_required('director', 'manager')
 def director_report(section='sales'):
+    section = (section or 'sales').strip().replace('_', '-')
     sections = {
         'sales': 'Продажи',
         'dynamics': 'Динамика',
@@ -11841,10 +11842,13 @@ def director_report(section='sales'):
     status_filter = (request.args.get('status') or 'all').strip()
     search = (request.args.get('q') or '').strip()
     report_direction = (request.args.get('direction') or 'all').strip()
-    period = request.args.get('period', 'month')
+    period = request.args.get('period', 'all' if section in ('stock', 'line-links', 'problems') else 'month')
     today = date.today()
 
-    if period == 'day':
+    if period == 'all':
+        date_from = date(2000, 1, 1)
+        date_to = today
+    elif period == 'day':
         date_from = today
         date_to = today
     elif period == 'week':
@@ -11857,7 +11861,7 @@ def director_report(section='sales'):
         try:
             date_from = datetime.strptime(request.args.get('date_from') or '', '%Y-%m-%d').date()
         except ValueError:
-            date_from = today.replace(day=1)
+            date_from = date(2000, 1, 1) if section in ('stock', 'line-links', 'problems') else today.replace(day=1)
         try:
             date_to = datetime.strptime(request.args.get('date_to') or '', '%Y-%m-%d').date()
         except ValueError:
@@ -11869,6 +11873,15 @@ def director_report(section='sales'):
 
     period_start = datetime.combine(date_from, time.min)
     period_end = datetime.combine(date_to, time.max)
+    report_query_args = request.args.to_dict(flat=True)
+    report_query_args.setdefault('period', period)
+    report_query_args.setdefault('date_from', date_from.isoformat())
+    report_query_args.setdefault('date_to', date_to.isoformat())
+    report_query_args.pop('section', None)
+    report_section_urls = {}
+    for section_key in sections:
+        section_args = dict(report_query_args)
+        report_section_urls[section_key] = url_for('main.director_report', section=section_key, **section_args)
 
     def order_scope(query):
         if current_user.is_manager:
@@ -11980,8 +11993,10 @@ def director_report(section='sales'):
                 quantity = order.quantity if order and order.quantity else 1
             revenue = float(contract.price if contract.price is not None else (order.price if order else 0) or 0)
             record = {
+                'source': 'contract',
                 'date': sale_dt,
                 'contract': contract,
+                'realization': None,
                 'order': order,
                 'trailer': trailer,
                 'warehouse': warehouse,
@@ -11997,6 +12012,74 @@ def director_report(section='sales'):
             result.append(record)
         return result
 
+    def realization_report_records():
+        query = (
+            SalesRealization.query
+            .filter(
+                SalesRealization.status == 'posted',
+                SalesRealization.realization_date >= date_from,
+                SalesRealization.realization_date <= date_to,
+            )
+            .outerjoin(CustomerOrder, CustomerOrder.id == SalesRealization.order_id)
+            .outerjoin(Customer, Customer.id == SalesRealization.customer_id)
+        )
+        if current_user.is_manager:
+            query = query.filter(or_(
+                SalesRealization.assigned_user_id == current_user.id,
+                CustomerOrder.assigned_user_id == current_user.id,
+                CustomerOrder.created_by_user_id == current_user.id,
+            ))
+        if warehouse_id:
+            query = query.filter(SalesRealization.warehouse_id == warehouse_id)
+        if manager_id:
+            query = query.filter(SalesRealization.assigned_user_id == manager_id)
+        realizations = query.order_by(SalesRealization.realization_date.desc(), SalesRealization.id.desc()).all()
+        result = []
+        search_lower = search.lower()
+        for realization in realizations:
+            order = realization.order
+            lines = realization.lines.order_by(SalesRealizationLine.line_no.asc(), SalesRealizationLine.id.asc()).all()
+            trailer = next((line.trailer for line in lines if line.trailer), None) or (order.trailer if order else None)
+            item = next((line.item for line in lines if line.item), None) or (trailer.item if trailer else (order.item if order else None))
+            warehouse = realization.warehouse or (order.warehouse if order else None) or (trailer.warehouse if trailer else None)
+            manager = realization.assigned_user or (order.assigned_user if order else None)
+            haystack = ' '.join(
+                str(value or '')
+                for value in (
+                    realization.number,
+                    realization.customer.name if realization.customer else '',
+                    order.order_number if order else '',
+                    trailer.vin if trailer else '',
+                    ' '.join(line.vin_full or '' for line in lines),
+                    ' '.join(line.article_snapshot or (line.item.article if line.item else '') for line in lines),
+                    warehouse.name if warehouse else '',
+                )
+            ).lower()
+            if search_lower and search_lower not in haystack:
+                continue
+            quantity = sum(float(line.quantity or 0) for line in lines)
+            if quantity <= 0:
+                quantity = 1
+            record = {
+                'source': 'realization',
+                'date': datetime.combine(realization.realization_date, time.min),
+                'contract': None,
+                'realization': realization,
+                'order': order,
+                'trailer': trailer,
+                'warehouse': warehouse,
+                'manager': manager,
+                'item': item,
+                'lines': lines,
+                'quantity': quantity,
+                'revenue': float(realization.total_amount or 0),
+            }
+            record['direction'] = record_direction(record)
+            if report_direction != 'all' and record['direction'] != report_direction:
+                continue
+            result.append(record)
+        return result
+
     cards = []
     rows = []
     problem_rows = []
@@ -12004,7 +12087,21 @@ def director_report(section='sales'):
     anomaly_rows = []
 
     if section in ('sales', 'finance', 'dynamics', 'branches', 'types'):
-        rows = contract_report_records()
+        realization_rows = realization_report_records()
+        realized_order_ids = {
+            order_id for (order_id,) in
+            SalesRealization.query
+            .with_entities(SalesRealization.order_id)
+            .filter(SalesRealization.status == 'posted', SalesRealization.order_id.isnot(None))
+            .distinct()
+            .all()
+        }
+        legacy_contract_rows = [
+            row for row in contract_report_records()
+            if not row.get('order') or row['order'].id not in realized_order_ids
+        ]
+        rows = realization_rows + legacy_contract_rows
+        rows.sort(key=lambda row: row['date'] or datetime.min, reverse=True)
         anomaly_rows = [
             row for row in rows
             if row['revenue'] >= 3000000 or row['direction'] == 'other'
@@ -12013,9 +12110,9 @@ def director_report(section='sales'):
         revenue = sum(row['revenue'] or 0 for row in rows)
         cards = [
             {'title': 'Выручка', 'value': money(revenue), 'caption': 'юридические продажи за период'},
-            {'title': 'Продано', 'value': sold_quantity, 'caption': 'шт. по договорам'},
+            {'title': 'Продано', 'value': sold_quantity, 'caption': 'шт. по реализациям + старым договорам'},
             {'title': 'Средний чек', 'value': money(revenue / len(rows) if rows else 0), 'caption': 'по закрытым продажам'},
-            {'title': 'Резервы', 'value': order_scope(CustomerOrder.query).filter(CustomerOrder.status.in_(['reserved', 'waiting_payment', 'prepaid', 'ready_to_ship'])).count(), 'caption': 'активные заказы'},
+            {'title': 'Старые договоры', 'value': len(legacy_contract_rows), 'caption': 'учтены без реализации'},
         ]
         if section in ('sales', 'dynamics'):
             buckets = defaultdict(lambda: {'orders': 0, 'quantity': 0, 'revenue': 0.0})
@@ -12365,6 +12462,8 @@ def director_report(section='sales'):
         analytics_rows=analytics_rows,
         chart_data=chart_data,
         anomaly_rows=anomaly_rows,
+        report_query_args=report_query_args,
+        report_section_urls=report_section_urls,
     )
 
 

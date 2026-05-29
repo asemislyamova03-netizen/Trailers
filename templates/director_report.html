@@ -18,7 +18,7 @@
 <div class="app-card p-3 mb-4">
   <div class="d-flex flex-wrap gap-2 mb-3">
     {% for key, label in sections.items() %}
-      <a class="btn btn-sm {{ 'btn-orange' if section == key else 'btn-soft' }}" href="{{ url_for('main.director_report', section=key) }}">{{ label }}</a>
+      <a class="btn btn-sm {{ 'btn-orange' if section == key else 'btn-soft' }}" href="{{ report_section_urls.get(key) }}">{{ label }}</a>
     {% endfor %}
   </div>
   <form method="get" class="row g-3 align-items-end">
@@ -29,6 +29,7 @@
         <option value="week" {% if period == 'week' %}selected{% endif %}>Неделя</option>
         <option value="month" {% if period == 'month' %}selected{% endif %}>Месяц</option>
         <option value="year" {% if period == 'year' %}selected{% endif %}>Год</option>
+        <option value="all" {% if period == 'all' %}selected{% endif %}>Всё время</option>
         <option value="custom" {% if period == 'custom' %}selected{% endif %}>Период</option>
       </select>
     </div>
@@ -124,16 +125,24 @@ document.addEventListener('DOMContentLoaded', () => {
 {% if anomaly_rows %}
 <div class="alert alert-warning">
   <div class="fw-semibold mb-1">В выборке есть договоры, которые могут искажать выручку.</div>
-  <div class="small">Показаны договоры без VIN/артикула или с суммой от 3 000 000 ₸. Проверьте направление или исправьте номенклатуру.</div>
+  <div class="small">Показаны реализации/старые договоры без VIN/артикула или с суммой от 3 000 000 ₸. Проверьте направление или исправьте номенклатуру.</div>
   <div class="table-responsive mt-2">
     <table class="table table-sm mb-0">
-      <thead><tr><th>Дата</th><th>Договор</th><th>Клиент</th><th>Сумма</th><th>VIN</th><th>Направление</th></tr></thead>
+      <thead><tr><th>Дата</th><th>Документ</th><th>Клиент</th><th>Сумма</th><th>VIN</th><th>Направление</th></tr></thead>
       <tbody>
       {% for row in anomaly_rows %}
         <tr>
           <td>{{ row.date|date_format }}</td>
-          <td>{{ row.contract.contract_number or row.contract.id }}</td>
-          <td>{{ row.contract.customer.name if row.contract.customer else '—' }}</td>
+          <td>
+            {% if row.realization %}
+              <a href="{{ url_for('main.sales_realization_detail', realization_id=row.realization.id) }}">{{ row.realization.number or row.realization.id }}</a>
+            {% elif row.contract %}
+              {{ row.contract.contract_number or row.contract.id }}
+            {% else %}
+              —
+            {% endif %}
+          </td>
+          <td>{{ (row.realization.customer.name if row.realization and row.realization.customer else (row.contract.customer.name if row.contract and row.contract.customer else '—')) }}</td>
           <td>{{ row.revenue|money }}</td>
           <td>{{ row.trailer.vin if row.trailer else '—' }}</td>
           <td>{{ {'light':'Легковые','cargo':'Грузовые / спец','other':'Без VIN / прочее'}.get(row.direction, row.direction) }}</td>
