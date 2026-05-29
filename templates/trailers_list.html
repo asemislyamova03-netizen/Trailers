@@ -5,9 +5,19 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h1 class="h4 mb-0">Прицепы</h1>
-    {% if current_user.is_admin %}
-    <a href="{{ url_for('main.trailer_create') }}" class="btn btn-primary">Новый прицеп</a>
-    {% endif %}
+    <div class="d-flex gap-2 flex-wrap justify-content-end">
+        {% if current_user.is_admin or current_user.is_director or current_user.is_manager %}
+        <a href="{{ url_for('main.stock_replenishment_list') }}" class="btn btn-soft">
+            <i class="bi bi-box-arrow-in-down me-1"></i>Пополнение склада
+        </a>
+        <a href="{{ url_for('main.stock_replenishment_create') }}" class="btn btn-orange">
+            <i class="bi bi-plus-lg me-1"></i>Заказать на склад
+        </a>
+        {% endif %}
+        {% if current_user.is_admin %}
+        <a href="{{ url_for('main.trailer_create') }}" class="btn btn-primary">Новый прицеп</a>
+        {% endif %}
+    </div>
 </div>
 
 <form method="get" class="row g-2 mb-3">

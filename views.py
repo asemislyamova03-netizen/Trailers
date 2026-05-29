@@ -7338,8 +7338,6 @@ def stock_replenishment_create():
         _finish_idempotency(idem_key, 'SupplyNeed', need.id)
         db.session.commit()
         flash('Заявка на пополнение склада создана.', 'success')
-        if current_user.is_manager:
-            return redirect(url_for('main.trailers_list', status='IN_STOCK'))
         return redirect(url_for('main.stock_replenishment_list'))
 
     return render_template('stock_replenishment_form.html', form=form, title='Заказать на склад', config_options=_trailer_config_form_context())
