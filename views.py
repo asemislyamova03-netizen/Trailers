@@ -10337,14 +10337,28 @@ def production_request_edit(request_id):
 
 
 @main_bp.route('/stock-movements')
-@login_required
+@role_required('manager', 'director')
 def stock_movements_list():
     status = request.args.get('status', '').strip()
     movement_type = request.args.get('movement_type', '').strip()
     from_warehouse_id = request.args.get('from_warehouse_id', type=int)
     to_warehouse_id = request.args.get('to_warehouse_id', type=int)
+    scope = request.args.get('scope', '').strip()
     batch_key = request.args.get('batch_key', '').strip()
     query = StockMovement.query
+    scope_warehouse_id = current_user.warehouse_id if current_user.is_manager else (to_warehouse_id or from_warehouse_id)
+    if scope == 'incoming' and scope_warehouse_id:
+        query = query.filter(StockMovement.to_warehouse_id == scope_warehouse_id)
+    elif scope == 'outgoing' and scope_warehouse_id:
+        query = query.filter(StockMovement.from_warehouse_id == scope_warehouse_id)
+    elif scope == 'in_transit':
+        query = query.filter(StockMovement.status.in_(['sent', 'in_transit']))
+    elif scope == 'needs_receive':
+        query = query.filter(StockMovement.status.in_(['sent', 'in_transit']))
+        if scope_warehouse_id:
+            query = query.filter(StockMovement.to_warehouse_id == scope_warehouse_id)
+    elif scope == 'history':
+        query = query.filter(StockMovement.status.in_(['arrived', 'cancelled']))
     if status:
         query = query.filter_by(status=status)
     if movement_type:
@@ -10363,6 +10377,7 @@ def stock_movements_list():
         movement_type=movement_type,
         from_warehouse_id=from_warehouse_id,
         to_warehouse_id=to_warehouse_id,
+        scope=scope,
         batch_key=batch_key,
         source_warehouses=_trailer_source_warehouses(),
         target_warehouses=_sales_warehouses(),

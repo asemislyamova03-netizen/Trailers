@@ -19,7 +19,17 @@
   </div>
 {% endif %}
 
+<div class="d-flex flex-wrap gap-2 mb-3">
+  <a class="btn btn-sm {% if not scope %}btn-orange{% else %}btn-soft{% endif %}" href="{{ url_for('main.stock_movements_list') }}">Все</a>
+  <a class="btn btn-sm {% if scope == 'incoming' %}btn-orange{% else %}btn-soft{% endif %}" href="{{ url_for('main.stock_movements_list', scope='incoming') }}">Входящие</a>
+  <a class="btn btn-sm {% if scope == 'outgoing' %}btn-orange{% else %}btn-soft{% endif %}" href="{{ url_for('main.stock_movements_list', scope='outgoing') }}">Исходящие</a>
+  <a class="btn btn-sm {% if scope == 'in_transit' %}btn-orange{% else %}btn-soft{% endif %}" href="{{ url_for('main.stock_movements_list', scope='in_transit') }}">В пути</a>
+  <a class="btn btn-sm {% if scope == 'needs_receive' %}btn-orange{% else %}btn-soft{% endif %}" href="{{ url_for('main.stock_movements_list', scope='needs_receive') }}">Требуют принятия</a>
+  <a class="btn btn-sm {% if scope == 'history' %}btn-orange{% else %}btn-soft{% endif %}" href="{{ url_for('main.stock_movements_list', scope='history') }}">История</a>
+</div>
+
 <form method="get" class="app-card p-3 mb-3">
+  {% if scope %}<input type="hidden" name="scope" value="{{ scope }}">{% endif %}
   <div class="row g-2 align-items-end">
     <div class="col-md-2">
       <label class="form-label">Тип</label>
