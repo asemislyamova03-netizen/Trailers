@@ -4820,6 +4820,54 @@ def _sync_order_line_workflow_links(line: CustomerOrderLine) -> None:
         line.shipment_status = 'not_started'
 
 
+def _order_line_workflow_expected(line: CustomerOrderLine) -> dict:
+    active_reservation = next((row for row in line.reservations if row.status == 'ACTIVE'), None)
+    active_need = next((
+        row for row in line.supply_needs
+        if (row.status or '').lower() not in ('cancelled', 'canceled', 'done', 'closed', 'void')
+    ), None)
+    active_production_line = next((
+        row for row in line.production_lines
+        if (row.status or '').lower() not in ('ready', 'closed', 'cancelled', 'canceled')
+    ), None)
+    active_movement = next((
+        row for row in line.movements
+        if (row.status or '').lower() in ('draft', 'sent', 'in_transit')
+    ), None)
+    active_vin = next((row for row in _active_vin_rows_for_order_line(line)), None)
+    if any(row.realization and row.realization.status == 'posted' for row in line.realization_lines):
+        realization_status = 'realized'
+    elif line.realization_lines:
+        realization_status = 'draft'
+    else:
+        realization_status = 'not_started'
+    if (line.status or '').lower() == 'shipped':
+        shipment_status = 'shipped'
+    elif active_movement:
+        shipment_status = 'in_transit'
+    else:
+        shipment_status = 'not_started'
+    return {
+        'reservation_id': active_reservation.id if active_reservation else None,
+        'supply_need_id': active_need.id if active_need else None,
+        'production_request_line_id': active_production_line.id if active_production_line else None,
+        'stock_movement_id': active_movement.id if active_movement else None,
+        'vin_registry_id': active_vin.id if active_vin else None,
+        'realization_status': realization_status,
+        'shipment_status': shipment_status,
+    }
+
+
+def _order_line_workflow_mismatches(line: CustomerOrderLine) -> list[dict]:
+    expected = _order_line_workflow_expected(line)
+    mismatches = []
+    for field, expected_value in expected.items():
+        actual_value = getattr(line, field, None)
+        if actual_value != expected_value:
+            mismatches.append({'field': field, 'actual': actual_value, 'expected': expected_value})
+    return mismatches
+
+
 def _sync_order_totals_from_lines(order: CustomerOrder) -> None:
     lines = list(order.lines.order_by(CustomerOrderLine.line_no.asc()).all()) if order and order.id else []
     if not lines:
@@ -11780,6 +11828,7 @@ def director_report(section='sales'):
         'production': 'Производство',
         'movements': 'Перемещения',
         'problems': 'Проблемные заказы',
+        'line-links': 'Связи строк',
         'finance': 'Финансовая сводка',
     }
     if section not in sections:
@@ -12146,6 +12195,32 @@ def director_report(section='sales'):
             {'title': 'Просрочено', 'value': len([m for m in rows if m.status in ('sent', 'in_transit') and m.arrival_date and m.arrival_date < today]), 'caption': 'по ожидаемой дате'},
         ]
 
+    elif section == 'line-links':
+        line_query = CustomerOrderLine.query.join(CustomerOrder, CustomerOrder.id == CustomerOrderLine.order_id)
+        line_query = order_scope(line_query)
+        if status_filter != 'all':
+            line_query = line_query.filter(or_(CustomerOrderLine.fulfillment_status == status_filter, CustomerOrderLine.shipment_status == status_filter, CustomerOrderLine.realization_status == status_filter))
+        if search:
+            like = f'%{search}%'
+            line_query = line_query.outerjoin(Item, Item.id == CustomerOrderLine.item_id).filter(or_(
+                CustomerOrder.order_number.ilike(like),
+                CustomerOrderLine.article_snapshot.ilike(like),
+                Item.article.ilike(like),
+                Item.name.ilike(like),
+            ))
+        checked_lines = line_query.order_by(CustomerOrder.created_at.desc(), CustomerOrderLine.id.desc()).limit(500).all()
+        rows = []
+        for line in checked_lines:
+            mismatches = _order_line_workflow_mismatches(line)
+            if mismatches or status_filter != 'all' or search:
+                rows.append({'line': line, 'mismatches': mismatches, 'expected': _order_line_workflow_expected(line)})
+        cards = [
+            {'title': 'Проверено строк', 'value': len(checked_lines), 'caption': 'последние 500 в выборке'},
+            {'title': 'С рассинхроном', 'value': len([row for row in rows if row['mismatches']]), 'caption': 'нужно синхронизировать'},
+            {'title': 'Чистые', 'value': len(checked_lines) - len([row for row in rows if row['mismatches']]), 'caption': 'без расхождений'},
+            {'title': 'Показано', 'value': len(rows), 'caption': 'строк в таблице'},
+        ]
+
     else:
         later_orders = order_scope(CustomerOrder.query).filter(
             CustomerOrder.trailer_id.is_(None),
@@ -12291,6 +12366,18 @@ def director_report(section='sales'):
         chart_data=chart_data,
         anomaly_rows=anomaly_rows,
     )
+
+
+@main_bp.route('/orders/lines/<int:line_id>/sync-workflow-links', methods=['POST'])
+@role_required('director')
+def order_line_sync_workflow_links(line_id):
+    line = CustomerOrderLine.query.get_or_404(line_id)
+    before = _order_line_workflow_mismatches(line)
+    _sync_order_line_workflow_links(line)
+    db.session.commit()
+    after = _order_line_workflow_mismatches(line)
+    flash(f'Строка #{line.line_no} синхронизирована: было расхождений {len(before)}, осталось {len(after)}.', 'success' if not after else 'warning')
+    return redirect(request.referrer or url_for('main.director_report', section='line-links'))
 
 
 def _payload_text(payload: dict) -> str:

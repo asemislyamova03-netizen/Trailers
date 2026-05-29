@@ -4,6 +4,19 @@
 
 Дата: 2026-05-29
 Проект: trailers
+Модуль: reports / order line workflow diagnostics
+Что делали: Добавляли проверку рассинхрона новых прямых workflow-ссылок строки заказа.
+Что сделано: В `/reports/line-links` добавлен раздел `Связи строк`, который сравнивает `vin_registry_id`, `reservation_id`, `supply_need_id`, `production_request_line_id`, `stock_movement_id`, `realization_status`, `shipment_status` с фактическими активными связями. Добавлена точечная POST-синхронизация одной строки для директора/админа.
+Какие файлы изменены: `views.py`, `templates/director_report.html`, `docs/planning/CURRENT_STATE.md`, `docs/planning/NEXT_ACTIONS.md`, `docs/planning/SESSION_LOG.md`.
+Где остановились: Нужно прогнать проверки и запушить.
+Что осталось: На сервере после миграций открыть `/reports/line-links` и проверить строки с реальными заказами.
+Блокеры: Нет.
+Следующий шаг: Закоммитить/запушить диагностику и проверить отчёт после серверного upgrade.
+
+---
+
+Дата: 2026-05-29
+Проект: trailers
 Модуль: customer order lines / workflow links
 Что делали: Добавляли явные workflow-ссылки строки заказа по ТЗ Этапа 2.
 Что сделано: В `CustomerOrderLine` добавлены `vin_registry_id`, `reservation_id`, `supply_need_id`, `production_request_line_id`, `stock_movement_id`, `realization_status`, `shipment_status`; создана миграция `d3e5f7a9b1c2` с backfill по существующим активным связям. Код создания/смены источника/VIN/производства/перемещения синхронизирует эти поля.

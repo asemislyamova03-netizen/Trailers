@@ -306,6 +306,44 @@ document.addEventListener('DOMContentLoaded', () => {
       </tbody>
     </table>
   </div>
+  {% elif section == 'line-links' %}
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead><tr><th>Заказ</th><th>Позиция</th><th>Источник</th><th>Статусы</th><th>Расхождения</th><th></th></tr></thead>
+      <tbody>
+      {% for row in rows %}
+        {% set line = row.line %}
+        <tr>
+          <td><a href="{{ url_for('main.order_detail', order_id=line.order.id) }}">{{ line.order.order_number }}</a><div class="small text-muted">{{ line.order.customer.name if line.order.customer else '' }}</div></td>
+          <td><span class="fw-semibold">#{{ line.line_no }}</span><div>{{ line.article_snapshot or (line.item.article if line.item else '') }}</div><div class="small text-muted">{{ line.product_name_snapshot or (line.item.name if line.item else '') }}</div></td>
+          <td>{{ line.source_type|status_label }}<div class="small text-muted">{{ line.fulfillment_source|status_label }}</div></td>
+          <td>
+            <div>{{ line.fulfillment_status|status_label }}</div>
+            <div class="small text-muted">реализация: {{ line.realization_status|status_label }}</div>
+            <div class="small text-muted">отгрузка: {{ line.shipment_status|status_label }}</div>
+          </td>
+          <td>
+            {% for mismatch in row.mismatches %}
+              <div><code>{{ mismatch.field }}</code>: {{ mismatch.actual or '—' }} → {{ mismatch.expected or '—' }}</div>
+            {% else %}
+              <span class="text-muted">Нет расхождений</span>
+            {% endfor %}
+          </td>
+          <td class="text-end">
+            {% if row.mismatches and (current_user.is_admin or current_user.is_director) %}
+              <form method="post" action="{{ url_for('main.order_line_sync_workflow_links', line_id=line.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-sm btn-soft">Синхронизировать</button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="text-muted p-4">Расхождений по строкам не найдено</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
   {% else %}
   <div class="p-3">
     {% for group in problem_rows %}
