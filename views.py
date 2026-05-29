@@ -6269,6 +6269,18 @@ def _render_order_form(form: CustomerOrderForm, title: str):
     )
 
 
+def _render_order_header_form(form: CustomerOrderForm, order: CustomerOrder, title: str):
+    order_lines = order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()).all()
+    return render_template(
+        'order_header_form.html',
+        form=form,
+        order=order,
+        title=title,
+        customer_options=_customer_options(limit=50),
+        order_lines=order_lines,
+    )
+
+
 def _fill_supply_need_form_choices(form: SupplyNeedForm) -> None:
     form.order_id.choices = [(0, '— без заказа / на склад —')] + [
         (o.id, f'{o.order_number} — {o.customer.name if o.customer else ""}') for o in CustomerOrder.query.order_by(CustomerOrder.created_at.desc()).all()
@@ -8041,6 +8053,9 @@ def order_edit(order_id):
         form.trailer_id.data = order.trailer_id or 0
         form.warehouse_id.data = order.warehouse_id or 0
         form.assigned_user_id.data = order.assigned_user_id or 0
+        form.quantity.data = order.quantity or 1
+        form.price.data = order.price
+        form.fulfillment_source.data = order.fulfillment_source or 'later'
 
     if form.validate_on_submit():
         if order.lines.count() > 0:
@@ -8160,6 +8175,8 @@ def order_edit(order_id):
         flash('Заказ обновлен', 'success')
         return redirect(url_for('main.order_detail', order_id=order.id))
 
+    if order.lines.count() > 0:
+        return _render_order_header_form(form, order, 'Редактирование шапки заказа')
     return _render_order_form(form, 'Редактирование заказа')
 
 

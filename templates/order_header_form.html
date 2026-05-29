@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<div class="compact-page-header">
+  <div>
+    <h1>{{ title }}</h1>
+    <div class="text-muted small">Шапка заказа редактируется отдельно от позиций, VIN, резервов, производства и реализаций.</div>
+  </div>
+</div>
+
+<form method="post" class="row g-3">
+  {{ form.hidden_tag() }}
+  <input type="hidden" name="status" value="{{ form.status.data or 'waiting_payment' }}">
+  {{ form.item_id(class="d-none") }}
+  {{ form.trailer_id(class="d-none") }}
+  {{ form.fulfillment_source(class="d-none") }}
+  {{ form.quantity(class="d-none") }}
+  {{ form.price(class="d-none") }}
+
+  <div class="col-lg-7">
+    <div class="app-card p-3 h-100">
+      <h2 class="h5 mb-3">Клиент и заказ</h2>
+      <div class="row g-3">
+        <div class="col-md-6">
+          {{ form.order_number.label(class="form-label") }}
+          {{ form.order_number(class="form-control") }}
+        </div>
+        <div class="col-md-6">
+          {{ form.order_date.label(class="form-label") }}
+          {{ form.order_date(class="form-control", type="date") }}
+        </div>
+        <div class="col-md-6">
+          {{ form.lead_id.label(class="form-label") }}
+          {{ form.lead_id(class="form-select") }}
+        </div>
+        <div class="col-md-6">
+          {{ form.assigned_user_id.label(class="form-label") }}
+          {{ form.assigned_user_id(class="form-select") }}
+        </div>
+        <div class="col-12">
+          {{ form.customer_search.label(class="form-label") }}
+          <div class="input-group">
+            {{ form.customer_search(class="form-control", list="customerOptions", autocomplete="off", placeholder="ФИО, название, телефон или ИИН/БИН") }}
+            <a class="btn btn-soft" href="{{ url_for('main.customer_create', return_to='order_edit', order_id=form.order_id) }}">Создать</a>
+            <a class="btn btn-outline-secondary disabled" id="editCustomerLink" href="#">Редактировать</a>
+          </div>
+          <datalist id="customerOptions">
+            {% for customer in customer_options %}
+            <option value="{{ customer.label }}" data-id="{{ customer.id }}"></option>
+            {% endfor %}
+          </datalist>
+          {{ form.customer_id(class="d-none", id="order_customer_id") }}
+          {% for error in form.customer_id.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+        </div>
+        <div class="col-md-6">
+          {{ form.warehouse_id.label(class="form-label") }}
+          {{ form.warehouse_id(class="form-select") }}
+        </div>
+        <div class="col-md-6">
+          {{ form.expected_date.label(class="form-label") }}
+          {{ form.expected_date(class="form-control") }}
+        </div>
+        <div class="col-md-6">
+          {{ form.planned_ship_date.label(class="form-label") }}
+          {{ form.planned_ship_date(class="form-control") }}
+        </div>
+        <div class="col-md-6">
+          {{ form.prepayment_percent.label(class="form-label") }}
+          {{ form.prepayment_percent(class="form-control") }}
+        </div>
+        <div class="col-12">
+          {{ form.note.label(class="form-label") }}
+          {{ form.note(class="form-control", rows="3") }}
+        </div>
+        <div class="col-12">
+          {{ form.manager_comment.label(class="form-label") }}
+          {{ form.manager_comment(class="form-control", rows="3") }}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-5">
+    <div class="app-card p-3 h-100">
+      <h2 class="h5 mb-3">Позиции заказа</h2>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead><tr><th>№</th><th>Товар</th><th>Источник</th><th>Кол-во</th><th>Сумма</th></tr></thead>
+          <tbody>
+          {% for line in order_lines %}
+            <tr>
+              <td>{{ line.line_no }}</td>
+              <td><div class="fw-semibold">{{ line.article_snapshot or (line.item.article if line.item else '') }}</div><div class="small text-muted">{{ line.product_name_snapshot or (line.item.name if line.item else '') }}</div></td>
+              <td>{{ line.fulfillment_source|status_label }}</td>
+              <td>{{ line.quantity or 1 }}</td>
+              <td>{{ line.total_price|money if line.total_price is not none else '' }}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="5" class="text-muted">Позиции не созданы.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="alert alert-info small mb-0">Источник обеспечения, VIN, прицеп и комплектация меняются только в карточке заказа через действия по строке.</div>
+    </div>
+  </div>
+
+  <div class="col-12">
+    {{ form.submit(class="btn btn-primary") }}
+    <a class="btn btn-outline-secondary" href="{{ url_for('main.order_detail', order_id=form.order_id) }}">Назад</a>
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const customerInput = document.querySelector('#customer_search');
+  const customerSelect = document.querySelector('#order_customer_id');
+  const editCustomerLink = document.querySelector('#editCustomerLink');
+  const customerOptionsList = document.querySelector('#customerOptions');
+  let customerOptions = Array.from(document.querySelectorAll('#customerOptions option'));
+
+  function syncCustomerId() {
+    const match = customerOptions.find((option) => option.value === customerInput.value);
+    customerSelect.value = match ? match.dataset.id : '0';
+    if (!editCustomerLink) return;
+    if (match) {
+      const params = new URLSearchParams();
+      params.set('return_to', 'order_edit');
+      params.set('order_id', '{{ form.order_id }}');
+      editCustomerLink.href = `/customers/${match.dataset.id}/edit?${params.toString()}`;
+      editCustomerLink.classList.remove('disabled');
+    } else {
+      editCustomerLink.href = '#';
+      editCustomerLink.classList.add('disabled');
+    }
+  }
+
+  let customerTimer = null;
+  function refreshCustomerOptions() {
+    const query = customerInput.value.trim();
+    if (query.length < 2) {
+      syncCustomerId();
+      return;
+    }
+    clearTimeout(customerTimer);
+    customerTimer = setTimeout(async () => {
+      const response = await fetch(`{{ url_for('main.api_customers_search') }}?q=${encodeURIComponent(query)}`);
+      if (!response.ok) return;
+      const data = await response.json();
+      customerOptionsList.innerHTML = (data.customers || []).map((customer) => `<option value="${customer.label}" data-id="${customer.id}"></option>`).join('');
+      customerOptions = Array.from(document.querySelectorAll('#customerOptions option'));
+      syncCustomerId();
+    }, 180);
+  }
+
+  customerInput.addEventListener('input', () => { refreshCustomerOptions(); syncCustomerId(); });
+  syncCustomerId();
+})();
+</script>
+{% endblock %}
