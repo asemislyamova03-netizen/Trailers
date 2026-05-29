@@ -2,11 +2,13 @@
 {% block title %}Реестр VIN{% endblock %}
 {% block content %}
 {% set active_status = filters.status or '' %}
+{% set upload_active = request.args.get('upload') %}
 <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
   <div>
-    <h1 class="h3 mb-1">Реестр VIN{% if active_status %}: {{ active_status|status_label }}{% endif %}</h1>
+    <h1 class="h3 mb-1">{% if upload_active %}Загрузка VIN{% else %}Реестр VIN{% if active_status %}: {{ active_status|status_label }}{% endif %}{% endif %}</h1>
     <div class="text-muted">
-      {% if active_status == 'free' %}Свободные VIN для назначения.
+      {% if upload_active %}Единая форма ручной загрузки VIN или serial7.
+      {% elif active_status == 'free' %}Свободные VIN для назначения.
       {% elif active_status == 'reserved' %}VIN в резерве, которые можно назначить на технику.
       {% elif active_status == 'assigned' %}Назначенные VIN, которые ждут подтверждения менеджера.
       {% elif active_status == 'confirmed' %}Подтверждённые VIN.
@@ -43,7 +45,7 @@
 </div>
 
 {% if current_user.is_admin or current_user.is_director or current_user.is_logistics %}
-<div class="collapse mb-3" id="vinUploadCollapse">
+<div class="collapse {% if upload_active %}show{% endif %} mb-3" id="vinUploadCollapse">
 <div class="app-card p-3">
   <form method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
