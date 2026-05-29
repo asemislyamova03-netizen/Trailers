@@ -276,8 +276,6 @@ def can_access_conversation(lead: Lead) -> bool:
             return True
         if lead.assigned_user_id is None and lead.conversation_status in ('new', 'manager_needed', 'ai_handling'):
             return True
-        if current_user.warehouse_id and lead.warehouse_id == current_user.warehouse_id:
-            return True
     return False
 
 
@@ -301,8 +299,6 @@ def _conversation_visible_query():
                 Lead.conversation_status.in_(['new', 'manager_needed', 'ai_handling']),
             ),
         ]
-        if current_user.warehouse_id:
-            conditions.append(Lead.warehouse_id == current_user.warehouse_id)
         return query.filter(or_(*conditions))
     return query.filter(sa.false())
 
@@ -6458,7 +6454,7 @@ def leads_list():
 
     query = Lead.query
 
-    if not current_user.is_admin and current_user.warehouse_id:
+    if not (current_user.is_admin or current_user.is_director or current_user.is_manager) and current_user.warehouse_id:
         query = query.filter(or_(Lead.warehouse_id == current_user.warehouse_id, Lead.warehouse_id.is_(None)))
 
     if status:
@@ -6689,8 +6685,6 @@ def conversations_list():
     elif assigned == 'unassigned':
         query = query.filter(Lead.assigned_user_id.is_(None))
     if warehouse_id:
-        if current_user.is_manager and current_user.warehouse_id and warehouse_id != current_user.warehouse_id:
-            abort(403)
         query = query.filter(Lead.warehouse_id == warehouse_id)
     if q:
         like = f'%{q}%'
@@ -6709,8 +6703,6 @@ def conversations_list():
         .all()
     )
     warehouses_query = Warehouse.query.filter_by(is_active=True)
-    if current_user.is_manager and current_user.warehouse_id:
-        warehouses_query = warehouses_query.filter(Warehouse.id == current_user.warehouse_id)
     warehouses = warehouses_query.order_by(Warehouse.name).all()
     managers_query = User.query.filter(User.role == 'manager')
     if current_user.is_manager:
