@@ -7943,7 +7943,7 @@ def _refresh_order_realization_status(order: CustomerOrder) -> None:
         order.realization_status = 'partial'
 
 
-def _resolve_realization_trailer_for_line(order: CustomerOrder, source_line: CustomerOrderLine, source_lines_count: int):
+def _resolve_realization_trailer_for_line(order: CustomerOrder, source_line: CustomerOrderLine):
     if source_line.line_type != 'TRAILER':
         return None, None, None
 
@@ -7962,9 +7962,6 @@ def _resolve_realization_trailer_for_line(order: CustomerOrder, source_line: Cus
     )
     trailer = source_line.trailer or (vin_row.trailer if vin_row and vin_row.trailer_id else None)
 
-    if not trailer and source_lines_count == 1 and order.trailer_id:
-        trailer = order.trailer
-
     if vin_row and vin_row.trailer_id and trailer and vin_row.trailer_id != trailer.id:
         return None, None, f'Позиция #{source_line.line_no}: VIN связан с другим прицепом. Проверьте строку заказа и VIN-реестр.'
 
@@ -7972,7 +7969,7 @@ def _resolve_realization_trailer_for_line(order: CustomerOrder, source_line: Cus
         return None, None, f'Позиция #{source_line.line_no}: VIN строки не совпадает с VIN прицепа.'
 
     if not trailer:
-        return None, None, f'Позиция #{source_line.line_no}: нет однозначно привязанного прицепа/VIN для реализации.'
+        return None, None, f'Позиция #{source_line.line_no}: нет однозначно привязанного прицепа/VIN для реализации. Откройте строку заказа и привяжите правильный VIN/прицеп перед созданием реализации.'
 
     if _posted_realization_for_trailer(trailer.id):
         return None, None, f'Позиция #{source_line.line_no}: VIN {trailer.vin or trailer.id} уже есть в проведённой реализации.'
@@ -8005,7 +8002,7 @@ def _build_sales_realization_from_order(order: CustomerOrder) -> SalesRealizatio
         if source_line.line_type == 'TRAILER':
             line_type = 'trailer'
             inventory_effect = 'trailer_unit'
-            trailer, vin_row, error = _resolve_realization_trailer_for_line(order, source_line, len(source_lines))
+            trailer, vin_row, error = _resolve_realization_trailer_for_line(order, source_line)
             if error:
                 raise ValueError(error)
         if item and item.is_internal_bom_item:
