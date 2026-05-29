@@ -32,6 +32,10 @@
     font-weight: 700;
     font-size: 1rem;
   }
+  .stock-need-next-step {
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
   @media (max-width: 1200px) {
     .stock-need-row {
       grid-template-columns: 1fr;
@@ -97,6 +101,17 @@
         <div class="stock-need-metric"><div class="label">К перемещению</div><div class="value">{{ st.needs_movement_qty }}</div></div>
         <div class="stock-need-metric"><div class="label">На складе</div><div class="value">{{ st.accepted_qty }}</div></div>
         <div class="stock-need-metric"><div class="label">Осталось</div><div class="value">{{ st.remaining_qty }}</div></div>
+        {% if st.needs_vin_qty %}
+          <div class="stock-need-next-step bg-warning-subtle text-warning-emphasis">
+            <div class="fw-semibold">Выпущено без VIN</div>
+            <div class="small">Следующий шаг: логист присваивает VIN выпущенной единице. После этого появится отправка на склад.</div>
+          </div>
+        {% elif st.needs_movement_qty %}
+          <div class="stock-need-next-step bg-info-subtle text-info-emphasis">
+            <div class="fw-semibold">VIN уже присвоен</div>
+            <div class="small">Следующий шаг: отправить прицеп на склад {{ need.warehouse.name if need.warehouse else '' }}.</div>
+          </div>
+        {% endif %}
       </div>
 
       <div class="d-flex flex-column gap-2 align-items-start align-items-xl-end">
