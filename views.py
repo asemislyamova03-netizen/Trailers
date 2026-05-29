@@ -9528,6 +9528,9 @@ def vin_registry_list():
                 if VinRegistry.query.filter(or_(VinRegistry.serial7 == parsed['serial7'], VinRegistry.vin_full == parsed['vin_full'])).first():
                     errors.append(f'{line}: VIN или serial7 уже есть в реестре.')
                     continue
+                if Trailer.query.filter_by(vin=parsed['vin_full']).first():
+                    errors.append(f'{line}: такой VIN уже есть у прицепа. Нельзя загрузить проданный или созданный VIN как свободный.')
+                    continue
                 row = VinRegistry(status='free', source=source, **parsed)
             else:
                 serial, error = _normalize_serial7(line)
@@ -10832,6 +10835,7 @@ def logistics_assign_vin(unit_id):
             VinRegistry.status == 'free',
             VinRegistry.vin_full.isnot(None),
             VinRegistry.trailer_id.is_(None),
+            ~sa.exists().where(Trailer.vin == VinRegistry.vin_full),
         )
         if expected_modification:
             vin_query = vin_query.filter(VinRegistry.vin_modification_code == expected_modification)
