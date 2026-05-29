@@ -233,13 +233,7 @@ def can_access_contract(contract: SalesContract) -> bool:
     if current_user.is_manager:
         if contract.order:
             return can_access_order(contract.order)
-        return bool(
-            current_user.warehouse_id
-            and (
-                contract.warehouse_id == current_user.warehouse_id
-                or (contract.trailer and contract.trailer.warehouse_id == current_user.warehouse_id)
-            )
-        )
+        return contract.assigned_user_id == current_user.id
     return False
 
 
@@ -1215,11 +1209,9 @@ def manager_workspace():
         return redirect(url_for('main.role_home'))
 
     warehouses = _sales_warehouses()
-    warehouse_id = current_user.warehouse_id
-    if current_user.can_view_all:
-        warehouse_id = request.args.get('warehouse_id', type=int) or warehouse_id
-        if not warehouse_id and warehouses:
-            warehouse_id = warehouses[0].id
+    warehouse_id = request.args.get('warehouse_id', type=int) or current_user.warehouse_id
+    if current_user.can_view_all and not warehouse_id and warehouses:
+        warehouse_id = warehouses[0].id
 
     if not warehouse_id and warehouses:
         warehouse_id = warehouses[0].id
@@ -7504,7 +7496,7 @@ def supply_need_cancel(need_id):
     need = SupplyNeed.query.get_or_404(need_id)
     if current_user.is_admin or current_user.is_director:
         pass
-    elif current_user.is_manager and _is_stock_replenishment_need(need) and current_user.warehouse_id == need.warehouse_id:
+    elif current_user.is_manager and _is_stock_replenishment_need(need):
         pass
     else:
         abort(403)

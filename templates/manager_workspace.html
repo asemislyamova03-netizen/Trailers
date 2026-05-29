@@ -41,7 +41,7 @@
 </div>
 {% endif %}
 
-{% if current_user.can_view_all %}
+{% if current_user.is_manager or current_user.can_view_all %}
 <form method="get" class="app-card p-3 mb-3">
   <input type="hidden" name="tab" value="{{ active_tab }}">
   <div class="row g-2 align-items-end">
