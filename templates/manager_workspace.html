@@ -5,8 +5,8 @@
 {% block content %}
 <div class="compact-page-header">
   <div>
-      <h1>CRM</h1>
-      <div class="text-muted small">Диалоги, заявки, сделки и задачи менеджера. Склад по умолчанию: {{ warehouses|selectattr('id', 'equalto', warehouse_id)|map(attribute='name')|first or 'не выбран' }}</div>
+    <h1>CRM</h1>
+    <div class="text-muted small">Диалоги, заявки, сделки и задачи менеджера. Склад по умолчанию: {{ warehouses|selectattr('id', 'equalto', warehouse_id)|map(attribute='name')|first or 'не выбран' }}</div>
   </div>
   <div class="d-flex gap-2 flex-wrap">
     <a href="{{ url_for('main.order_create', return_to='manager_workspace', return_tab='orders') }}" class="btn btn-orange btn-sm"><i class="bi bi-plus-lg me-1"></i>Заказ</a>
@@ -16,16 +16,12 @@
 
 {% if assigned_vins_to_confirm %}
 <div class="app-card p-3 mb-3 border-warning">
-  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-    <div>
-      <div class="fw-semibold">VIN назначен, ждёт подтверждения нанесения</div>
-      <div class="text-muted small">Подтверждение меняет общий статус VIN-реестра для менеджера, админа, директора и логиста.</div>
-    </div>
-  </div>
-  <div class="table-responsive mt-2">
+  <div class="fw-semibold">VIN назначен, ждёт подтверждения нанесения</div>
+  <div class="text-muted small mb-2">Подтверждение меняет общий статус VIN-реестра.</div>
+  <div class="table-responsive">
     <table class="table table-sm align-middle mb-0">
       <tbody>
-        {% for row in assigned_vins_to_confirm %}
+      {% for row in assigned_vins_to_confirm %}
         <tr>
           <td class="fw-bold">{{ row.vin_full }}</td>
           <td>{{ row.customer_order.order_number if row.customer_order else '' }}</td>
@@ -33,11 +29,11 @@
           <td class="text-end">
             <form method="post" action="{{ url_for('main.vin_registry_confirm', vin_id=row.id) }}" class="d-inline">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <button class="btn btn-sm btn-orange">Подтвердить нанесение VIN</button>
+              <button class="btn btn-sm btn-orange">Подтвердить VIN</button>
             </form>
           </td>
         </tr>
-        {% endfor %}
+      {% endfor %}
       </tbody>
     </table>
   </div>
@@ -46,443 +42,151 @@
 
 {% if current_user.can_view_all %}
 <form method="get" class="app-card p-3 mb-3">
-    <input type="hidden" name="tab" value="{{ active_tab }}">
-    <div class="row g-2 align-items-end">
-        <div class="col-md-4">
-            <label class="form-label">Рабочий склад</label>
-            <select name="warehouse_id" class="form-select" onchange="this.form.submit()">
-                {% for w in warehouses %}
-                    <option value="{{ w.id }}" {% if w.id == warehouse_id %}selected{% endif %}>{{ w.name }}</option>
-                {% endfor %}
-            </select>
-        </div>
+  <input type="hidden" name="tab" value="{{ active_tab }}">
+  <div class="row g-2 align-items-end">
+    <div class="col-md-4">
+      <label class="form-label">Рабочий склад</label>
+      <select name="warehouse_id" class="form-select" onchange="this.form.submit()">
+        {% for w in warehouses %}
+        <option value="{{ w.id }}" {% if w.id == warehouse_id %}selected{% endif %}>{{ w.name }}</option>
+        {% endfor %}
+      </select>
     </div>
+  </div>
 </form>
 {% endif %}
 
-<div class="compact-metrics app-card p-2 mb-3">
-  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-    <div class="small text-muted">Диалоги: {{ new_conversations_count }} · Заявки: {{ new_leads|length }} · Мои сделки: {{ active_orders|length }} · В наличии по складам продаж: {{ stock_trailers|length }} · К выдаче: {{ ready_to_ship_orders|length }}</div>
-    <button class="btn btn-sm btn-soft" type="button" data-bs-toggle="collapse" data-bs-target="#managerKpiCollapse">Показатели</button>
-  </div>
-  <div class="collapse mt-3" id="managerKpiCollapse">
-<div class="kpi-grid mb-4">
-    <div class="app-card kpi-card"><div><div class="kpi-title">Новые диалоги</div><div class="kpi-value">{{ new_conversations_count }}</div><div class="kpi-caption">входящие обращения</div></div><div class="kpi-icon"><i class="bi bi-chat-dots"></i></div></div>
-    <div class="app-card kpi-card"><div><div class="kpi-title">Непрочитанные</div><div class="kpi-value">{{ unread_messages_count }}</div><div class="kpi-caption">сообщения клиентов</div></div><div class="kpi-icon"><i class="bi bi-envelope-exclamation"></i></div></div>
-    <div class="app-card kpi-card"><div><div class="kpi-title">Требуют ответа</div><div class="kpi-value">{{ manager_needed_count }}</div><div class="kpi-caption">нужен менеджер</div></div><div class="kpi-icon"><i class="bi bi-person-exclamation"></i></div></div>
-    <div class="app-card kpi-card"><div><div class="kpi-title">Новые заявки</div><div class="kpi-value">{{ new_leads|length }}</div><div class="kpi-caption">нужна обработка</div></div><div class="kpi-icon"><i class="bi bi-chat-left-text"></i></div></div>
-    <div class="app-card kpi-card"><div><div class="kpi-title">Мои сделки</div><div class="kpi-value">{{ active_orders|length }}</div><div class="kpi-caption">по ответственному менеджеру</div></div><div class="kpi-icon"><i class="bi bi-receipt"></i></div></div>
-    <div class="app-card kpi-card"><div><div class="kpi-title">В наличии</div><div class="kpi-value">{{ stock_trailers|length }}</div><div class="kpi-caption">свободные VIN по складам продаж</div></div><div class="kpi-icon"><i class="bi bi-box-seam"></i></div></div>
-    <div class="app-card kpi-card"><div><div class="kpi-title">В производстве</div><div class="kpi-value">{{ production_qty_left }}</div><div class="kpi-caption">осталось выпустить</div></div><div class="kpi-icon"><i class="bi bi-tools"></i></div></div>
-    <div class="app-card kpi-card"><div><div class="kpi-title">Выпущено без VIN</div><div class="kpi-value">{{ produced_units_for_warehouse|length }}</div><div class="kpi-caption">для моего склада</div></div><div class="kpi-icon"><i class="bi bi-upc-scan"></i></div></div>
-    <div class="app-card kpi-card"><div><div class="kpi-title">Ждёт отправки</div><div class="kpi-value">{{ ready_at_production_rows|length }}</div><div class="kpi-caption">на складе выпуска</div></div><div class="kpi-icon"><i class="bi bi-send"></i></div></div>
-    <div class="app-card kpi-card"><div><div class="kpi-title">В пути / к приёмке</div><div class="kpi-value">{{ inbound_movements|length }}</div><div class="kpi-caption">ожидают склад</div></div><div class="kpi-icon"><i class="bi bi-truck"></i></div></div>
-    <div class="app-card kpi-card"><div><div class="kpi-title">К выдаче</div><div class="kpi-value">{{ ready_to_ship_orders|length }}</div><div class="kpi-caption">документы / отгрузка</div></div><div class="kpi-icon"><i class="bi bi-clipboard-check"></i></div></div>
-    <div class="app-card kpi-card"><div><div class="kpi-title">Оплачено, не отгружено</div><div class="kpi-value">{{ paid_not_shipped_orders|length }}</div><div class="kpi-caption">контроль выдачи</div></div><div class="kpi-icon"><i class="bi bi-cash-coin"></i></div></div>
-    <div class="app-card kpi-card"><div><div class="kpi-title">Оплачено, документы не выданы</div><div class="kpi-value">{{ paid_docs_not_issued_orders|length }}</div><div class="kpi-caption">нужно оформить продажу</div></div><div class="kpi-icon"><i class="bi bi-file-earmark-text"></i></div></div>
-    <div class="app-card kpi-card"><div><div class="kpi-title">Продано, не отгружено</div><div class="kpi-value">{{ planned_ship_orders|length }}</div><div class="kpi-caption">юридически продано</div></div><div class="kpi-icon"><i class="bi bi-hourglass-split"></i></div></div>
-    <div class="app-card kpi-card"><div><div class="kpi-title">Выручка сегодня</div><div class="kpi-value">{{ sold_today_revenue|money }}</div><div class="kpi-caption">продано: {{ sold_today_orders|length }}</div></div><div class="kpi-icon"><i class="bi bi-graph-up-arrow"></i></div></div>
-    <div class="app-card kpi-card"><div><div class="kpi-title">Выручка за месяц</div><div class="kpi-value">{{ sold_month_revenue|money }}</div><div class="kpi-caption">продано: {{ sold_month_orders|length }}</div></div><div class="kpi-icon"><i class="bi bi-calendar3"></i></div></div>
-</div>
-  </div>
+<div class="kpi-grid mb-3">
+  <div class="app-card kpi-card"><div><div class="kpi-title">Диалоги</div><div class="kpi-value">{{ new_conversations_count }}</div><div class="kpi-caption">новые обращения</div></div><div class="kpi-icon"><i class="bi bi-chat-dots"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Непрочитанные</div><div class="kpi-value">{{ unread_messages_count }}</div><div class="kpi-caption">сообщения клиентов</div></div><div class="kpi-icon"><i class="bi bi-envelope-exclamation"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Заявки</div><div class="kpi-value">{{ new_leads|length }}</div><div class="kpi-caption">нужна обработка</div></div><div class="kpi-icon"><i class="bi bi-chat-left-text"></i></div></div>
+  <div class="app-card kpi-card"><div><div class="kpi-title">Сделки</div><div class="kpi-value">{{ active_orders|length }}</div><div class="kpi-caption">в работе</div></div><div class="kpi-icon"><i class="bi bi-receipt"></i></div></div>
 </div>
 
 <ul class="nav nav-tabs mb-3" role="tablist">
-    <li class="nav-item"><button class="nav-link active" data-manager-tab="orders" data-bs-toggle="tab" data-bs-target="#orders-tab" type="button">Мои сделки</button></li>
-    <li class="nav-item"><button class="nav-link" data-manager-tab="stock" data-bs-toggle="tab" data-bs-target="#stock-tab" type="button">Наличие</button></li>
-    <li class="nav-item"><button class="nav-link" data-manager-tab="leads" data-bs-toggle="tab" data-bs-target="#leads-tab" type="button">Заявки</button></li>
-    <li class="nav-item"><button class="nav-link" data-manager-tab="conversations" data-bs-toggle="tab" data-bs-target="#conversations-tab" type="button">Диалоги</button></li>
-    <li class="nav-item"><button class="nav-link" data-manager-tab="issue" data-bs-toggle="tab" data-bs-target="#issue-tab" type="button">К выдаче</button></li>
-    <li class="nav-item"><button class="nav-link" data-manager-tab="production" data-bs-toggle="tab" data-bs-target="#production-tab" type="button">В производстве</button></li>
-    <li class="nav-item dropdown">
-      <button class="nav-link dropdown-toggle" data-bs-toggle="dropdown" data-bs-display="static" type="button">Ещё</button>
-      <ul class="dropdown-menu dropdown-menu-end manager-more-menu">
-        <li><button class="dropdown-item" data-manager-tab="inbound" data-bs-toggle="tab" data-bs-target="#inbound-tab" type="button">В пути / к приёмке</button></li>
-        <li><button class="dropdown-item" data-manager-tab="movements" data-bs-toggle="tab" data-bs-target="#movements-tab" type="button">Перемещения</button></li>
-        <li><button class="dropdown-item" data-manager-tab="payments" data-bs-toggle="tab" data-bs-target="#payments-tab" type="button">Оплаты</button></li>
-        <li><button class="dropdown-item" data-manager-tab="planned-shipments" data-bs-toggle="tab" data-bs-target="#planned-shipments-tab" type="button">Плановые отгрузки</button></li>
-        <li><button class="dropdown-item" data-manager-tab="sales" data-bs-toggle="tab" data-bs-target="#sales-tab" type="button">Продажи</button></li>
-        <li><button class="dropdown-item" data-manager-tab="other-stock" data-bs-toggle="tab" data-bs-target="#other-stock-tab" type="button">Другие склады</button></li>
-        <li><button class="dropdown-item" data-manager-tab="produced" data-bs-toggle="tab" data-bs-target="#produced-tab" type="button">Выпущено без VIN</button></li>
-        <li><button class="dropdown-item" data-manager-tab="ready-transfer" data-bs-toggle="tab" data-bs-target="#ready-transfer-tab" type="button">Готово к отправке</button></li>
-      </ul>
-    </li>
+  <li class="nav-item"><button class="nav-link active" data-manager-tab="orders" data-bs-toggle="tab" data-bs-target="#orders-tab" type="button">Сделки</button></li>
+  <li class="nav-item"><button class="nav-link" data-manager-tab="conversations" data-bs-toggle="tab" data-bs-target="#conversations-tab" type="button">Диалоги</button></li>
+  <li class="nav-item"><button class="nav-link" data-manager-tab="leads" data-bs-toggle="tab" data-bs-target="#leads-tab" type="button">Заявки</button></li>
+  <li class="nav-item"><button class="nav-link" data-manager-tab="assistant" data-bs-toggle="tab" data-bs-target="#assistant-tab" type="button">Задачи</button></li>
 </ul>
 
 <div class="tab-content">
-    <div class="tab-pane fade" id="conversations-tab">
-        <div class="app-card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <span>Диалоги</span>
-                <a class="btn btn-sm btn-soft" href="{{ url_for('main.conversations_list') }}">Все диалоги</a>
-            </div>
-            <div class="table-responsive"><table class="table table-hover align-middle">
-                <thead><tr><th>Канал</th><th>Клиент</th><th>Телефон / username</th><th>Последнее сообщение</th><th>Статус</th><th>Непрочитано</th><th>Ответственный</th><th></th></tr></thead>
-                <tbody>{% for lead in recent_conversations %}
-                    <tr>
-                        <td><span class="badge text-bg-{{ lead.channel|status_badge_class }}">{{ lead.channel|status_label }}</span></td>
-                        <td class="fw-semibold">{{ lead.customer_name }}</td>
-                        <td>{{ lead.phone or lead.messenger_username or lead.external_chat_id or '' }}</td>
-                        <td class="text-muted">{{ lead.last_message_text or lead.text or '' }}</td>
-                        <td><span class="badge text-bg-{{ lead.conversation_status|status_badge_class }}">{{ lead.conversation_status|status_label }}</span></td>
-                        <td>{% if lead.unread_count %}<span class="badge text-bg-danger">{{ lead.unread_count }}</span>{% else %}<span class="text-muted">0</span>{% endif %}</td>
-                        <td>{{ lead.assigned_user.full_name if lead.assigned_user else 'Не назначен' }}</td>
-                        <td class="text-end"><a class="btn btn-sm btn-orange" href="{{ url_for('main.conversation_detail', lead_id=lead.id) }}">Открыть</a></td>
-                    </tr>
-                {% else %}<tr><td colspan="8" class="text-muted p-3">Диалогов нет</td></tr>{% endfor %}</tbody>
-            </table></div>
-        </div>
+  <div class="tab-pane fade show active" id="orders-tab">
+    <div class="app-card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Сделки</span>
+        <a class="btn btn-sm btn-soft" href="{{ url_for('main.orders_list') }}">Все сделки</a>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover align-middle">
+          <thead><tr><th>Заказ</th><th>Клиент</th><th>Склад выдачи</th><th>Статус</th><th>Блокер</th><th>Следующее действие</th><th>Сумма</th><th></th></tr></thead>
+          <tbody>
+          {% for row in active_order_rows %}
+            {% set order = row.order %}
+            {% set state = row.state %}
+            <tr>
+              <td class="fw-semibold">{{ order.order_number }}</td>
+              <td>{{ order.customer.name if order.customer else '' }}</td>
+              <td>{{ order.warehouse.name if order.warehouse else 'не задан' }}</td>
+              <td><span class="badge text-bg-{{ state.code|status_badge_class }}">{{ state.label }}</span></td>
+              <td>{% if state.blocker %}<span class="text-danger">{{ state.blocker }}</span>{% else %}<span class="text-muted">нет</span>{% endif %}</td>
+              <td>{{ state.next_action }}</td>
+              <td>{{ order.price|money }}</td>
+              <td class="text-end"><a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=order.id) }}">Открыть</a></td>
+            </tr>
+          {% else %}
+            <tr><td colspan="8" class="text-muted p-3">Сделок нет</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
+  </div>
 
-    <div class="tab-pane fade" id="leads-tab">
-        <div class="app-card">
-            <div class="card-header d-flex justify-content-between align-items-center"><span>Заявки</span><a class="btn btn-sm btn-orange" href="{{ url_for('main.lead_create', return_to='manager_workspace', return_tab='leads') }}">+ Заявка</a></div>
-            <div class="table-responsive"><table class="table table-hover align-middle">
-                <thead><tr><th>Дата</th><th>Источник</th><th>Клиент</th><th>Телефон</th><th>Модель</th><th>Статус</th><th></th></tr></thead>
-                <tbody>{% for lead in new_leads %}
-                    <tr><td>{{ lead.created_at|date_format }}</td><td>{{ lead.channel or lead.source_channel }}</td><td class="fw-semibold">{{ lead.customer_name }}</td><td>{{ lead.phone or '' }}</td><td>{{ lead.desired_model or (lead.desired_item.article if lead.desired_item else '') }}</td><td><span class="badge text-bg-{{ lead.status|status_badge_class }}">{{ lead.status|status_label }}</span></td><td class="text-end"><a class="btn btn-sm btn-soft" href="{{ url_for('main.lead_detail', lead_id=lead.id) }}">Открыть</a> <a class="btn btn-sm btn-orange" href="{{ url_for('main.lead_create_order', lead_id=lead.id) }}">Создать заказ</a></td></tr>
-                {% else %}<tr><td colspan="7" class="text-muted p-3">Заявок нет</td></tr>{% endfor %}</tbody>
-            </table></div>
-        </div>
+  <div class="tab-pane fade" id="conversations-tab">
+    <div class="app-card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Диалоги</span>
+        <a class="btn btn-sm btn-soft" href="{{ url_for('main.conversations_list') }}">Все диалоги</a>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover align-middle">
+          <thead><tr><th>Канал</th><th>Клиент</th><th>Контакт</th><th>Последнее сообщение</th><th>Статус</th><th>Непрочитано</th><th></th></tr></thead>
+          <tbody>
+          {% for lead in recent_conversations %}
+            <tr>
+              <td><span class="badge text-bg-{{ lead.channel|status_badge_class }}">{{ lead.channel|status_label }}</span></td>
+              <td class="fw-semibold">{{ lead.customer_name }}</td>
+              <td>{{ lead.phone or lead.messenger_username or lead.external_chat_id or '' }}</td>
+              <td class="text-muted">{{ lead.last_message_text or lead.text or '' }}</td>
+              <td><span class="badge text-bg-{{ lead.conversation_status|status_badge_class }}">{{ lead.conversation_status|status_label }}</span></td>
+              <td>{% if lead.unread_count %}<span class="badge text-bg-danger">{{ lead.unread_count }}</span>{% else %}<span class="text-muted">0</span>{% endif %}</td>
+              <td class="text-end"><a class="btn btn-sm btn-orange" href="{{ url_for('main.conversation_detail', lead_id=lead.id) }}">Открыть</a></td>
+            </tr>
+          {% else %}
+            <tr><td colspan="7" class="text-muted p-3">Диалогов нет</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
+  </div>
 
-    <div class="tab-pane fade show active" id="orders-tab">
-        <div class="app-card">
-            <div class="card-header d-flex justify-content-between align-items-center"><span>Мои сделки</span><a class="btn btn-sm btn-orange" href="{{ url_for('main.order_create', return_to='manager_workspace', return_tab='orders') }}">+ Заказ</a></div>
-            <div class="table-responsive"><table class="table table-hover align-middle">
-                <thead><tr><th>Номер</th><th>Клиент</th><th>Модель</th><th>Склад выдачи</th><th>Путь сделки</th><th>Статус</th><th>Сумма</th><th>Оплачено</th><th>Остаток</th><th></th></tr></thead>
-                <tbody>{% for order in active_orders %}
-                    <tr>
-                      <td class="fw-semibold">{{ order.order_number }}</td>
-                      <td>{{ order.customer.name if order.customer else '' }}</td>
-                      <td>{{ order.item.article if order.item else '' }}</td>
-                      <td>{{ order.warehouse.name if order.warehouse else '' }}</td>
-                      <td class="small">
-                        <span class="badge text-bg-success">Заявка</span>
-                        <span class="text-muted">→</span>
-                        <span class="badge text-bg-success">Заказ</span>
-                        <span class="text-muted">→</span>
-                        <span class="badge text-bg-{{ 'success' if order.trailer_id or order.reserved_vin_registry_id else 'secondary' }}">VIN</span>
-                        <span class="text-muted">→</span>
-                        <span class="badge text-bg-secondary">Комплектация</span>
-                        <span class="text-muted">→</span>
-                        <span class="badge text-bg-{{ 'success' if order.confirmed_paid_amount else 'secondary' }}">Оплата</span>
-                        <span class="text-muted">→</span>
-                        <span class="badge text-bg-{{ 'success' if order.documents_issued else 'secondary' }}">Документы</span>
-                        <span class="text-muted">→</span>
-                        <span class="badge text-bg-{{ 'success' if order.realization_status in ['realized', 'partial'] else 'secondary' }}">Реализация</span>
-                        <span class="text-muted">→</span>
-                        <span class="badge text-bg-{{ 'success' if order.is_shipped else 'secondary' }}">Отгрузка</span>
-                      </td>
-                      <td><span class="badge text-bg-{{ order.status|status_badge_class }}">{{ order.status|status_label }}</span></td>
-                      <td>{{ order.price|money }}</td><td>{{ order.confirmed_paid_amount|money }}</td><td>{{ order.remaining_amount|money }}</td><td class="text-end"><a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=order.id) }}">Открыть</a></td>
-                    </tr>
-                {% else %}<tr><td colspan="10" class="text-muted p-3">Сделок нет</td></tr>{% endfor %}</tbody>
-            </table></div>
-        </div>
+  <div class="tab-pane fade" id="leads-tab">
+    <div class="app-card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Заявки</span>
+        <a class="btn btn-sm btn-orange" href="{{ url_for('main.lead_create', return_to='manager_workspace', return_tab='leads') }}">+ Заявка</a>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover align-middle">
+          <thead><tr><th>Дата</th><th>Источник</th><th>Клиент</th><th>Телефон</th><th>Модель</th><th>Статус</th><th></th></tr></thead>
+          <tbody>
+          {% for lead in new_leads %}
+            <tr>
+              <td>{{ lead.created_at|date_format }}</td>
+              <td>{{ lead.channel or lead.source_channel }}</td>
+              <td class="fw-semibold">{{ lead.customer_name }}</td>
+              <td>{{ lead.phone or '' }}</td>
+              <td>{{ lead.desired_model or (lead.desired_item.article if lead.desired_item else '') }}</td>
+              <td><span class="badge text-bg-{{ lead.status|status_badge_class }}">{{ lead.status|status_label }}</span></td>
+              <td class="text-end"><a class="btn btn-sm btn-soft" href="{{ url_for('main.lead_detail', lead_id=lead.id) }}">Открыть</a> <a class="btn btn-sm btn-orange" href="{{ url_for('main.lead_create_order', lead_id=lead.id) }}">Создать заказ</a></td>
+            </tr>
+          {% else %}
+            <tr><td colspan="7" class="text-muted p-3">Заявок нет</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
+  </div>
 
-    <div class="tab-pane fade" id="stock-tab">
-        <div class="app-card">
-            <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-                <span>Наличие по складам продаж</span>
-                <div class="btn-group btn-group-sm stock-filter-group" role="group" aria-label="Фильтр склада">
-                    <button class="btn btn-soft active" type="button" data-stock-filter="available">Свободные</button>
-                    <button class="btn btn-soft" type="button" data-stock-filter="reserved">Резерв</button>
-                    <button class="btn btn-soft" type="button" data-stock-filter="sold_not_shipped">Проданы не отгружены</button>
-                    <button class="btn btn-soft" type="button" data-stock-filter="in_transit">В пути</button>
-                    <button class="btn btn-soft" type="button" data-stock-filter="produced_no_vin">Без VIN</button>
-                    <button class="btn btn-soft" type="button" data-stock-filter="ready_production">На складе выпуска</button>
-                    <button class="btn btn-soft" type="button" data-stock-filter="shipped">Отгружены</button>
-                    <button class="btn btn-soft" type="button" data-stock-filter="all">Все</button>
-                </div>
-            </div>
-            <div class="table-responsive"><table class="table table-hover align-middle">
-                <thead><tr><th>Группа</th><th>VIN</th><th>Артикул</th><th>Модель</th><th>Статус</th><th>Заказ</th><th></th></tr></thead>
-                <tbody>
-                {% for row in warehouse_stock_rows %}
-                    {% set trailer = row.trailer %}
-                    {% set unit = row.unit if row.unit is defined else None %}
-                    <tr data-stock-group="{{ row.group }}" {% if row.group != 'available' %}class="d-none"{% endif %}>
-                        <td><span class="badge text-bg-{{ row.group|status_badge_class }}">{{ row.group_label }}</span></td>
-                        <td class="fw-semibold">{{ trailer.vin if trailer else ('Ед. #' ~ (unit.id|string)) if unit else '' }}</td>
-                        <td>{{ trailer.item.article if trailer and trailer.item else unit.item.article if unit and unit.item else '' }}</td>
-                        <td>{{ trailer.item.name if trailer and trailer.item else unit.item.name if unit and unit.item else '' }}</td>
-                        <td>
-                            {% if trailer %}
-                                <span class="badge text-bg-{{ trailer.status|status_badge_class }}">{{ trailer.status|status_label }}</span>
-                            {% elif unit %}
-                                <span class="badge text-bg-{{ unit.status|status_badge_class }}">{{ unit.status|status_label }}</span>
-                            {% endif %}
-                        </td>
-                        <td>{% if row.order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=row.order.id) }}">{{ row.order.order_number }}</a>{% else %}<span class="text-muted">—</span>{% endif %}</td>
-                        <td class="text-end">
-                            <div class="d-flex gap-1 justify-content-end flex-wrap">
-                                {% if trailer %}
-                                    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.trailer_change_item', trailer_id=trailer.id, return_to='manager_workspace', return_tab='stock') }}">Комплектация</a>
-                                {% endif %}
-                                {% if row.group == 'available' and trailer %}
-                                    <a class="btn btn-sm btn-orange" href="{{ url_for('main.order_create', trailer_id=trailer.id, item_id=trailer.item_id, return_to='manager_workspace', return_tab='stock') }}">Создать заказ</a>
-                                {% endif %}
-                            </div>
-                        </td>
-                    </tr>
-                {% else %}<tr><td colspan="7" class="text-muted p-3">На складах продаж нет прицепов</td></tr>{% endfor %}
-                    <tr id="stockEmptyRow" class="{% if not warehouse_stock_rows or stock_trailers %}d-none{% endif %}"><td colspan="7" class="text-muted p-3">В выбранной группе нет прицепов</td></tr>
-                </tbody>
-            </table></div>
+  <div class="tab-pane fade" id="assistant-tab">
+    <div class="row g-3">
+      <div class="col-lg-6">
+        <div class="app-card p-3 h-100">
+          <h2 class="h6 mb-3">Задачи на сегодня</h2>
+          <ul class="list-unstyled mb-0 small">
+            {% if unread_messages_count %}<li class="mb-2"><span class="badge text-bg-danger me-2">{{ unread_messages_count }}</span>Ответить на непрочитанные сообщения.</li>{% endif %}
+            {% if assigned_vins_to_confirm %}<li class="mb-2"><span class="badge text-bg-warning me-2">{{ assigned_vins_to_confirm|length }}</span>Подтвердить нанесение VIN.</li>{% endif %}
+            {% if active_orders %}<li class="mb-2"><span class="badge text-bg-secondary me-2">{{ active_orders|length }}</span>Проверить сделки с блокерами.</li>{% endif %}
+            {% if not unread_messages_count and not assigned_vins_to_confirm and not active_orders %}<li class="text-muted">Критичных задач нет.</li>{% endif %}
+          </ul>
         </div>
+      </div>
+      <div class="col-lg-6">
+        <div class="app-card p-3 h-100">
+          <h2 class="h6 mb-3">Ассистент</h2>
+          <div class="d-flex flex-wrap gap-2">
+            <a class="btn btn-sm btn-soft" href="{{ url_for('main.conversations_list', status='manager_needed') }}">Кому надо ответить?</a>
+            <a class="btn btn-sm btn-soft" href="{{ url_for('main.orders_list', status='waiting_vin_confirm') }}">Что нужно подтвердить?</a>
+            <a class="btn btn-sm btn-soft" href="{{ url_for('main.orders_list', status='waiting_realization') }}">Какие реализации не проведены?</a>
+            <a class="btn btn-sm btn-soft" href="{{ url_for('main.orders_list', status='waiting_movement') }}">Где нужно перемещение?</a>
+          </div>
+        </div>
+      </div>
     </div>
-
-    <div class="tab-pane fade" id="production-tab">
-        <div class="app-card mb-3">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <span>Нужно отдать в производство</span>
-                <span class="text-muted small">потребность → производственное задание</span>
-            </div>
-            <div class="table-responsive"><table class="table table-hover align-middle">
-                <thead><tr><th>Потребность</th><th>Тип</th><th>Модель</th><th>Кол-во</th><th>Срок</th><th>Заказ</th><th></th></tr></thead>
-                <tbody>{% for need in pending_production_needs %}
-                    <tr>
-                        <td>#{{ need.id }}</td>
-                        <td><span class="badge text-bg-{{ need.need_type|status_badge_class }}">{{ need.need_type|status_label }}</span></td>
-                        <td class="fw-semibold">{{ need.article_snapshot or (need.item.article if need.item else '') }} {{ need.product_name_snapshot or (need.item.name if need.item else '') }}</td>
-                        <td>{{ need.quantity }}</td>
-                        <td>{{ need.required_by|date_format }}</td>
-                        <td>{% if need.order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=need.order.id) }}">{{ need.order.order_number }}</a>{% else %}<span class="badge text-bg-info">Пополнение склада</span>{% endif %}</td>
-                        <td class="text-end">
-                            <form method="post" action="{{ url_for('main.supply_need_create_production_request', need_id=need.id) }}">
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                <button class="btn btn-sm btn-orange">Отдать в производство</button>
-                            </form>
-                        </td>
-                    </tr>
-                {% else %}<tr><td colspan="7" class="text-muted p-3">Новых потребностей нет</td></tr>{% endfor %}</tbody>
-            </table></div>
-        </div>
-        <div class="app-card">
-            <div class="card-header">В производстве для склада</div>
-            <div class="table-responsive"><table class="table table-hover align-middle">
-                <thead><tr><th>Тип</th><th>Заявка</th><th>Модель</th><th>Кол-во</th><th>Выпущено</th><th>Осталось</th><th>Срок</th><th>Статус</th><th>Заказ</th></tr></thead>
-                <tbody>{% for line in production_for_warehouse %}
-                    <tr>
-                        <td><span class="badge text-bg-{{ line.supply_need.need_type|status_badge_class if line.supply_need else 'secondary' }}">{{ line.supply_need.need_type|status_label if line.supply_need else 'Без потребности' }}</span></td>
-                        <td>{{ line.production_request.request_number }}</td>
-                        <td class="fw-semibold">{{ line.item.article if line.item else '' }} {{ line.item.name if line.item else '' }}</td>
-                        <td>{{ line.quantity }}</td><td>{{ line.produced_qty or 0 }}</td><td>{{ line.quantity - (line.produced_qty or 0) }}</td>
-                        <td>{{ line.supply_need.required_by|date_format if line.supply_need else '' }}</td>
-                        <td><span class="badge text-bg-{{ line.status|status_badge_class }}">{{ line.status|status_label }}</span></td>
-                        <td>{% if line.supply_need and line.supply_need.order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=line.supply_need.order.id) }}">{{ line.supply_need.order.order_number }}</a>{% else %}<span class="badge text-bg-info">Пополнение склада</span>{% endif %}</td>
-                    </tr>
-                {% else %}<tr><td colspan="9" class="text-muted p-3">Для склада нет активного производства</td></tr>{% endfor %}</tbody>
-            </table></div>
-        </div>
-    </div>
-
-    <div class="tab-pane fade" id="produced-tab">
-        <div class="app-card">
-            <div class="card-header">Выпущено без VIN для склада</div>
-            <div class="table-responsive"><table class="table table-hover align-middle">
-                <thead><tr><th>Единица</th><th>Тип</th><th>Модель</th><th>Дата выпуска</th><th>Склад назначения</th><th>Статус</th><th></th></tr></thead>
-                <tbody>{% for unit in produced_units_for_warehouse %}
-                    {% set need = unit.production_request_line.supply_need if unit.production_request_line else None %}
-                    <tr>
-                        <td>#{{ unit.id }}</td>
-                        <td><span class="badge text-bg-{{ need.need_type|status_badge_class if need else 'secondary' }}">{{ need.need_type|status_label if need else 'Без потребности' }}</span></td>
-                        <td class="fw-semibold">{{ unit.item.article if unit.item else '' }} {{ unit.item.name if unit.item else '' }}</td>
-                        <td>{{ unit.produced_at|date_format }}</td>
-                        <td>{{ unit.target_warehouse.name if unit.target_warehouse else '' }}</td>
-                        <td><span class="badge text-bg-{{ unit.status|status_badge_class }}">{{ unit.status|status_label }}</span></td>
-                        <td class="text-end">
-                            <div class="d-flex gap-1 justify-content-end flex-wrap">
-                                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.produced_unit_change_item', unit_id=unit.id) }}">Комплектация</a>
-                                <span class="badge text-bg-warning">Ждёт VIN от логиста</span>
-                            </div>
-                        </td>
-                    </tr>
-                {% else %}<tr><td colspan="7" class="text-muted p-3">Выпущенных единиц без VIN нет</td></tr>{% endfor %}</tbody>
-            </table></div>
-        </div>
-    </div>
-
-    <div class="tab-pane fade" id="ready-transfer-tab">
-        <div class="app-card">
-            <div class="card-header">Готово на складе выпуска, ждёт отправки</div>
-            <div class="table-responsive"><table class="table table-hover align-middle">
-                <thead><tr><th>VIN</th><th>Тип</th><th>Модель</th><th>Склад выпуска</th><th>Склад назначения</th><th>Заказ</th><th>Статус</th><th></th></tr></thead>
-                <tbody>{% for row in ready_at_production_rows %}
-                    <tr>
-                        <td class="fw-semibold">{{ row.unit.trailer.vin if row.unit and row.unit.trailer else '' }}</td>
-                        <td><span class="badge text-bg-{{ row.need_type|status_badge_class }}">{{ row.need_type|status_label }}</span></td>
-                        <td>{{ row.unit.item.article if row.unit and row.unit.item else '' }} {{ row.unit.item.name if row.unit and row.unit.item else '' }}</td>
-                        <td>{{ production_warehouse.name if production_warehouse else '' }}</td>
-                        <td>{{ row.target_warehouse.name if row.target_warehouse else '' }}</td>
-                        <td>{% if row.order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=row.order.id) }}">{{ row.order.order_number }}</a>{% else %}<span class="text-muted">на склад</span>{% endif %}</td>
-                        <td><span class="badge text-bg-{{ row.unit.trailer.status|status_badge_class if row.unit and row.unit.trailer else 'secondary' }}">{{ row.unit.trailer.status|status_label if row.unit and row.unit.trailer else '' }}</span></td>
-                        <td class="text-end">
-                            {% if row.unit and row.unit.trailer and row.target_warehouse and current_user.warehouse_id == row.target_warehouse.id %}
-                                <form method="post" action="{{ url_for('main.logistics_send_trailer') }}" class="d-inline">
-                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                    <input type="hidden" name="form_token" value="{{ form_token() }}">
-                                    <input type="hidden" name="trailer_id" value="{{ row.unit.trailer.id }}">
-                                    <input type="hidden" name="to_warehouse_id" value="{{ row.target_warehouse.id }}">
-                                    <input type="hidden" name="order_id" value="{{ row.order.id if row.order else 0 }}">
-                                    <input type="hidden" name="note" value="Перемещение готового прицепа на склад менеджера">
-                                    <button class="btn btn-sm btn-orange">Переместить на мой склад</button>
-                                </form>
-                            {% elif row.target_warehouse %}
-                                <span class="badge text-bg-secondary">не мой склад</span>
-                            {% else %}
-                                <span class="badge text-bg-warning">склад не задан</span>
-                            {% endif %}
-                        </td>
-                    </tr>
-                {% else %}<tr><td colspan="8" class="text-muted p-3">Готовых к отправке прицепов нет</td></tr>{% endfor %}</tbody>
-            </table></div>
-        </div>
-    </div>
-
-    <div class="tab-pane fade" id="inbound-tab">
-        <div class="app-card">
-            <div class="card-header">В пути / к приёмке</div>
-            <div class="table-responsive"><table class="table table-hover align-middle">
-                <thead><tr><th>VIN</th><th>Тип</th><th>Модель</th><th>Откуда</th><th>Куда</th><th>Отправка</th><th>Ожидается</th><th>Заказ</th><th></th></tr></thead>
-                <tbody>{% for m in inbound_movements %}
-                    <tr><td class="fw-semibold">{{ m.trailer.vin if m.trailer else '' }}</td><td>{% if m.order %}<span class="badge text-bg-secondary">Заказ клиента</span>{% else %}<span class="badge text-bg-info">Пополнение склада</span>{% endif %}</td><td>{{ m.trailer.item.article if m.trailer and m.trailer.item else '' }}</td><td>{{ m.from_warehouse.name if m.from_warehouse else '' }}</td><td>{{ m.to_warehouse.name if m.to_warehouse else '' }}</td><td>{{ m.departure_date|date_format }}</td><td>{{ m.arrival_date|date_format }}</td><td>{{ m.order.order_number if m.order else 'на склад' }}</td><td class="text-end"><form method="post" action="{{ url_for('main.stock_movement_receive', movement_id=m.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-success">Принять на склад</button></form></td></tr>
-                {% else %}<tr><td colspan="9" class="text-muted p-3">Входящих перемещений нет</td></tr>{% endfor %}</tbody>
-            </table></div>
-        </div>
-    </div>
-
-    <div class="tab-pane fade" id="movements-tab">
-        <div class="row g-3">
-            <div class="col-12">
-                <div class="app-card">
-                    <div class="card-header">Входящие перемещения на мой склад</div>
-                    <div class="table-responsive"><table class="table table-hover align-middle">
-                        <thead><tr><th>Партия</th><th>VIN</th><th>Модель</th><th>Откуда</th><th>Статус</th><th>Отправка</th><th>Ожидается</th><th></th></tr></thead>
-                        <tbody>{% for m in inbound_movements %}
-                            <tr>
-                                <td>{% if m.batch_key %}<a href="{{ url_for('main.stock_movements_list', batch_key=m.batch_key) }}">{{ m.batch_key }}</a>{% else %}<span class="text-muted">—</span>{% endif %}</td>
-                                <td class="fw-semibold">{{ m.trailer.vin if m.trailer else '' }}</td>
-                                <td>{{ m.trailer.item.article if m.trailer and m.trailer.item else '' }}</td>
-                                <td>{{ m.from_warehouse.name if m.from_warehouse else '' }}</td>
-                                <td><span class="badge text-bg-{{ m.status|status_badge_class }}">{{ m.status|status_label }}</span></td>
-                                <td>{{ m.departure_date|date_format }}</td>
-                                <td>{{ m.arrival_date|date_format }}</td>
-                                <td class="text-end"><form method="post" action="{{ url_for('main.stock_movement_receive', movement_id=m.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-success">Принять</button></form></td>
-                            </tr>
-                        {% else %}<tr><td colspan="8" class="text-muted p-3">Входящих перемещений нет</td></tr>{% endfor %}</tbody>
-                    </table></div>
-                </div>
-            </div>
-
-            <div class="col-12">
-                <div class="app-card">
-                    <div class="card-header">Исходящие перемещения с моего склада</div>
-                    <div class="table-responsive"><table class="table table-hover align-middle">
-                        <thead><tr><th>Партия</th><th>VIN</th><th>Модель</th><th>Куда</th><th>Статус</th><th>Отправка</th><th>Ожидается</th><th>Заказ</th></tr></thead>
-                        <tbody>{% for m in outgoing_movements %}
-                            <tr>
-                                <td>{% if m.batch_key %}<a href="{{ url_for('main.stock_movements_list', batch_key=m.batch_key) }}">{{ m.batch_key }}</a>{% else %}<span class="text-muted">—</span>{% endif %}</td>
-                                <td class="fw-semibold">{{ m.trailer.vin if m.trailer else '' }}</td>
-                                <td>{{ m.trailer.item.article if m.trailer and m.trailer.item else '' }}</td>
-                                <td>{{ m.to_warehouse.name if m.to_warehouse else '' }}</td>
-                                <td><span class="badge text-bg-{{ m.status|status_badge_class }}">{{ m.status|status_label }}</span></td>
-                                <td>{{ m.departure_date|date_format }}</td>
-                                <td>{{ m.arrival_date|date_format }}</td>
-                                <td>{% if m.order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=m.order.id) }}">{{ m.order.order_number }}</a>{% else %}<span class="text-muted">—</span>{% endif %}</td>
-                            </tr>
-                        {% else %}<tr><td colspan="8" class="text-muted p-3">Исходящих перемещений нет</td></tr>{% endfor %}</tbody>
-                    </table></div>
-                </div>
-            </div>
-
-            <div class="col-xl-6">
-                <div class="app-card h-100">
-                    <div class="card-header">Проданные, но не отгруженные клиенту</div>
-                    <div class="table-responsive"><table class="table table-hover align-middle">
-                        <thead><tr><th>Заказ</th><th>Клиент</th><th>VIN</th><th>Документы</th><th>План</th></tr></thead>
-                        <tbody>{% for order in planned_ship_orders %}
-                            <tr><td><a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=order.id) }}">{{ order.order_number }}</a></td><td>{{ order.customer.name if order.customer else '' }}</td><td class="fw-semibold">{{ order.trailer.vin if order.trailer else '' }}</td><td>{{ order.documents_issued_at|date_format }}</td><td>{{ order.planned_ship_date|date_format if order.planned_ship_date else 'не задана' }}</td></tr>
-                        {% else %}<tr><td colspan="5" class="text-muted p-3">Таких заказов нет</td></tr>{% endfor %}</tbody>
-                    </table></div>
-                </div>
-            </div>
-
-            <div class="col-xl-6">
-                <div class="app-card h-100">
-                    <div class="card-header">Плановые отгрузки клиентам</div>
-                    <div class="table-responsive"><table class="table table-hover align-middle">
-                        <thead><tr><th>Дата</th><th>Клиент</th><th>VIN</th><th>Статус</th><th></th></tr></thead>
-                        <tbody>{% for order in planned_ship_orders %}
-                            <tr><td>{{ order.planned_ship_date|date_format if order.planned_ship_date else 'не задана' }}</td><td>{{ order.customer.name if order.customer else '' }}</td><td class="fw-semibold">{{ order.trailer.vin if order.trailer else '' }}</td><td><span class="badge text-bg-{{ order.status|status_badge_class }}">{{ order.status|status_label }}</span></td><td class="text-end"><a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=order.id) }}">Открыть</a></td></tr>
-                        {% else %}<tr><td colspan="5" class="text-muted p-3">Плановых отгрузок нет</td></tr>{% endfor %}</tbody>
-                    </table></div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="tab-pane fade" id="payments-tab">
-        <div class="app-card">
-            <div class="card-header">Последние оплаты</div>
-            <div class="table-responsive"><table class="table table-hover align-middle">
-                <thead><tr><th>Дата</th><th>Заказ</th><th>Клиент</th><th>Сумма</th><th>Этап</th><th>Метод</th><th>Статус</th></tr></thead>
-                <tbody>{% for payment in payments %}
-                    <tr><td>{{ payment.paid_at|date_format }}</td><td>{{ payment.order.order_number if payment.order else '' }}</td><td>{{ payment.order.customer.name if payment.order and payment.order.customer else '' }}</td><td>{{ payment.amount|money }}</td><td>{{ payment.stage }}</td><td>{{ payment.method }}</td><td><span class="badge text-bg-{{ payment.status|status_badge_class }}">{{ payment.status|status_label }}</span></td></tr>
-                {% else %}<tr><td colspan="7" class="text-muted p-3">Оплат нет</td></tr>{% endfor %}</tbody>
-            </table></div>
-        </div>
-    </div>
-
-    <div class="tab-pane fade" id="issue-tab">
-        <div class="app-card">
-            <div class="card-header">К выдаче</div>
-            <div class="table-responsive"><table class="table table-hover align-middle">
-                <thead><tr><th>Заказ</th><th>Клиент</th><th>VIN</th><th>Оплачено</th><th>Остаток</th><th>Документы</th><th></th></tr></thead>
-                <tbody>{% for order in ready_to_ship_orders %}
-                    <tr><td class="fw-semibold">{{ order.order_number }}</td><td>{{ order.customer.name if order.customer else '' }}</td><td>{{ order.trailer.vin if order.trailer else '' }}</td><td>{{ order.confirmed_paid_amount|money }}</td><td>{{ order.remaining_amount|money }}</td><td>{% if order.documents_issued %}<span class="badge text-bg-success">Выданы</span>{% else %}<span class="badge text-bg-secondary">Не выданы</span>{% endif %}</td><td class="text-end d-flex gap-1 justify-content-end"><a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=order.id) }}">Открыть</a>{% if not order.documents_issued %}<form method="post" action="{{ url_for('main.order_issue_documents', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-outline-primary">Документы</button></form>{% endif %}</td></tr>
-                {% else %}<tr><td colspan="7" class="text-muted p-3">Нет заказов к выдаче</td></tr>{% endfor %}</tbody>
-            </table></div>
-        </div>
-    </div>
-
-    <div class="tab-pane fade" id="planned-shipments-tab">
-        <div class="app-card">
-            <div class="card-header">Плановые отгрузки / выдачи</div>
-            <div class="table-responsive"><table class="table table-hover align-middle">
-                <thead><tr><th>Заказ</th><th>Клиент</th><th>Телефон</th><th>VIN</th><th>Склад</th><th>Плановая дата</th><th>Комментарий</th><th></th></tr></thead>
-                <tbody>{% for order in planned_ship_orders %}
-                    <tr><td class="fw-semibold">{{ order.order_number }}</td><td>{{ order.customer.name if order.customer else '' }}</td><td>{{ order.customer.phone if order.customer else '' }}</td><td>{{ order.trailer.vin if order.trailer else '' }}</td><td>{{ order.warehouse.name if order.warehouse else '' }}</td><td>{{ order.planned_ship_date|date_format if order.planned_ship_date else 'не задана' }}</td><td>{{ order.planned_ship_comment or '' }}</td><td class="text-end"><a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=order.id) }}">Открыть</a></td></tr>
-                {% else %}<tr><td colspan="8" class="text-muted p-3">Плановых выдач нет</td></tr>{% endfor %}</tbody>
-            </table></div>
-        </div>
-    </div>
-
-    <div class="tab-pane fade" id="sales-tab">
-        <div class="app-card">
-            <div class="card-header">Продажи по юридической выдаче документов</div>
-            <div class="table-responsive"><table class="table table-hover align-middle">
-                <thead><tr><th>Заказ</th><th>Клиент</th><th>VIN</th><th>Дата продажи</th><th>Сумма</th><th>Статус</th><th></th></tr></thead>
-                <tbody>{% for order in sold_month_orders %}
-                    <tr><td class="fw-semibold">{{ order.order_number }}</td><td>{{ order.customer.name if order.customer else '' }}</td><td>{{ order.trailer.vin if order.trailer else '' }}</td><td>{{ order.documents_issued_at|date_format }}</td><td>{{ order.price|money }}</td><td><span class="badge text-bg-{{ order.status|status_badge_class }}">{{ order.status|status_label }}</span></td><td class="text-end"><a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=order.id) }}">Открыть</a></td></tr>
-                {% else %}<tr><td colspan="7" class="text-muted p-3">Продаж за месяц нет</td></tr>{% endfor %}</tbody>
-            </table></div>
-        </div>
-    </div>
-
-    <div class="tab-pane fade" id="other-stock-tab">
-        <div class="app-card">
-            <div class="card-header">Другие склады</div>
-            <div class="table-responsive"><table class="table table-hover align-middle">
-                <thead><tr><th>Склад</th><th>VIN</th><th>Артикул</th><th>Модель</th><th>Статус</th></tr></thead>
-                <tbody>{% for trailer in other_stock %}
-                    <tr><td>{{ trailer.warehouse.name if trailer.warehouse else '' }}</td><td class="fw-semibold">{{ trailer.vin }}</td><td>{{ trailer.item.article if trailer.item else '' }}</td><td>{{ trailer.item.name if trailer.item else '' }}</td><td><span class="badge text-bg-{{ trailer.status|status_badge_class }}">{{ trailer.status|status_label }}</span></td></tr>
-                {% else %}<tr><td colspan="5" class="text-muted p-3">На других складах нет свободных прицепов</td></tr>{% endfor %}</tbody>
-            </table></div>
-        </div>
-    </div>
+  </div>
 </div>
 {% endblock %}
 
@@ -499,36 +203,8 @@
       const url = new URL(window.location.href);
       url.searchParams.set('tab', button.dataset.managerTab);
       window.history.replaceState({}, '', url);
-      const dropdown = button.closest('.dropdown');
-      if (dropdown && window.bootstrap) {
-        const toggle = dropdown.querySelector('[data-bs-toggle="dropdown"]');
-        if (toggle) window.bootstrap.Dropdown.getOrCreateInstance(toggle).hide();
-      }
     });
   });
-})();
-
-(function () {
-  const buttons = Array.from(document.querySelectorAll('[data-stock-filter]'));
-  const rows = Array.from(document.querySelectorAll('[data-stock-group]'));
-  const emptyRow = document.querySelector('#stockEmptyRow');
-  if (!buttons.length || !rows.length) return;
-
-  function applyFilter(filter) {
-    let visible = 0;
-    rows.forEach((row) => {
-      const show = filter === 'all' || row.dataset.stockGroup === filter;
-      row.classList.toggle('d-none', !show);
-      if (show) visible += 1;
-    });
-    if (emptyRow) emptyRow.classList.toggle('d-none', visible > 0);
-    buttons.forEach((button) => button.classList.toggle('active', button.dataset.stockFilter === filter));
-  }
-
-  buttons.forEach((button) => {
-    button.addEventListener('click', () => applyFilter(button.dataset.stockFilter));
-  });
-  applyFilter('available');
 })();
 </script>
 {% endblock %}

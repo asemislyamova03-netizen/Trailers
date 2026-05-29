@@ -1232,6 +1232,9 @@ def manager_workspace():
     sales_warehouse_ids = [w.id for w in warehouses]
 
     active_tab = (request.args.get('tab') or 'orders').strip() or 'orders'
+    crm_tabs = {'orders', 'leads', 'conversations', 'assistant'}
+    if active_tab not in crm_tabs:
+        active_tab = 'orders'
 
     stock_trailers = [
         trailer for trailer in (
@@ -1287,6 +1290,7 @@ def manager_workspace():
     elif warehouse_id:
         order_scope = order_scope.filter(CustomerOrder.warehouse_id == warehouse_id)
     active_orders = order_scope.filter(CustomerOrder.status.notin_(['done', 'cancelled', 'shipped'])).order_by(CustomerOrder.created_at.desc()).limit(30).all()
+    active_order_rows = [{'order': order, 'state': _order_list_state(order)} for order in active_orders]
     active_order_ids = [order.id for order in active_orders]
     assigned_vins_to_confirm = (
         VinRegistry.query
@@ -1505,6 +1509,7 @@ def manager_workspace():
         unread_messages_count=unread_messages_count,
         manager_needed_count=manager_needed_count,
         active_orders=active_orders,
+        active_order_rows=active_order_rows,
         assigned_vins_to_confirm=assigned_vins_to_confirm,
         inbound_movements=inbound_movements,
         outgoing_movements=outgoing_movements,
