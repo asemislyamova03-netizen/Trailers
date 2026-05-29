@@ -2732,7 +2732,9 @@ def manager_trailer_picker():
             db.session.flush()
             trailer.status = 'RESERVED'
             trailer.lifecycle_status = 'reserved'
-            db.session.add(Reservation(order_id=order.id, order_line_id=order_line.id, trailer_id=trailer.id, item_id=trailer.item_id, source_type='STOCK' if trailer.warehouse_id == order.warehouse_id else 'TRANSFER', status='ACTIVE', priority=10, note='Резерв из подбора прицепа'))
+            reservation = Reservation(order_id=order.id, order_line_id=order_line.id, trailer_id=trailer.id, item_id=trailer.item_id, source_type='STOCK' if trailer.warehouse_id == order.warehouse_id else 'TRANSFER', status='ACTIVE', priority=10, note='Резерв из подбора прицепа')
+            db.session.add(reservation)
+            order_line.reservation = reservation
             add_order_event(order, 'order_created', new_value=order.status, comment='Создан из подбора прицепа')
             add_order_event(order, 'trailer_reserved', new_value=trailer.vin, comment='Резерв из подбора прицепа')
             _finish_idempotency(idem_key, 'CustomerOrder', order.id)
@@ -4777,6 +4779,45 @@ def _set_line_source_state(line: CustomerOrderLine, fulfillment_source: str | No
     if status is not None:
         line.status = status
     line.fulfillment_status = _line_fulfillment_status_from_state(line)
+    _sync_order_line_workflow_links(line)
+
+
+def _sync_order_line_workflow_links(line: CustomerOrderLine) -> None:
+    if not line:
+        return
+    active_reservation = next((row for row in line.reservations if row.status == 'ACTIVE'), None)
+    active_need = next((
+        row for row in line.supply_needs
+        if (row.status or '').lower() not in ('cancelled', 'canceled', 'done', 'closed', 'void')
+    ), None)
+    active_production_line = next((
+        row for row in line.production_lines
+        if (row.status or '').lower() not in ('ready', 'closed', 'cancelled', 'canceled')
+    ), None)
+    active_movement = next((
+        row for row in line.movements
+        if (row.status or '').lower() in ('draft', 'sent', 'in_transit')
+    ), None)
+    active_vin = next((
+        row for row in _active_vin_rows_for_order_line(line)
+    ), None)
+    line.reservation_id = active_reservation.id if active_reservation else None
+    line.supply_need_id = active_need.id if active_need else None
+    line.production_request_line_id = active_production_line.id if active_production_line else None
+    line.stock_movement_id = active_movement.id if active_movement else None
+    line.vin_registry_id = active_vin.id if active_vin else None
+    if any(row.realization and row.realization.status == 'posted' for row in line.realization_lines):
+        line.realization_status = 'realized'
+    elif line.realization_lines:
+        line.realization_status = 'draft'
+    else:
+        line.realization_status = 'not_started'
+    if (line.status or '').lower() == 'shipped':
+        line.shipment_status = 'shipped'
+    elif active_movement:
+        line.shipment_status = 'in_transit'
+    else:
+        line.shipment_status = 'not_started'
 
 
 def _sync_order_totals_from_lines(order: CustomerOrder) -> None:
@@ -4998,7 +5039,7 @@ def change_line_source_production_to_stock(line_id: int, trailer_id: int, user_i
 
     trailer.status = 'RESERVED'
     trailer.lifecycle_status = 'reserved'
-    db.session.add(Reservation(
+    reservation = Reservation(
         order_id=order.id,
         order_line_id=line.id,
         trailer_id=trailer.id,
@@ -5007,7 +5048,9 @@ def change_line_source_production_to_stock(line_id: int, trailer_id: int, user_i
         status='ACTIVE',
         priority=10,
         note=reason,
-    ))
+    )
+    db.session.add(reservation)
+    line.reservation = reservation
     row = _ensure_vin_registry_for_trailer(trailer)
     if row:
         row.customer_order_id = order.id
@@ -5021,6 +5064,7 @@ def change_line_source_production_to_stock(line_id: int, trailer_id: int, user_i
             _add_vin_event(row, 'assigned', old_status, row.status, comment=reason)
         if not order.reserved_vin_registry_id:
             order.reserved_vin_registry_id = row.id
+        line.vin_registry = row
 
     if not order.trailer_id:
         order.trailer_id = trailer.id
@@ -5070,6 +5114,7 @@ def change_line_source_stock_to_production(line_id: int, target_item_id: int, qt
     )
     _apply_snapshot(need, _line_snapshot_from_item(item))
     db.session.add(need)
+    line.supply_need = need
 
     if order.trailer_id == old_trailer_id:
         order.trailer_id = None
@@ -5357,10 +5402,12 @@ def _create_order_line_from_trailer(order: CustomerOrder, trailer: Trailer, sour
         note='Резерв по позиции заказа',
     )
     db.session.add(reservation)
+    line.reservation = reservation
     row = _ensure_vin_registry_for_trailer(trailer)
     if row:
         row.customer_order_id = order.id
         row.order_line_id = line.id
+        line.vin_registry = row
         if row.status == 'free':
             row.status = 'assigned'
     return line
@@ -5411,6 +5458,7 @@ def _create_order_line_from_item_for_production(
     )
     _apply_snapshot(need, snapshot)
     db.session.add(need)
+    line.supply_need = need
     return line, need
 
 
@@ -8641,6 +8689,7 @@ def _link_vin_registry_to_order_line(order: CustomerOrder, line: CustomerOrderLi
     _set_line_source_state(line, line.fulfillment_source or 'stock', 'vin_confirmed' if vin_row.status == 'confirmed' else 'vin_assigned')
     vin_row.order_line_id = line.id
     vin_row.customer_order_id = order.id
+    line.vin_registry = vin_row
 
     if order.lines.count() == 1 and order.trailer_id != trailer.id:
         order.trailer_id = trailer.id
@@ -8650,7 +8699,7 @@ def _link_vin_registry_to_order_line(order: CustomerOrder, line: CustomerOrderLi
         order.source_warehouse_id = trailer.warehouse_id
 
     if not any(row.status == 'ACTIVE' and row.trailer_id == trailer.id for row in line.reservations):
-        db.session.add(Reservation(
+        reservation = Reservation(
             order_id=order.id,
             order_line_id=line.id,
             trailer_id=trailer.id,
@@ -8658,7 +8707,9 @@ def _link_vin_registry_to_order_line(order: CustomerOrder, line: CustomerOrderLi
             status='ACTIVE',
             source_type='VIN_LINK',
             priority=10,
-        ))
+        )
+        db.session.add(reservation)
+        line.reservation = reservation
     add_order_event(
         order,
         'trailer_reserved',
@@ -9305,6 +9356,9 @@ def order_request_transfer(order_id):
             note='Перемещение под сделку',
         )
         db.session.add(movement)
+        if order_line:
+            order_line.stock_movement = movement
+            _set_line_source_state(order_line, 'other_warehouse', 'waiting_transfer')
     db.session.flush()
     _finish_idempotency(idem_key, 'CustomerOrder', order.id)
     add_order_event(order, 'transfer_requested', new_value=trailer.vin, comment='Прицеп зарезервирован на другом складе. Нужна отправка.')
@@ -10190,6 +10244,8 @@ def order_cancel(order_id):
         reservation.status = 'CANCELLED'
     for need in order.supply_needs.filter_by(status='NEW').all():
         need.status = 'CANCELLED'
+    for line in order.lines.all():
+        _set_line_source_state(line, line.fulfillment_source, 'cancelled')
     add_order_event(order, 'cancelled', new_value='cancelled', comment=reason)
     _finish_idempotency(idem_key, 'CustomerOrder', order.id)
     db.session.commit()
@@ -10374,6 +10430,10 @@ def production_request_detail(request_id):
         db.session.add(line)
         if selected_need:
             selected_need.status = 'IN_PRODUCTION'
+            if selected_need.order_line:
+                selected_need.order_line.production_request_line = line
+                selected_need.order_line.supply_need = selected_need
+                _set_line_source_state(selected_need.order_line, selected_need.order_line.fulfillment_source or 'production', 'in_production')
             if selected_need.order:
                 old_status = selected_need.order.status
                 selected_need.order.status = 'in_production'

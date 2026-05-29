@@ -60,7 +60,8 @@
 56. Проверить `/stock-movements/batch/new`: по умолчанию источник - производственный склад, но менеджер может выбрать Алматы/Кокшетау/Астану и увидеть VIN именно этого склада.
 57. После деплоя выполнить `flask db upgrade` до `c2d4e6f8a9b0` и проверить, что `customer_order_line.source_type` / `fulfillment_status` заполнены у старых строк.
 58. Проверить смену источника строки: `production -> stock` ставит `source_type=stock`, `fulfillment_status=stock_reserved`; `stock -> production` ставит `source_type=production`, `fulfillment_status=production_requested`.
-59. Не переходить к BOM/1С/ИИ/закупкам, пока безопасное редактирование заказа из Итерации 1 не принято.
+59. После миграции `d3e5f7a9b1c2` проверить, что у активных строк заказа заполнены `reservation_id`, `supply_need_id`, `production_request_line_id`, `stock_movement_id`, `vin_registry_id`, а также построчные статусы реализации и отгрузки.
+60. Не переходить к BOM/1С/ИИ/закупкам, пока безопасное редактирование заказа из Итерации 1 не принято.
 
 ## Ближайшая техническая задача
 

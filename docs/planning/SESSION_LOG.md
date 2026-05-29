@@ -4,6 +4,19 @@
 
 Дата: 2026-05-29
 Проект: trailers
+Модуль: customer order lines / workflow links
+Что делали: Добавляли явные workflow-ссылки строки заказа по ТЗ Этапа 2.
+Что сделано: В `CustomerOrderLine` добавлены `vin_registry_id`, `reservation_id`, `supply_need_id`, `production_request_line_id`, `stock_movement_id`, `realization_status`, `shipment_status`; создана миграция `d3e5f7a9b1c2` с backfill по существующим активным связям. Код создания/смены источника/VIN/производства/перемещения синхронизирует эти поля.
+Какие файлы изменены: `models.py`, `views.py`, `migrations/versions/d3e5f7a9b1c2_order_line_workflow_links.py`, `docs/planning/CURRENT_STATE.md`, `docs/planning/NEXT_ACTIONS.md`, `docs/planning/SESSION_LOG.md`.
+Где остановились: Нужно прогнать проверки и запушить.
+Что осталось: На сервере выполнить `flask db upgrade`, затем проверить заполнение workflow-ссылок у строк реальных заказов.
+Блокеры: Нет.
+Следующий шаг: Закоммитить/запушить миграцию и проверить строки заказа после серверного upgrade.
+
+---
+
+Дата: 2026-05-29
+Проект: trailers
 Модуль: customer order lines / source workflow
 Что делали: Продолжали Итерацию 1 по безопасному редактированию заказа и отдельному workflow источника обеспечения.
 Что сделано: Добавлены модельные поля `CustomerOrderLine.source_type` и `CustomerOrderLine.fulfillment_status`; создана миграция `c2d4e6f8a9b0`, которая заполняет новые поля из текущих `fulfillment_source/status`. Создание строк, смена источника, привязка VIN, документы, реализация/отгрузка и перемещение теперь синхронизируют новые поля.

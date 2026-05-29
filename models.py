@@ -1054,11 +1054,18 @@ class CustomerOrderLine(db.Model):
 
     item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=True, index=True)
     trailer_id = db.Column(db.Integer, db.ForeignKey('trailer.id'), nullable=True, index=True)
+    vin_registry_id = db.Column(db.Integer, db.ForeignKey('vin_registry.id'), nullable=True, index=True)
+    reservation_id = db.Column(db.Integer, db.ForeignKey('reservation.id'), nullable=True, index=True)
+    supply_need_id = db.Column(db.Integer, db.ForeignKey('supply_need.id'), nullable=True, index=True)
+    production_request_line_id = db.Column(db.Integer, db.ForeignKey('production_request_line.id'), nullable=True, index=True)
+    stock_movement_id = db.Column(db.Integer, db.ForeignKey('stock_movement.id'), nullable=True, index=True)
     production_workshop_id = db.Column(db.Integer, db.ForeignKey('production_workshop.id'), nullable=True, index=True)
     assembly_status = db.Column(db.String(30), nullable=False, default='not_required', index=True)
     assembly_operation_id = db.Column(db.Integer, db.ForeignKey('trailer_assembly_operation.id'), nullable=True, index=True)
     include_in_vehicle_contract = db.Column(db.Boolean, nullable=False, default=False, index=True)
     include_in_realization = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    realization_status = db.Column(db.String(30), nullable=False, default='not_started', index=True)
+    shipment_status = db.Column(db.String(30), nullable=False, default='not_started', index=True)
 
     quantity = db.Column(db.Integer, nullable=False, default=1)
     unit_price = db.Column(db.Numeric(12, 2), nullable=True)
@@ -1084,6 +1091,11 @@ class CustomerOrderLine(db.Model):
     order = db.relationship('CustomerOrder', backref=db.backref('lines', lazy='dynamic', cascade='all, delete-orphan'))
     item = db.relationship('Item', backref='order_lines')
     trailer = db.relationship('Trailer', foreign_keys=[trailer_id], backref='order_lines')
+    vin_registry = db.relationship('VinRegistry', foreign_keys=[vin_registry_id], post_update=True)
+    reservation = db.relationship('Reservation', foreign_keys=[reservation_id], post_update=True)
+    supply_need = db.relationship('SupplyNeed', foreign_keys=[supply_need_id], post_update=True)
+    production_request_line = db.relationship('ProductionRequestLine', foreign_keys=[production_request_line_id], post_update=True)
+    stock_movement = db.relationship('StockMovement', foreign_keys=[stock_movement_id], post_update=True)
     production_workshop = db.relationship('ProductionWorkshop', backref='order_lines')
     assembly_operation = db.relationship('TrailerAssemblyOperation', foreign_keys=[assembly_operation_id], post_update=True)
 
@@ -1171,7 +1183,7 @@ class Reservation(db.Model):
     note = db.Column(db.Text, nullable=True)
 
     order = db.relationship('CustomerOrder', backref=db.backref('reservations', lazy='dynamic', cascade='all, delete-orphan'))
-    order_line = db.relationship('CustomerOrderLine', backref='reservations')
+    order_line = db.relationship('CustomerOrderLine', foreign_keys=[order_line_id], backref='reservations')
     trailer = db.relationship('Trailer', backref='reservations')
     item = db.relationship('Item', backref='reservations')
 
@@ -1211,7 +1223,7 @@ class SupplyNeed(db.Model):
     cancel_reason = db.Column(db.Text, nullable=True)
 
     order = db.relationship('CustomerOrder', backref=db.backref('supply_needs', lazy='dynamic', cascade='all, delete-orphan'))
-    order_line = db.relationship('CustomerOrderLine', backref='supply_needs')
+    order_line = db.relationship('CustomerOrderLine', foreign_keys=[order_line_id], backref='supply_needs')
     item = db.relationship('Item', backref='supply_needs')
     warehouse = db.relationship('Warehouse', backref='supply_needs')
     production_workshop = db.relationship('ProductionWorkshop', backref='supply_needs')
@@ -1268,7 +1280,7 @@ class ProductionRequestLine(db.Model):
 
     production_request = db.relationship('ProductionRequest', backref=db.backref('lines', lazy='dynamic', cascade='all, delete-orphan'))
     supply_need = db.relationship('SupplyNeed', backref='production_lines')
-    order_line = db.relationship('CustomerOrderLine', backref='production_lines')
+    order_line = db.relationship('CustomerOrderLine', foreign_keys=[order_line_id], backref='production_lines')
     item = db.relationship('Item', backref='production_lines')
     production_workshop = db.relationship('ProductionWorkshop', backref='production_lines')
     assembly_warehouse = db.relationship('Warehouse', foreign_keys=[assembly_warehouse_id], backref='assembly_production_lines')
@@ -1368,7 +1380,7 @@ class StockMovement(db.Model):
     note = db.Column(db.Text, nullable=True)
 
     order = db.relationship('CustomerOrder', backref='movements')
-    order_line = db.relationship('CustomerOrderLine', backref='movements')
+    order_line = db.relationship('CustomerOrderLine', foreign_keys=[order_line_id], backref='movements')
     trailer = db.relationship('Trailer', backref='movements')
     item = db.relationship('Item', backref='movements')
     from_warehouse = db.relationship('Warehouse', foreign_keys=[from_warehouse_id], backref='out_movements')
