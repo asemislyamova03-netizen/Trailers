@@ -12239,6 +12239,8 @@ def director_report(section='sales'):
         if not value:
             return 'без даты'
         value_date = value.date() if isinstance(value, datetime) else value
+        if period == 'all':
+            return 'Всё время'
         if period == 'day':
             return value_date.strftime('%d.%m.%Y')
         if period == 'week':
@@ -12248,6 +12250,35 @@ def director_report(section='sales'):
             return str(value_date.year)
         return value_date.strftime('%Y-%m')
 
+    def report_period_labels_between() -> list[str]:
+        if period == 'all':
+            return ['Всё время']
+        labels = []
+        cursor = date_from
+        if period == 'day':
+            while cursor <= date_to:
+                labels.append(cursor.strftime('%d.%m.%Y'))
+                cursor += timedelta(days=1)
+            return labels
+        if period == 'week':
+            cursor = cursor - timedelta(days=cursor.weekday())
+            while cursor <= date_to:
+                year, week, _ = cursor.isocalendar()
+                labels.append(f'{year}-W{week:02d}')
+                cursor += timedelta(days=7)
+            return labels
+        if period == 'year':
+            cursor = date(date_from.year, 1, 1)
+            while cursor <= date_to:
+                labels.append(str(cursor.year))
+                cursor = date(cursor.year + 1, 1, 1)
+            return labels
+        cursor = date(date_from.year, date_from.month, 1)
+        while cursor <= date_to:
+            labels.append(cursor.strftime('%Y-%m'))
+            cursor = date(cursor.year + 1, 1, 1) if cursor.month == 12 else date(cursor.year, cursor.month + 1, 1)
+        return labels
+
     if section in ('sales', 'finance', 'dynamics', 'branches', 'types'):
         rows, legacy_contract_rows, report_warning = combined_sales_report_records()
         anomaly_rows = [
@@ -12256,6 +12287,8 @@ def director_report(section='sales'):
         ][:10]
         if section in ('sales', 'dynamics'):
             buckets = defaultdict(lambda: {'orders': 0, 'quantity': 0, 'revenue': 0.0})
+            for key in report_period_labels_between():
+                buckets[key]
             for row in rows:
                 key = report_period_label(row.get('date'))
                 buckets[key]['orders'] += 1
