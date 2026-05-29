@@ -11825,7 +11825,7 @@ def director_report(section='sales'):
         'branches': 'Продажи по складам',
         'types': 'Типы прицепов',
         'turnover': 'Оборачиваемость',
-        'stock': 'Склад',
+        'stock': 'Остатки по складам',
         'production': 'Производство',
         'movements': 'Перемещения',
         'problems': 'Проблемные заказы',
@@ -12319,24 +12319,53 @@ def director_report(section='sales'):
             )
         cards = _sales_summary_cards(rows, legacy_contract_rows, analytics_rows)
         if section == 'finance':
-            rows = (
+            payments = (
                 OrderPayment.query
                 .join(CustomerOrder, CustomerOrder.id == OrderPayment.order_id)
                 .filter(OrderPayment.paid_at >= period_start, OrderPayment.paid_at <= period_end)
             )
             if warehouse_id:
-                rows = rows.filter(CustomerOrder.warehouse_id == warehouse_id)
+                payments = payments.filter(CustomerOrder.warehouse_id == warehouse_id)
             if manager_id:
-                rows = rows.filter(CustomerOrder.assigned_user_id == manager_id)
+                payments = payments.filter(CustomerOrder.assigned_user_id == manager_id)
             if status_filter != 'all':
-                rows = rows.filter(OrderPayment.status == status_filter)
-            rows = rows.order_by(OrderPayment.paid_at.desc().nullslast(), OrderPayment.id.desc()).limit(300).all()
-            confirmed_sum = sum(float(payment.amount or 0) for payment in rows if payment.status == 'CONFIRMED')
+                payments = payments.filter(OrderPayment.status == status_filter)
+            payments = payments.order_by(OrderPayment.paid_at.desc().nullslast(), OrderPayment.id.desc()).limit(1000).all()
+            finance_buckets = defaultdict(lambda: {'quantity': 0, 'amount': 0.0, 'confirmed': 0.0, 'pending': 0.0, 'canceled': 0.0})
+            for payment in payments:
+                status = payment.status or 'UNKNOWN'
+                method = payment.method or 'Без метода'
+                key = (status, method)
+                amount = float(payment.amount or 0)
+                finance_buckets[key]['quantity'] += 1
+                finance_buckets[key]['amount'] += amount
+                if status == 'CONFIRMED':
+                    finance_buckets[key]['confirmed'] += amount
+                elif status == 'PENDING':
+                    finance_buckets[key]['pending'] += amount
+                elif status == 'CANCELED':
+                    finance_buckets[key]['canceled'] += amount
+            rows = sorted(
+                (
+                    {
+                        'label': f'{status_label(status)} / {method}',
+                        'quantity': value['quantity'],
+                        'amount': value['amount'],
+                        'confirmed': value['confirmed'],
+                        'pending': value['pending'],
+                        'canceled': value['canceled'],
+                    }
+                    for (status, method), value in finance_buckets.items()
+                ),
+                key=lambda row: row['amount'],
+                reverse=True,
+            )
+            confirmed_sum = sum(float(payment.amount or 0) for payment in payments if payment.status == 'CONFIRMED')
             cards = [
                 {'title': 'Подтверждено', 'value': money(confirmed_sum), 'caption': 'оплаты за период'},
-                {'title': 'Оплат всего', 'value': len(rows), 'caption': 'операций'},
-                {'title': 'На проверке', 'value': len([p for p in rows if p.status == 'PENDING']), 'caption': 'PENDING'},
-                {'title': 'Отменено', 'value': len([p for p in rows if p.status == 'CANCELED']), 'caption': 'CANCELED'},
+                {'title': 'Оплат всего', 'value': len(payments), 'caption': 'операций'},
+                {'title': 'На проверке', 'value': len([p for p in payments if p.status == 'PENDING']), 'caption': 'PENDING'},
+                {'title': 'Отменено', 'value': len([p for p in payments if p.status == 'CANCELED']), 'caption': 'CANCELED'},
             ]
 
     elif section in ('stock', 'turnover'):
@@ -12365,6 +12394,38 @@ def director_report(section='sales'):
             {'title': 'Продано, не отгружено', 'value': len([t for t in trailers if t.status == 'SOLD' and not _trailer_is_customer_shipped(t)]), 'caption': 'контроль выдачи'},
             {'title': 'В пути', 'value': len([t for t in trailers if t.status == 'IN_TRANSIT' or t.lifecycle_status == 'in_transit']), 'caption': 'логистика'},
         ]
+        if section == 'stock':
+            def stock_report_status(trailer: Trailer) -> str:
+                if _trailer_available_for_sale(trailer):
+                    return 'Свободно'
+                if trailer.status == 'RESERVED':
+                    return 'В резерве'
+                if trailer.status == 'SOLD' and not _trailer_is_customer_shipped(trailer):
+                    return 'Продано, не отгружено'
+                if trailer.status == 'IN_TRANSIT' or trailer.lifecycle_status == 'in_transit':
+                    return 'В пути'
+                if _trailer_is_customer_shipped(trailer):
+                    return 'Отгружено клиенту'
+                return status_label(trailer.status or trailer.lifecycle_status or 'unknown')
+
+            stock_buckets = defaultdict(lambda: {'quantity': 0})
+            for trailer in rows:
+                warehouse_name = trailer.warehouse.name if trailer.warehouse else 'Без склада'
+                status_name = stock_report_status(trailer)
+                type_name = _article_group_code(trailer.item.article if trailer.item else None) or 'Без типа'
+                stock_buckets[(warehouse_name, status_name, type_name)]['quantity'] += 1
+            rows = sorted(
+                (
+                    {
+                        'warehouse': warehouse_name,
+                        'status': status_name,
+                        'type': type_name,
+                        'quantity': value['quantity'],
+                    }
+                    for (warehouse_name, status_name, type_name), value in stock_buckets.items()
+                ),
+                key=lambda row: (row['warehouse'], row['status'], row['type']),
+            )
         if section == 'turnover':
             sold_records, _, turnover_warning = combined_sales_report_records()
             if turnover_warning:
