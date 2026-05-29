@@ -610,7 +610,7 @@
                 <td>{{ n.required_by|date_format }}</td>
                 <td><span class="badge text-bg-{{ n.status|status_badge_class }}">{{ n.status|status_label }}</span></td>
                 <td class="text-end">
-                  {% if current_user.is_admin or current_user.is_director or current_user.is_logistics %}
+                  {% if current_user.is_admin or current_user.is_director %}
                     <form method="post" action="{{ url_for('main.supply_need_cleanup_production', need_id=n.id) }}" class="d-inline" onsubmit="return confirm('Отменить ошибочное производство? Заказ, документы, VIN и прицеп не изменятся.');">
                       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                       <input type="hidden" name="reason" value="Ошибочно отправлено в производство">

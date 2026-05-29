@@ -5930,7 +5930,7 @@ def _cancel_supply_need_and_production_lines(need: SupplyNeed, reason: str, user
             production_request.status = 'CANCELLED'
 
 def _ensure_can_cancel_order_reservation(order: CustomerOrder) -> None:
-    if current_user.is_admin or current_user.is_director or current_user.is_logistics:
+    if current_user.is_admin or current_user.is_director:
         return
     if current_user.is_manager and can_access_order(order):
         return
@@ -7584,7 +7584,7 @@ def stock_replenishment_create():
 @login_required
 def supply_need_cancel(need_id):
     need = SupplyNeed.query.get_or_404(need_id)
-    if current_user.is_admin or current_user.is_director or current_user.is_logistics:
+    if current_user.is_admin or current_user.is_director:
         pass
     elif current_user.is_manager and _is_stock_replenishment_need(need) and current_user.warehouse_id == need.warehouse_id:
         pass
@@ -7610,7 +7610,7 @@ def supply_need_cancel(need_id):
 @login_required
 def supply_need_cleanup_production(need_id):
     need = SupplyNeed.query.get_or_404(need_id)
-    if not (current_user.is_admin or current_user.is_director or current_user.is_logistics):
+    if not (current_user.is_admin or current_user.is_director):
         abort(403)
     reason = (request.form.get('cancel_reason') or request.form.get('reason') or '').strip()
     if not reason:
@@ -7636,7 +7636,7 @@ def supply_need_cleanup_production(need_id):
         return redirect(request.referrer or url_for('main.supply_needs_list'))
 
     old_status = need.status
-    cleanup_reason = f'Ошибочное производство отменено логистикой. Причина: {reason}'
+    cleanup_reason = f'Ошибочное производство отменено. Причина: {reason}'
     _cancel_supply_need_and_production_lines(need, cleanup_reason, current_user.id)
     if need.order:
         add_order_event(
@@ -7655,7 +7655,7 @@ def supply_need_cleanup_production(need_id):
 @login_required
 def supply_need_release_order_reserve(need_id):
     need = SupplyNeed.query.get_or_404(need_id)
-    if not (current_user.is_admin or current_user.is_director or current_user.is_manager or current_user.is_logistics):
+    if not (current_user.is_admin or current_user.is_director or current_user.is_manager):
         abort(403)
     reason = (request.form.get('reason') or '').strip()
     if not reason:
@@ -9570,7 +9570,7 @@ def order_mark_documents_ready(order_id):
 @main_bp.route('/orders/<int:order_id>/reserve-vin', methods=['POST'])
 @login_required
 def order_reserve_vin(order_id):
-    if not (current_user.is_admin or current_user.is_director or current_user.is_manager or current_user.is_logistics):
+    if not (current_user.is_admin or current_user.is_director):
         abort(403)
     order = CustomerOrder.query.get_or_404(order_id)
     _ensure_can_access_order(order)
@@ -9615,7 +9615,7 @@ def order_reserve_vin(order_id):
 @main_bp.route('/orders/<int:order_id>/cancel-vin-reservation', methods=['POST'])
 @login_required
 def order_cancel_vin_reservation(order_id):
-    if not (current_user.is_admin or current_user.is_director or current_user.is_manager or current_user.is_logistics):
+    if not (current_user.is_admin or current_user.is_director):
         abort(403)
     order = CustomerOrder.query.get_or_404(order_id)
     _ensure_can_cancel_order_reservation(order)
@@ -11646,7 +11646,7 @@ def director_dashboard():
 @main_bp.route('/director/reports/<section>')
 @main_bp.route('/reports')
 @main_bp.route('/reports/<section>')
-@role_required('director', 'manager', 'logistics')
+@role_required('director', 'manager')
 def director_report(section='sales'):
     sections = {
         'sales': 'Продажи',
