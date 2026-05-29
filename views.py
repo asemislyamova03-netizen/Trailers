@@ -4702,6 +4702,10 @@ def _primary_order_line(order: CustomerOrder) -> CustomerOrderLine | None:
     )
 
 
+def _order_has_lines(order: CustomerOrder) -> bool:
+    return bool(order and order.id and order.lines.count())
+
+
 def _sync_primary_order_line(order: CustomerOrder, snapshot: dict | None = None) -> CustomerOrderLine:
     line = _primary_order_line(order)
     if not line:
@@ -8209,6 +8213,7 @@ def order_detail(order_id):
         future_ready_trailer_rows=future_ready_trailer_rows,
         future_inbound_movements=future_inbound_movements,
         can_manage=can_manage_order(order),
+        has_order_lines=bool(order_lines),
     )
 
 
@@ -9427,6 +9432,9 @@ def order_request_transfer(order_id):
 def order_attach_transit(order_id):
     order = CustomerOrder.query.get_or_404(order_id)
     _ensure_can_manage_order(order)
+    if _order_has_lines(order):
+        flash('Для заказа со строками закрепляйте прицеп через конкретную позицию заказа.', 'warning')
+        return redirect(url_for('main.order_detail', order_id=order.id))
     if order.trailer_id or order.is_shipped or order.status == 'cancelled':
         flash('Нельзя закрепить прицеп в пути: у заказа уже есть VIN, заказ отгружен или отменён.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
@@ -9480,6 +9488,9 @@ def order_attach_produced_unit(order_id, unit_id):
     order = CustomerOrder.query.get_or_404(order_id)
     _ensure_can_manage_order(order)
     unit = ProducedUnit.query.get_or_404(unit_id)
+    if _order_has_lines(order):
+        flash('Для заказа со строками закрепляйте выпуск через конкретную позицию заказа.', 'warning')
+        return redirect(url_for('main.order_detail', order_id=order.id))
     if not _order_is_open_for_attachment(order):
         flash('Нельзя закрепить единицу: заказ отменён или уже отгружен.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
@@ -9518,6 +9529,9 @@ def order_attach_produced_unit(order_id, unit_id):
 def order_attach_ready_trailer(order_id, trailer_id):
     order = CustomerOrder.query.get_or_404(order_id)
     _ensure_can_manage_order(order)
+    if _order_has_lines(order):
+        flash('Для заказа со строками закрепляйте VIN через конкретную позицию заказа.', 'warning')
+        return redirect(url_for('main.order_detail', order_id=order.id))
     trailer = Trailer.query.get_or_404(trailer_id)
     if not _order_is_open_for_attachment(order):
         flash('Нельзя закрепить VIN: заказ отменён или уже отгружен.', 'danger')
@@ -9613,6 +9627,9 @@ def order_attach_ready_trailer(order_id, trailer_id):
 def order_create_production_need(order_id):
     order = CustomerOrder.query.get_or_404(order_id)
     _ensure_can_manage_order(order)
+    if _order_has_lines(order):
+        flash('Для заказа со строками создавайте производственную потребность через позицию заказа.', 'warning')
+        return redirect(url_for('main.order_detail', order_id=order.id))
     can_request, message = order_can_request_production(order)
     if not can_request:
         flash(message, 'warning')

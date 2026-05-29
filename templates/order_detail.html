@@ -11,7 +11,7 @@
     <p>{{ order.customer.name if order.customer else 'Клиент не выбран' }} · {{ order.item.article if order.item else '' }} {{ order.item.name if order.item else '' }}</p>
   </div>
   <div class="d-flex gap-2 flex-wrap">
-    {% if can_manage and order.status != 'cancelled' and not order.is_shipped %}
+    {% if can_manage and not has_order_lines and order.status != 'cancelled' and not order.is_shipped %}
       <a class="btn btn-soft" href="{{ url_for('main.order_edit', order_id=order.id) }}"><i class="bi bi-pencil me-1"></i>Редактировать шапку</a>
       <button class="btn btn-orange" data-bs-toggle="modal" data-bs-target="#paymentModal"><i class="bi bi-cash-coin me-1"></i>Добавить оплату</button>
       <form method="post" action="{{ url_for('main.order_realization_create', order_id=order.id) }}">
@@ -486,7 +486,7 @@
                 <td>{{ movement.trailer.vin if movement.trailer else '' }}</td>
                 <td>{{ movement.arrival_date|date_format }}</td>
                 <td><span class="badge text-bg-{{ movement.status|status_badge_class }}">{{ movement.status|status_label }}</span></td>
-                {% if can_manage and not order.trailer_id and not movement.order_id %}
+                {% if can_manage and not has_order_lines and not order.trailer_id and not movement.order_id %}
                 <td class="text-end">
                   <form method="post" action="{{ url_for('main.order_attach_transit', order_id=order.id) }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
