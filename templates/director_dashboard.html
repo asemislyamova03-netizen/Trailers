@@ -94,7 +94,7 @@
     <div class="app-card p-3 h-100">
       <div class="d-flex justify-content-between align-items-center mb-3">
         <h2 class="h5 mb-0">Складская ситуация</h2>
-        <a class="btn btn-sm btn-soft" href="{{ url_for('main.director_report', section='stock', warehouse_id=warehouse_id or '') }}">Отчет склад</a>
+        <a class="btn btn-sm btn-soft" href="{{ url_for('main.director_report', section='stock', warehouse_id=warehouse_id or '') }}">Остатки по складам</a>
       </div>
       <div class="chart-box"><canvas id="stockChart"></canvas></div>
     </div>
@@ -263,7 +263,7 @@
     <span>Остатки и будущая доступность</span>
     <div class="d-flex flex-wrap gap-2">
       <button class="btn btn-sm btn-soft" type="button" data-bs-toggle="collapse" data-bs-target="#directorInventoryCollapse" aria-expanded="false" aria-controls="directorInventoryCollapse">Показать таблицу</button>
-      <a class="btn btn-sm btn-soft" href="{{ url_for('main.director_report', section='stock') }}">Склад</a>
+      <a class="btn btn-sm btn-soft" href="{{ url_for('main.director_report', section='stock') }}">Остатки по складам</a>
       <a class="btn btn-sm btn-soft" href="{{ url_for('main.director_report', section='production') }}">Производство</a>
       <a class="btn btn-sm btn-soft" href="{{ url_for('main.director_report', section='movements') }}">Перемещения</a>
     </div>
