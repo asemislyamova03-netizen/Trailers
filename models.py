@@ -1049,6 +1049,8 @@ class CustomerOrderLine(db.Model):
     line_no = db.Column(db.Integer, nullable=False, default=1)
     line_type = db.Column(db.String(30), nullable=False, default='TRAILER', index=True)
     fulfillment_source = db.Column(db.String(30), nullable=True, index=True)
+    source_type = db.Column(db.String(30), nullable=False, default='none', index=True)
+    fulfillment_status = db.Column(db.String(40), nullable=False, default='draft', index=True)
 
     item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=True, index=True)
     trailer_id = db.Column(db.Integer, db.ForeignKey('trailer.id'), nullable=True, index=True)

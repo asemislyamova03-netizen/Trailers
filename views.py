@@ -4708,6 +4708,7 @@ def _sync_primary_order_line(order: CustomerOrder, snapshot: dict | None = None)
     item_type = (order.item.item_type if order.item else '') or ''
     line.line_type = 'COMPONENT' if item_type.upper() == 'COMPONENT' else 'TRAILER'
     line.fulfillment_source = order.fulfillment_source
+    line.source_type = _line_source_type_from_fulfillment(order.fulfillment_source, line.line_type)
     line.item_id = order.item_id
     line.trailer_id = order.trailer_id
     line.quantity = order.quantity or 1
@@ -4719,11 +4720,63 @@ def _sync_primary_order_line(order: CustomerOrder, snapshot: dict | None = None)
     else:
         line.unit_price = None
     line.status = order.status
+    line.fulfillment_status = _line_fulfillment_status_from_state(line)
     line.include_in_vehicle_contract = line.line_type == 'TRAILER'
     line.include_in_realization = True
     line.assembly_status = line.assembly_status or 'not_required'
     _apply_snapshot(line, snapshot or _order_snapshot(order))
     return line
+
+
+def _line_source_type_from_fulfillment(fulfillment_source: str | None, line_type: str | None = None) -> str:
+    value = (fulfillment_source or '').lower()
+    if value == 'production':
+        return 'production'
+    if value in ('stock', 'other_warehouse', 'transit'):
+        return 'stock'
+    if value in ('assembly', 'external'):
+        return value
+    if (line_type or '').upper() == 'COMPONENT':
+        return 'component'
+    return 'none'
+
+
+def _line_fulfillment_status_from_state(line: CustomerOrderLine) -> str:
+    status = (line.status or '').lower()
+    source_type = (line.source_type or _line_source_type_from_fulfillment(line.fulfillment_source, line.line_type)).lower()
+    if status in ('shipped', 'done'):
+        return 'shipped'
+    if status in ('cancelled', 'canceled'):
+        return 'cancelled'
+    if status == 'realized':
+        return 'realized'
+    if status in ('reserved', 'stock_reserved'):
+        return 'stock_reserved'
+    if status in ('waiting_transfer', 'in_transit', 'arrived'):
+        return 'movement_required'
+    if status in ('sold_not_shipped', 'ready_to_ship'):
+        return 'ready_for_documents'
+    if status == 'in_production':
+        return 'production_started'
+    if status in ('produced_waiting_vin', 'produced_no_vin'):
+        return 'produced_waiting_vin'
+    if status == 'vin_assigned':
+        return 'vin_assigned'
+    if status in ('vin_confirmed', 'confirmed'):
+        return 'vin_confirmed'
+    if source_type == 'production' and status in ('new', 'waiting_production', 'draft'):
+        return 'production_requested'
+    if source_type == 'stock':
+        return 'stock_reserved' if line.trailer_id or _active_stock_reservation_for_line(line) else 'draft'
+    return 'draft'
+
+
+def _set_line_source_state(line: CustomerOrderLine, fulfillment_source: str | None, status: str | None = None) -> None:
+    line.fulfillment_source = fulfillment_source
+    line.source_type = _line_source_type_from_fulfillment(fulfillment_source, line.line_type)
+    if status is not None:
+        line.status = status
+    line.fulfillment_status = _line_fulfillment_status_from_state(line)
 
 
 def _sync_order_totals_from_lines(order: CustomerOrder) -> None:
@@ -4935,10 +4988,9 @@ def change_line_source_production_to_stock(line_id: int, trailer_id: int, user_i
         _cancel_supply_need_and_production_lines(need, reason, user_id)
 
     source_type = 'TRANSFER' if order.warehouse_id and trailer.warehouse_id != order.warehouse_id else 'STOCK'
-    line.fulfillment_source = 'other_warehouse' if source_type == 'TRANSFER' else 'stock'
     line.trailer_id = trailer.id
     line.item_id = trailer.item_id
-    line.status = 'reserved'
+    _set_line_source_state(line, 'other_warehouse' if source_type == 'TRANSFER' else 'stock', 'reserved')
     if line.unit_price is None and trailer.item:
         line.unit_price = trailer.item.base_price
         line.total_price = trailer.item.base_price
@@ -4996,10 +5048,9 @@ def change_line_source_stock_to_production(line_id: int, target_item_id: int, qt
     _release_line_stock_links(line, reason)
 
     quantity = max(int(qty or 1), 1)
-    line.fulfillment_source = 'production'
     line.item_id = item.id
     line.quantity = quantity
-    line.status = 'waiting_production'
+    _set_line_source_state(line, 'production', 'waiting_production')
     if line.unit_price is None:
         line.unit_price = item.base_price
     line.total_price = (line.unit_price * quantity) if line.unit_price is not None else None
@@ -5223,7 +5274,7 @@ def _apply_realization_shipment_effect(realization: SalesRealization) -> None:
     affected_lines = []
     for line in realization.lines:
         if line.order_line:
-            line.order_line.status = 'shipped'
+            _set_line_source_state(line.order_line, line.order_line.fulfillment_source, 'shipped')
             affected_lines.append(line.order_line)
             for reservation in line.order_line.reservations:
                 if reservation.status == 'ACTIVE':
@@ -5247,7 +5298,7 @@ def _revert_realization_shipment_effect(realization: SalesRealization) -> None:
     order = realization.order
     for line in realization.lines:
         if line.order_line and line.order_line.status == 'shipped':
-            line.order_line.status = 'NEW'
+            _set_line_source_state(line.order_line, line.order_line.fulfillment_source, 'NEW')
         if line.inventory_effect == 'trailer_unit' and line.trailer:
             line.trailer.status = 'RESERVED'
             line.trailer.lifecycle_status = 'reserved'
@@ -5282,6 +5333,8 @@ def _create_order_line_from_trailer(order: CustomerOrder, trailer: Trailer, sour
         line_no=_next_order_line_no(order),
         line_type='TRAILER',
         fulfillment_source='stock' if source_type == 'STOCK' else 'other_warehouse',
+        source_type='stock',
+        fulfillment_status='stock_reserved',
         item_id=trailer.item_id,
         quantity=1,
         unit_price=trailer.item.base_price if trailer.item else None,
@@ -5332,6 +5385,8 @@ def _create_order_line_from_item_for_production(
         line_no=_next_order_line_no(order),
         line_type='TRAILER' if str(item.item_type or '').upper() == 'TRAILER' else 'COMPONENT',
         fulfillment_source='production',
+        source_type='production',
+        fulfillment_status='production_requested',
         item_id=item.id,
         quantity=quantity,
         unit_price=unit_price,
@@ -7216,10 +7271,10 @@ def order_create():
             add_order_event(order, 'production_need_created', new_value='NEW', comment='Потребность создана автоматически из заказа клиента')
 
         _refresh_order_status(order)
-        order_line.status = order.status
+        _set_line_source_state(order_line, order_line.fulfillment_source, order.status)
         if selected_trailer and order.source_warehouse_id and order.warehouse_id and order.source_warehouse_id != order.warehouse_id:
             order.status = 'waiting_transfer'
-            order_line.status = order.status
+            _set_line_source_state(order_line, order_line.fulfillment_source, order.status)
         db.session.commit()
         flash('Заказ создан', 'success')
         return redirect(url_for('main.order_detail', order_id=order.id))
@@ -8206,7 +8261,7 @@ def order_edit(order_id):
                 flash(warning, 'warning')
 
         _refresh_order_status(order)
-        order_line.status = order.status
+        _set_line_source_state(order_line, order_line.fulfillment_source, order.status)
         if old_status != order.status:
             add_order_event(order, 'order_status_changed', old_value=old_status, new_value=order.status)
         if old_trailer_id != new_trailer_id and new_trailer_id:
@@ -8347,6 +8402,8 @@ def order_line_add_production(order_id):
         line_no=_next_order_line_no(order),
         line_type='TRAILER' if str(item.item_type or '').upper() == 'TRAILER' else 'COMPONENT',
         fulfillment_source='production',
+        source_type='production',
+        fulfillment_status='production_requested',
         item_id=item.id,
         quantity=quantity,
         unit_price=unit_price,
@@ -8581,8 +8638,7 @@ def _link_vin_registry_to_order_line(order: CustomerOrder, line: CustomerOrderLi
 
     old_trailer_id = line.trailer_id
     line.trailer_id = trailer.id
-    line.fulfillment_source = line.fulfillment_source or 'stock'
-    line.status = 'vin_confirmed' if vin_row.status == 'confirmed' else 'vin_assigned'
+    _set_line_source_state(line, line.fulfillment_source or 'stock', 'vin_confirmed' if vin_row.status == 'confirmed' else 'vin_assigned')
     vin_row.order_line_id = line.id
     vin_row.customer_order_id = order.id
 
@@ -9102,7 +9158,7 @@ def order_line_ship(order_id, line_id):
         return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
 
     trailers = _trailers_for_order_line(line)
-    line.status = 'shipped'
+    _set_line_source_state(line, line.fulfillment_source, 'shipped')
     for reservation in line.reservations:
         if reservation.status == 'ACTIVE':
             reservation.status = 'CLOSED'
@@ -9210,8 +9266,7 @@ def order_request_transfer(order_id):
     order.source_warehouse_id = trailer.warehouse_id
     if order_line:
         order_line.trailer_id = trailer.id
-        order_line.fulfillment_source = 'other_warehouse'
-        order_line.status = 'waiting_transfer'
+        _set_line_source_state(order_line, 'other_warehouse', 'waiting_transfer')
         if not any(row.status == 'ACTIVE' and row.trailer_id == trailer.id for row in order_line.reservations):
             db.session.add(Reservation(
                 order_id=order.id,
@@ -10055,7 +10110,7 @@ def order_issue_documents(order_id):
     issued_vin_rows = []
     for line in order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()).all():
         if line.line_type == 'TRAILER':
-            line.status = 'sold_not_shipped'
+            _set_line_source_state(line, line.fulfillment_source, 'sold_not_shipped')
         for trailer in _trailers_for_order_line(line):
             trailer.status = 'SOLD'
         line_vin_rows = _active_vin_rows_for_order_line(line)
