@@ -14,9 +14,10 @@
 <body>
 {% set endpoint = request.endpoint or '' %}
 {% set path = request.path or '' %}
-{% macro nav_item(label, icon, endpoint_name=None, href=None, match=None, active=None) -%}
+{% set current_section = active_section|default(navigation_section(endpoint, path), true) %}
+{% macro nav_item(label, icon, endpoint_name=None, href=None, match=None, section=None, active=None) -%}
     {% set target = href or url_for(endpoint_name) %}
-    {% set is_active = active if active is not none else ((endpoint == endpoint_name) or (match and path.startswith(match))) %}
+    {% set is_active = active if active is not none else ((section and current_section == section) or (not section and ((endpoint_name and endpoint == endpoint_name) or (match and path.startswith(match))))) %}
     <a class="sidebar-link {{ 'active' if is_active else '' }}" href="{{ target }}">
         <i class="bi {{ icon }}"></i><span>{{ label }}</span>
     </a>
@@ -34,17 +35,20 @@
         <nav class="sidebar-nav">
             {% if current_user.is_authenticated %}
                 {% if current_user.is_admin %}
-                    {{ nav_item('Заказы', 'bi-receipt', 'main.orders_list', match='/orders') }}
+                    {{ nav_item('Заказы', 'bi-receipt', 'main.orders_list', section='deals') }}
+                    {{ nav_item('CRM', 'bi-speedometer2', 'main.manager_workspace') }}
                     {{ nav_item('Подбор прицепа', 'bi-ui-checks-grid', 'main.manager_trailer_picker', match='/manager/trailer-picker') }}
                     {{ nav_item('Диалоги', 'bi-chat-dots', 'main.conversations_list', match='/conversations') }}
                     {{ nav_item('Заявки', 'bi-chat-left-text', 'main.leads_list', match='/leads') }}
                     {{ nav_item('Kaspi', 'bi-bag-check', 'main.kaspi_order_import', match='/integrations/kaspi') }}
-                    {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', match='/production') }}
-                    {{ nav_item('Логистика', 'bi-truck', 'main.logistics_workspace', match='/logistics') }}
-                    {{ nav_item('Реестр VIN', 'bi-upc', 'main.vin_registry_list', match='/logistics/vin-registry') }}
+                    {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', section='production') }}
+                    {{ nav_item('Логистика', 'bi-truck', 'main.logistics_workspace', active=(path.startswith('/logistics') and not path.startswith('/logistics/vin-registry'))) }}
+                    {{ nav_item('Реестр VIN', 'bi-upc', 'main.vin_registry_list', active=path.startswith('/logistics/vin-registry')) }}
                     {{ nav_item('Пополнение складов', 'bi-box-arrow-in-down', 'main.stock_replenishment_list', match='/stock-replenishment') }}
-                    {{ nav_item('Финансы', 'bi-cash-coin', 'main.orders_list') }}
-                    {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', match='/reports') }}
+                    {{ nav_item('Перемещения', 'bi-truck', 'main.stock_movements_list', match='/stock-movements') }}
+                    {{ nav_item('Реализации', 'bi-journal-check', 'main.sales_realizations_list', section='realizations') }}
+                    {{ nav_item('Финансы', 'bi-cash-coin', 'main.orders_list', active=false) }}
+                    {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', section='reports') }}
                     <div class="sidebar-section-title">Справочники</div>
                     {{ nav_item('Номенклатура', 'bi-tags', 'main.items_list', match='/items') }}
                     {{ nav_item('Конфигуратор прицепов', 'bi-sliders', 'main.trailer_config_catalog', match='/catalog/trailer-config') }}
@@ -52,36 +56,37 @@
                     {{ nav_item('Склады', 'bi-buildings', 'main.warehouses_list', match='/warehouses') }}
                     {{ nav_item('Прицепы', 'bi-box-seam', 'main.trailers_list', match='/trailers') }}
                     {{ nav_item('Клиенты', 'bi-person-lines-fill', 'main.customers_list', match='/customers') }}
-                    {{ nav_item('Договоры', 'bi-file-earmark-text', 'main.contracts_list', match='/contracts') }}
+                    {{ nav_item('Договоры', 'bi-file-earmark-text', 'main.contracts_list', active=(path.startswith('/contracts') and not path.startswith('/contracts/templates'))) }}
                     {{ nav_item('Шаблоны договоров', 'bi-file-earmark-ruled', 'main.contract_templates_list', match='/contracts/templates') }}
                     {{ nav_item('Пользователи', 'bi-people', 'main.users_list', match='/users') }}
                 {% elif current_user.is_manager %}
-                    {{ nav_item('Сделки', 'bi-speedometer2', 'main.manager_workspace', match='/manager') }}
-                    {{ nav_item('Наличие', 'bi-box-seam', href=url_for('main.trailers_list', status='IN_STOCK'), match='/trailers') }}
-                    {{ nav_item('Перемещения', 'bi-truck', 'main.stock_movements_list', match='/stock-movements') }}
-                    {{ nav_item('Реализации', 'bi-journal-check', 'main.sales_realizations_list', match='/realizations') }}
-                    {{ nav_item('Клиенты', 'bi-person-lines-fill', 'main.customers_list', match='/customers') }}
-                    {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', match='/reports') }}
+                    {{ nav_item('CRM', 'bi-speedometer2', 'main.manager_workspace', section='crm') }}
+                    {{ nav_item('Сделки', 'bi-receipt', 'main.orders_list', section='deals') }}
+                    {{ nav_item('Наличие', 'bi-box-seam', href=url_for('main.trailers_list', status='IN_STOCK'), section='availability') }}
+                    {{ nav_item('Перемещения', 'bi-truck', 'main.stock_movements_list', section='movements') }}
+                    {{ nav_item('Реализации', 'bi-journal-check', 'main.sales_realizations_list', section='realizations') }}
+                    {{ nav_item('Клиенты', 'bi-person-lines-fill', 'main.customers_list', section='clients') }}
+                    {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', section='reports') }}
                 {% elif current_user.is_production %}
-                    {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', match='/production') }}
+                    {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', section='production') }}
                 {% elif current_user.is_logistics %}
                     {{ nav_item('Все VIN', 'bi-upc', 'main.vin_registry_list', active=(endpoint == 'main.vin_registry_list' and not request.args.get('status'))) }}
                     {{ nav_item('Свободные VIN', 'bi-upc-scan', href=url_for('main.vin_registry_list', status='free'), active=(endpoint == 'main.vin_registry_list' and request.args.get('status') == 'free')) }}
-                    {{ nav_item('В резерве', 'bi-link-45deg', href=url_for('main.vin_registry_list', status='reserved'), active=(endpoint == 'main.vin_registry_list' and request.args.get('status') == 'reserved')) }}
-                    {{ nav_item('Назначены', 'bi-hourglass-split', href=url_for('main.vin_registry_list', status='assigned'), active=(endpoint == 'main.vin_registry_list' and request.args.get('status') == 'assigned')) }}
-                    {{ nav_item('Аннулированы', 'bi-exclamation-triangle', href=url_for('main.vin_registry_list', status='void'), active=(endpoint == 'main.vin_registry_list' and request.args.get('status') == 'void')) }}
+                    {{ nav_item('Назначить VIN', 'bi-link-45deg', href=url_for('main.vin_registry_list', status='reserved'), active=(endpoint == 'main.vin_registry_list' and request.args.get('status') == 'reserved')) }}
+                    {{ nav_item('Ждут подтверждения', 'bi-hourglass-split', href=url_for('main.vin_registry_list', status='assigned'), active=(endpoint == 'main.vin_registry_list' and request.args.get('status') == 'assigned')) }}
+                    {{ nav_item('Ошибки', 'bi-exclamation-triangle', href=url_for('main.vin_registry_list', status='void'), active=(endpoint == 'main.vin_registry_list' and request.args.get('status') == 'void')) }}
                 {% elif current_user.is_director %}
-                    {{ nav_item('Панель', 'bi-speedometer2', 'main.director_dashboard', match='/director') }}
+                    {{ nav_item('Панель', 'bi-speedometer2', 'main.director_dashboard', section='director') }}
                     {{ nav_item('Диалоги', 'bi-chat-dots', 'main.conversations_list', match='/conversations') }}
                     {{ nav_item('Kaspi', 'bi-bag-check', 'main.kaspi_order_import', match='/integrations/kaspi') }}
-                    {{ nav_item('Заказы', 'bi-receipt', 'main.orders_list', match='/orders') }}
-                    {{ nav_item('Реализации', 'bi-journal-check', 'main.sales_realizations_list', match='/realizations') }}
+                    {{ nav_item('Заказы', 'bi-receipt', 'main.orders_list', section='deals') }}
+                    {{ nav_item('Реализации', 'bi-journal-check', 'main.sales_realizations_list', section='realizations') }}
                     {{ nav_item('Подбор прицепа', 'bi-ui-checks-grid', 'main.manager_trailer_picker', match='/manager/trailer-picker') }}
-                    {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', match='/production') }}
-                    {{ nav_item('Логистика', 'bi-truck', 'main.logistics_workspace', match='/logistics') }}
-                    {{ nav_item('Реестр VIN', 'bi-upc', 'main.vin_registry_list', match='/logistics/vin-registry') }}
+                    {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', section='production') }}
+                    {{ nav_item('Логистика', 'bi-truck', 'main.logistics_workspace', active=(path.startswith('/logistics') and not path.startswith('/logistics/vin-registry'))) }}
+                    {{ nav_item('Реестр VIN', 'bi-upc', 'main.vin_registry_list', active=path.startswith('/logistics/vin-registry')) }}
                     {{ nav_item('Пополнение складов', 'bi-box-arrow-in-down', 'main.stock_replenishment_list', match='/stock-replenishment') }}
-                    {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', match='/reports') }}
+                    {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', section='reports') }}
                     <div class="sidebar-section-title">Справочники</div>
                     {{ nav_item('Номенклатура', 'bi-tags', 'main.items_list', match='/items') }}
                     {{ nav_item('Конфигуратор прицепов', 'bi-sliders', 'main.trailer_config_catalog', match='/catalog/trailer-config') }}

@@ -1,18 +1,16 @@
 {% extends "base.html" %}
 
-{% block title %}Рабочее место менеджера{% endblock %}
+{% block title %}CRM менеджера{% endblock %}
 
 {% block content %}
 <div class="compact-page-header">
   <div>
-    <h1>Мои сделки</h1>
-    <div class="text-muted small">Склад по умолчанию: {{ warehouses|selectattr('id', 'equalto', warehouse_id)|map(attribute='name')|first or 'не выбран' }} · наличие показывается по всем складам продаж</div>
+      <h1>CRM</h1>
+      <div class="text-muted small">Диалоги, заявки, сделки и задачи менеджера. Склад по умолчанию: {{ warehouses|selectattr('id', 'equalto', warehouse_id)|map(attribute='name')|first or 'не выбран' }}</div>
   </div>
   <div class="d-flex gap-2 flex-wrap">
     <a href="{{ url_for('main.order_create', return_to='manager_workspace', return_tab='orders') }}" class="btn btn-orange btn-sm"><i class="bi bi-plus-lg me-1"></i>Заказ</a>
     <a href="{{ url_for('main.lead_create', return_to='manager_workspace', return_tab='leads') }}" class="btn btn-soft btn-sm"><i class="bi bi-plus-lg me-1"></i>Заявка</a>
-    <a href="{{ url_for('main.manager_trailer_picker') }}" class="btn btn-soft btn-sm">Подбор</a>
-    <a href="{{ url_for('main.stock_replenishment_create', return_to='manager_workspace', return_tab='production') }}" class="btn btn-soft btn-sm"><i class="bi bi-box-arrow-in-down me-1"></i>Пополнение</a>
   </div>
 </div>
 

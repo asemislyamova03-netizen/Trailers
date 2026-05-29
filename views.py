@@ -84,6 +84,43 @@ def role_required(*roles):
     return decorator
 
 
+@main_bp.app_template_global('navigation_section')
+def navigation_section(endpoint: str | None = None, path: str | None = None) -> str:
+    endpoint = endpoint or (request.endpoint or '')
+    path = path or (request.path or '')
+    if endpoint in ('main.manager_workspace',) or path in ('/workspace', '/manager/workspace'):
+        return 'crm'
+    if path.startswith(('/conversations', '/leads', '/integrations/kaspi')):
+        return 'crm'
+    if path.startswith('/orders') or endpoint in ('main.orders_list', 'main.order_detail'):
+        return 'deals'
+    if path.startswith('/manager/trailer-picker'):
+        return 'availability'
+    if path.startswith('/trailers'):
+        return 'availability'
+    if path.startswith('/stock-movements'):
+        return 'movements'
+    if path.startswith('/stock-replenishment'):
+        return 'movements'
+    if path.startswith('/realizations'):
+        return 'realizations'
+    if path.startswith('/logistics/vin-registry'):
+        return 'vin'
+    if path.startswith('/logistics'):
+        return 'vin'
+    if path.startswith('/production'):
+        return 'production'
+    if path.startswith('/reports') or path.startswith('/director/reports'):
+        return 'reports'
+    if path.startswith('/customers'):
+        return 'clients'
+    if path.startswith('/director'):
+        return 'director'
+    if path.startswith(('/items', '/warehouses', '/catalog', '/otts', '/contracts', '/users')):
+        return 'settings'
+    return ''
+
+
 def _production_warehouses():
     return (
         Warehouse.query
@@ -10465,6 +10502,12 @@ def order_documents_issued(order_id):
     _ensure_can_access_order(order)
     flash('Выдача документов выполняется только через действие в карточке заказа.', 'warning')
     return redirect(url_for('main.order_detail', order_id=order.id))
+
+
+@main_bp.route('/director')
+@role_required('director')
+def director_home():
+    return redirect(url_for('main.director_dashboard'))
 
 
 @main_bp.route('/director/dashboard')
