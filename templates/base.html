@@ -42,7 +42,6 @@
                     {{ nav_item('Заявки', 'bi-chat-left-text', 'main.leads_list', match='/leads') }}
                     {{ nav_item('Kaspi', 'bi-bag-check', 'main.kaspi_order_import', match='/integrations/kaspi') }}
                     {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', section='production') }}
-                    {{ nav_item('Логистика', 'bi-truck', 'main.logistics_workspace', active=(path.startswith('/logistics') and not path.startswith('/logistics/vin-registry'))) }}
                     {{ nav_item('Реестр VIN', 'bi-upc', 'main.vin_registry_list', active=path.startswith('/logistics/vin-registry')) }}
                     {{ nav_item('Пополнение складов', 'bi-box-arrow-in-down', 'main.stock_replenishment_list', match='/stock-replenishment') }}
                     {{ nav_item('Перемещения', 'bi-truck', 'main.stock_movements_list', match='/stock-movements') }}
@@ -84,7 +83,6 @@
                     {{ nav_item('Реализации', 'bi-journal-check', 'main.sales_realizations_list', section='realizations') }}
                     {{ nav_item('Подбор прицепа', 'bi-ui-checks-grid', 'main.manager_trailer_picker', match='/manager/trailer-picker') }}
                     {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', section='production') }}
-                    {{ nav_item('Логистика', 'bi-truck', 'main.logistics_workspace', active=(path.startswith('/logistics') and not path.startswith('/logistics/vin-registry'))) }}
                     {{ nav_item('Реестр VIN', 'bi-upc', 'main.vin_registry_list', active=path.startswith('/logistics/vin-registry')) }}
                     {{ nav_item('Пополнение складов', 'bi-box-arrow-in-down', 'main.stock_replenishment_list', match='/stock-replenishment') }}
                     {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', section='reports') }}
