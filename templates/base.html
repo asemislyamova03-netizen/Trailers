@@ -43,7 +43,7 @@
                     {{ nav_item('Kaspi', 'bi-bag-check', 'main.kaspi_order_import', match='/integrations/kaspi') }}
                     {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', section='production') }}
                     {{ nav_item('Реестр VIN', 'bi-upc', 'main.vin_registry_list', active=path.startswith('/logistics/vin-registry')) }}
-                    {{ nav_item('Пополнение складов', 'bi-box-arrow-in-down', 'main.stock_replenishment_list', match='/stock-replenishment') }}
+                    {{ nav_item('Пополнение складов', 'bi-box-arrow-in-down', 'main.stock_replenishment_list', section='stock_replenishment') }}
                     {{ nav_item('Остатки ТМЦ', 'bi-boxes', 'main.inventory_balances_list', match='/inventory/balances') }}
                     {{ nav_item('Приход ТМЦ', 'bi-box-arrow-in-down', 'main.inventory_receipt_create', match='/inventory/receipts') }}
                     {{ nav_item('Перемещения', 'bi-truck', 'main.stock_movements_list', match='/stock-movements') }}
@@ -64,7 +64,6 @@
                     {{ nav_item('Сделки', 'bi-receipt', 'main.orders_list', section='deals') }}
                     {{ nav_item('Наличие', 'bi-box-seam', href=url_for('main.trailers_list', status='IN_STOCK'), section='availability') }}
                     {{ nav_item('Перемещения', 'bi-truck', 'main.stock_movements_list', section='movements') }}
-                    {{ nav_item('Пополнение склада', 'bi-box-arrow-in-down', 'main.stock_replenishment_list', match='/stock-replenishment') }}
                     {{ nav_item('Остатки ТМЦ', 'bi-boxes', 'main.inventory_balances_list', match='/inventory/balances') }}
                     {{ nav_item('Реализации', 'bi-journal-check', 'main.sales_realizations_list', section='realizations') }}
                     {{ nav_item('Клиенты', 'bi-person-lines-fill', 'main.customers_list', section='clients') }}
@@ -88,7 +87,7 @@
                     {{ nav_item('Подбор прицепа', 'bi-ui-checks-grid', 'main.manager_trailer_picker', match='/manager/trailer-picker') }}
                     {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', section='production') }}
                     {{ nav_item('Реестр VIN', 'bi-upc', 'main.vin_registry_list', active=path.startswith('/logistics/vin-registry')) }}
-                    {{ nav_item('Пополнение складов', 'bi-box-arrow-in-down', 'main.stock_replenishment_list', match='/stock-replenishment') }}
+                    {{ nav_item('Пополнение складов', 'bi-box-arrow-in-down', 'main.stock_replenishment_list', section='stock_replenishment') }}
                     {{ nav_item('Остатки ТМЦ', 'bi-boxes', 'main.inventory_balances_list', match='/inventory/balances') }}
                     {{ nav_item('Приход ТМЦ', 'bi-box-arrow-in-down', 'main.inventory_receipt_create', match='/inventory/receipts') }}
                     {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', section='reports') }}

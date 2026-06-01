@@ -113,7 +113,7 @@ def navigation_section(endpoint: str | None = None, path: str | None = None) -> 
     if path.startswith('/trailers'):
         return 'availability'
     if path.startswith('/stock-replenishment'):
-        return 'availability'
+        return 'stock_replenishment'
     if path.startswith('/inventory'):
         return 'inventory'
     if path.startswith('/stock-movements'):
