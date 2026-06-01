@@ -270,6 +270,34 @@
                   </div>
                   {% endif %}
 
+                  {% if row.attachable_produced_units %}
+                  <div class="border-top pt-2">
+                    <div class="small fw-semibold mb-1">Выпуск без VIN под эту позицию</div>
+                    <div class="d-flex flex-wrap gap-2">
+                      {% for attach in row.attachable_produced_units %}
+                      <form method="post" action="{{ url_for('main.order_line_attach_produced_unit', order_id=order.id, line_id=line.id, unit_id=attach.unit.id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="form_token" value="{{ form_token() }}">
+                        <button class="btn btn-sm btn-soft">Закрепить выпуск #{{ attach.unit.id }}</button>
+                      </form>
+                      {% endfor %}
+                    </div>
+                  </div>
+                  {% endif %}
+                  {% if row.attachable_ready_trailers %}
+                  <div class="border-top pt-2">
+                    <div class="small fw-semibold mb-1">Готовый VIN на складе выпуска</div>
+                    <div class="d-flex flex-wrap gap-2">
+                      {% for attach in row.attachable_ready_trailers %}
+                      <form method="post" action="{{ url_for('main.order_line_attach_ready_trailer', order_id=order.id, line_id=line.id, trailer_id=attach.trailer.id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="form_token" value="{{ form_token() }}">
+                        <button class="btn btn-sm btn-orange">{{ attach.trailer.vin }}</button>
+                      </form>
+                      {% endfor %}
+                    </div>
+                  </div>
+                  {% endif %}
                   {% if row.can_reserve_vin %}
                   <div class="border-top pt-2">
                     <div class="small fw-semibold mb-1">Зарезервировать новый VIN (логист / директор)</div>
@@ -392,7 +420,7 @@
       {% endif %}
     </div>
 
-    {% if can_manage and order.status != 'cancelled' and not order.is_shipped %}
+    {% if can_manage and order.status != 'cancelled' and not order.is_shipped and not has_order_lines %}
     <div class="row g-4 mt-1">
       <div class="col-lg-4">
         <div class="app-card p-3 h-100">
@@ -429,7 +457,12 @@
 
     <div class="app-card p-3 mt-4">
       <div class="d-flex justify-content-between align-items-center mb-3">
-        <h3 class="h6 mb-0">Будущая доступность для склада</h3>
+        <div>
+          <h3 class="h6 mb-0">Будущая доступность для склада</h3>
+          {% if has_order_lines %}
+          <div class="small text-muted">Закрепление выпуска и готового VIN — в блоке каждой позиции выше.</div>
+          {% endif %}
+        </div>
       </div>
       <div class="row g-3">
         <div class="col-xl-3 col-lg-6">

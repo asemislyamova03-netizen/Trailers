@@ -501,8 +501,22 @@ def _active_order_for_trailer(trailer_id: int, exclude_order_id: int | None = No
     return q.order_by(CustomerOrder.created_at.desc()).first()
 
 
-def _order_attachment_status_for_trailer(trailer: Trailer, order: CustomerOrder):
-    if order.trailer_id == trailer.id:
+def _order_attachment_status_for_trailer(
+    trailer: Trailer,
+    order: CustomerOrder,
+    order_line: CustomerOrderLine | None = None,
+) -> str:
+    if order_line:
+        if order_line.trailer_id == trailer.id:
+            return 'current'
+        if any(
+            reservation.status == 'ACTIVE' and reservation.trailer_id == trailer.id
+            for reservation in (order_line.reservations or [])
+        ):
+            return 'current'
+        if any(row.trailer_id == trailer.id for row in _active_vin_rows_for_order_line(order_line)):
+            return 'current'
+    elif not _order_has_lines(order) and order.trailer_id == trailer.id:
         return 'current'
     if _active_order_for_trailer(trailer.id, exclude_order_id=order.id):
         return 'other'
@@ -511,8 +525,225 @@ def _order_attachment_status_for_trailer(trailer: Trailer, order: CustomerOrder)
     return 'free'
 
 
-def _ensure_item_matches_order(item_id: int | None, order: CustomerOrder) -> bool:
+def _ensure_item_matches_order_line(item_id: int | None, line: CustomerOrderLine) -> bool:
+    return bool(item_id and line.item_id and item_id == line.item_id)
+
+
+def _ensure_item_matches_order(
+    item_id: int | None,
+    order: CustomerOrder,
+    order_line: CustomerOrderLine | None = None,
+) -> bool:
+    if order_line:
+        return _ensure_item_matches_order_line(item_id, order_line)
+    if item_id and order.item_id and item_id == order.item_id:
+        return True
+    if order.id and _order_has_lines(order):
+        return any(line.item_id == item_id for line in order.lines)
     return bool(item_id and order.item_id and item_id == order.item_id)
+
+
+def _order_line_produced_unit_slots_left(line: CustomerOrderLine) -> int:
+    required = int(line.quantity or 1)
+    vin_count = _active_vin_registry_count_for_order_line(line.id)
+    attached_units = sum(
+        1
+        for unit in (line.produced_units or [])
+        if unit.status == 'produced_no_vin' and not unit.trailer_id
+    )
+    reserved_trailers = sum(
+        1 for reservation in (line.reservations or [])
+        if reservation.status == 'ACTIVE' and reservation.trailer_id
+    )
+    return max(required - vin_count - attached_units - reserved_trailers, 0)
+
+
+def _order_line_can_attach_produced_unit(
+    line: CustomerOrderLine,
+    order: CustomerOrder,
+    unit: ProducedUnit,
+) -> tuple[bool, str]:
+    if not _order_is_open_for_attachment(order):
+        return False, 'Заказ закрыт для закрепления выпуска.'
+    if order.documents_issued or order.is_shipped:
+        return False, 'Документы выданы или заказ отгружен.'
+    if line.line_type != 'TRAILER':
+        return False, 'Выпуск можно закрепить только к позиции техники.'
+    if not _ensure_item_matches_order_line(unit.item_id, line):
+        return False, 'Выпуск не соответствует модели позиции.'
+    if unit.status != 'produced_no_vin' or unit.trailer_id:
+        return False, 'Можно закрепить только выпущенную единицу без VIN.'
+    other_order = _active_order_for_produced_unit(unit, exclude_order_id=order.id)
+    if other_order:
+        return False, f'Выпуск уже закреплён за заказом {other_order.order_number}.'
+    if unit.order_id == order.id and unit.order_line_id == line.id:
+        return False, 'Выпуск уже закреплён за этой позицией.'
+    if unit.order_id == order.id and unit.order_line_id and unit.order_line_id != line.id:
+        return True, ''
+    if _order_line_produced_unit_slots_left(line) <= 0:
+        return False, 'По позиции уже достаточно выпусков/VIN.'
+    return True, ''
+
+
+def _attach_produced_unit_to_order_line(
+    order: CustomerOrder,
+    line: CustomerOrderLine,
+    unit: ProducedUnit,
+) -> None:
+    unit.order_id = order.id
+    unit.order_line_id = line.id
+    if (line.fulfillment_source or '').lower() != 'production':
+        line.fulfillment_source = 'production'
+    if line.status in (None, '', 'new', 'waiting_payment', 'confirmed'):
+        line.status = (
+            'waiting_transfer'
+            if unit.target_warehouse_id and order.warehouse_id and unit.target_warehouse_id != order.warehouse_id
+            else 'produced_waiting_vin'
+        )
+    _set_line_source_state(line, line.fulfillment_source or 'production', line.status or 'produced_waiting_vin')
+    if order.lines.count() == 1 and not order.trailer_id:
+        order.fulfillment_source = 'production'
+    _sync_order_line_workflow_links(line)
+    _refresh_order_status(order)
+
+
+def _order_line_can_attach_ready_trailer(
+    line: CustomerOrderLine,
+    order: CustomerOrder,
+    trailer: Trailer,
+) -> tuple[bool, str]:
+    if not _order_is_open_for_attachment(order):
+        return False, 'Заказ закрыт.'
+    if line.line_type != 'TRAILER':
+        return False, 'VIN можно закрепить только к позиции техники.'
+    if not trailer.vin:
+        return False, 'У прицепа нет VIN.'
+    if _trailer_is_customer_shipped(trailer):
+        return False, 'Прицеп уже отгружен клиенту.'
+    production_warehouse = _default_production_warehouse()
+    if not production_warehouse or trailer.warehouse_id != production_warehouse.id:
+        return False, 'Нужен готовый VIN на производственном складе.'
+    if not _ensure_item_matches_order_line(trailer.item_id, line):
+        return False, 'VIN не соответствует модели позиции.'
+    if _active_movement_for_trailer(trailer.id):
+        return False, 'Прицеп в активном перемещении.'
+    if _order_attachment_status_for_trailer(trailer, order, line) == 'other':
+        return False, 'VIN закреплён за другим заказом.'
+    if _active_reservation_for_trailer(trailer.id, exclude_order_id=order.id):
+        return False, 'VIN зарезервирован под другой заказ.'
+    if trailer.status == 'SOLD' and line.trailer_id != trailer.id:
+        return False, 'Проданный VIN нельзя закрепить.'
+    if _order_line_produced_unit_slots_left(line) <= 0 and line.trailer_id != trailer.id:
+        if _active_vin_registry_count_for_order_line(line.id) >= (line.quantity or 1):
+            return False, 'По позиции уже достаточно VIN.'
+    return True, ''
+
+
+def _attach_ready_trailer_to_order_line(
+    order: CustomerOrder,
+    line: CustomerOrderLine,
+    trailer: Trailer,
+) -> StockMovement | None:
+    line.trailer_id = trailer.id
+    if (line.fulfillment_source or '').lower() != 'production':
+        line.fulfillment_source = 'production'
+    unit = getattr(trailer, 'produced_unit', None)
+    if unit is not None and not isinstance(unit, ProducedUnit):
+        unit = unit[0] if len(unit) else None
+    if unit:
+        unit.order_id = order.id
+        unit.order_line_id = line.id
+    _set_trailer_status_for_order(trailer, order)
+    _ensure_order_reservation(order, trailer, 'PRODUCTION', order_line_id=line.id)
+    movement = None
+    if order.warehouse_id and trailer.warehouse_id != order.warehouse_id:
+        movement = StockMovement.query.filter(
+            StockMovement.trailer_id == trailer.id,
+            StockMovement.order_id == order.id,
+            StockMovement.order_line_id == line.id,
+            StockMovement.status.in_(['sent', 'in_transit', 'draft']),
+        ).first()
+        if not movement:
+            movement = StockMovement(
+                movement_type='warehouse_transfer',
+                status='in_transit',
+                from_warehouse_id=trailer.warehouse_id,
+                to_warehouse_id=order.warehouse_id,
+                trailer_id=trailer.id,
+                item_id=trailer.item_id,
+                order_id=order.id,
+                order_line_id=line.id,
+                departure_date=date.today(),
+                note=f'Перемещение под заказ №{order.order_number}, поз. #{line.line_no}',
+            )
+            db.session.add(movement)
+            db.session.flush()
+            _link_stock_movement_to_order_line(movement)
+        if trailer.status != 'SOLD':
+            trailer.status = 'IN_TRANSIT'
+        trailer.lifecycle_status = 'in_transit'
+    else:
+        trailer.lifecycle_status = 'ready_production_warehouse'
+    if order.lines.count() == 1 and not order.trailer_id:
+        order.trailer_id = trailer.id
+        order.fulfillment_source = 'production'
+    _set_line_source_state(line, line.fulfillment_source or 'production', line.status or order.status)
+    _sync_order_line_workflow_links(line)
+    _refresh_order_status(order)
+    return movement
+
+
+def _ensure_production_needs_after_confirmed_payment(order: CustomerOrder) -> int:
+    if (order.fulfillment_source or '').lower() != 'production':
+        return 0
+    created = 0
+    if _order_has_lines(order):
+        for line in order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()):
+            if (line.fulfillment_source or '').lower() != 'production':
+                continue
+            if _line_active_supply_needs(line):
+                continue
+            need = SupplyNeed(
+                order_id=order.id,
+                order_line_id=line.id,
+                item_id=line.item_id,
+                warehouse_id=order.warehouse_id,
+                quantity=line.quantity or 1,
+                status='NEW',
+                priority=10,
+                need_type='CUSTOMER_ORDER',
+                required_by=order.expected_date,
+                note='Потребность создана при подтверждении оплаты',
+            )
+            _apply_snapshot(need, _order_snapshot(order))
+            db.session.add(need)
+            line.supply_need = need
+            _sync_order_line_workflow_links(line)
+            created += 1
+        return created
+    if order.trailer_id or order.supply_needs.count():
+        return 0
+    can_request, _ = order_can_request_production(order)
+    if not can_request:
+        return 0
+    order_line = _sync_primary_order_line(order, _order_snapshot(order))
+    db.session.flush()
+    need = SupplyNeed(
+        order_id=order.id,
+        order_line_id=order_line.id,
+        item_id=order.item_id,
+        warehouse_id=order.warehouse_id,
+        quantity=order.quantity,
+        status='NEW',
+        priority=10,
+        need_type='CUSTOMER_ORDER',
+        required_by=order.expected_date,
+        note='Потребность создана при подтверждении оплаты',
+    )
+    _apply_snapshot(need, _order_snapshot(order))
+    db.session.add(need)
+    order.fulfillment_source = order.fulfillment_source or 'production'
+    return 1
 
 
 def _ensure_target_matches_order_warehouse(target_warehouse_id: int | None, order: CustomerOrder) -> bool:
@@ -528,15 +759,22 @@ def _set_trailer_status_for_order(trailer: Trailer, order: CustomerOrder) -> Non
         trailer.status = 'RESERVED'
 
 
-def _ensure_order_reservation(order: CustomerOrder, trailer: Trailer, source_type: str) -> None:
+def _ensure_order_reservation(
+    order: CustomerOrder,
+    trailer: Trailer,
+    source_type: str,
+    order_line_id: int | None = None,
+) -> None:
     if trailer.status == 'SOLD':
         return
     active = Reservation.query.filter_by(order_id=order.id, trailer_id=trailer.id, status='ACTIVE').first()
     if not active:
+        line_id = order_line_id or _infer_order_line_id_for_trailer(order.id, trailer.id)
         db.session.add(Reservation(
             order_id=order.id,
+            order_line_id=line_id,
             trailer_id=trailer.id,
-            item_id=order.item_id,
+            item_id=trailer.item_id or order.item_id,
             status='ACTIVE',
             source_type=source_type,
             priority=10,
@@ -2699,7 +2937,7 @@ def manager_trailer_picker():
                 order_line = _create_order_line_from_trailer(target_order, trailer, source_type)
                 if not target_order.item_id:
                     target_order.item_id = trailer.item_id
-                if not target_order.trailer_id:
+                if target_order.lines.count() == 1 and not target_order.trailer_id:
                     target_order.trailer_id = trailer.id
                     target_order.source_warehouse_id = trailer.warehouse_id
                 target_order.fulfillment_source = target_order.fulfillment_source or ('stock' if source_type == 'STOCK' else 'other_warehouse')
@@ -5610,11 +5848,14 @@ def _revert_realization_shipment_effect(realization: SalesRealization) -> None:
         if line.order_line:
             touched_order_lines[line.order_line.id] = line.order_line
         if line.inventory_effect == 'trailer_unit' and line.trailer:
-            line.trailer.status = 'RESERVED'
-            line.trailer.lifecycle_status = 'reserved'
             for reservation in line.trailer.reservations:
                 if order and reservation.order_id == order.id and reservation.status == 'CLOSED':
                     reservation.status = 'ACTIVE'
+            _restore_trailer_status_after_unpost(
+                line.trailer,
+                order,
+                exclude_realization_id=realization.id,
+            )
 
     for order_line in touched_order_lines.values():
         still_fully_realized = _order_line_fully_realized(order_line, exclude_realization_id=realization.id)
@@ -5822,18 +6063,38 @@ def _create_contract_lines_from_order(contract: SalesContract, order: CustomerOr
 
 
 def get_order_effective_vin(order: CustomerOrder) -> str:
+    if not order:
+        return ''
+    seen: set[str] = set()
+    vins: list[str] = []
+
+    def add_vin(value: str | None) -> None:
+        vin = (value or '').strip()
+        if vin and vin not in seen:
+            seen.add(vin)
+            vins.append(vin)
+
     if order.trailer and order.trailer.vin:
-        return order.trailer.vin
-    row = (
-        VinRegistry.query
-        .filter(
-            VinRegistry.customer_order_id == order.id,
-            VinRegistry.status.in_(['reserved', 'assigned', 'confirmed']),
+        add_vin(order.trailer.vin)
+    if order.id and _order_has_lines(order):
+        for line in order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()):
+            for row in _active_vin_rows_for_order_line(line):
+                add_vin(row.vin_full)
+            for trailer in _trailers_for_order_line(line):
+                add_vin(trailer.vin)
+    if order.id:
+        rows = (
+            VinRegistry.query
+            .filter(
+                VinRegistry.customer_order_id == order.id,
+                VinRegistry.status.in_(['reserved', 'assigned', 'confirmed']),
+            )
+            .order_by(VinRegistry.reserved_at.desc().nullslast(), VinRegistry.id.desc())
+            .all()
         )
-        .order_by(VinRegistry.reserved_at.desc().nullslast(), VinRegistry.id.desc())
-        .first()
-    )
-    return row.vin_full if row else ''
+        for row in rows:
+            add_vin(row.vin_full)
+    return ', '.join(vins)
 
 
 @main_bp.app_template_global('get_order_effective_vin')
@@ -5879,6 +6140,8 @@ def _active_supply_need_for_order(order_id: int | None):
 def order_can_request_production(order: CustomerOrder) -> tuple[bool, str]:
     if not order or order.status in ('cancelled', 'canceled', 'closed', 'done') or order.is_shipped or order.documents_issued:
         return False, 'Заказ уже обеспечен или закрыт. Заявка в производство не требуется.'
+    if _order_has_lines(order):
+        return False, 'Для заказа со строками создавайте потребность через позицию заказа.'
     if order.trailer_id:
         return False, 'По заказу уже выбран готовый прицеп. Заявка в производство не требуется.'
     existing = _active_supply_need_for_order(order.id)
@@ -6401,7 +6664,15 @@ def _attach_produced_unit_to_existing_trailer(unit: ProducedUnit, trailer: Trail
         if linked_unit.id != unit.id:
             return False, f'Этот VIN уже связан с выпуском ProducedUnit #{linked_unit.id}.'
     if order:
-        if order.trailer_id and order.trailer_id != trailer.id:
+        order_line = unit.order_line
+        if not order_line and unit.production_request_line:
+            order_line = unit.production_request_line.order_line
+        if _order_has_lines(order):
+            if order_line and order_line.trailer_id and order_line.trailer_id != trailer.id:
+                return False, 'У позиции заказа уже закреплён другой прицеп.'
+            if not order_line and order.trailer_id and order.trailer_id != trailer.id:
+                return False, 'У заказа уже закреплён другой прицеп.'
+        elif order.trailer_id and order.trailer_id != trailer.id:
             return False, 'У заказа уже закреплён другой прицеп.'
         other_order = _active_order_for_trailer(trailer.id, exclude_order_id=order.id)
         if other_order:
@@ -6415,7 +6686,17 @@ def _attach_produced_unit_to_existing_trailer(unit: ProducedUnit, trailer: Trail
     unit.trailer_id = trailer.id
     if order:
         unit.order_id = order.id
-        if not order.trailer_id:
+        order_line = unit.order_line
+        if not order_line and unit.production_request_line:
+            order_line = unit.production_request_line.order_line
+        if order_line:
+            unit.order_line_id = order_line.id
+            if not order_line.trailer_id:
+                order_line.trailer_id = trailer.id
+            _sync_order_line_workflow_links(order_line)
+        elif not order.trailer_id:
+            order.trailer_id = trailer.id
+        if order.lines.count() == 1 and not order.trailer_id:
             order.trailer_id = trailer.id
         if order.status != 'cancelled':
             _refresh_order_status(order)
@@ -7721,28 +8002,19 @@ def order_payment_create(order_id):
         _finish_idempotency(idem_key, 'OrderPayment', payment.id)
 
         # Производство создаётся только при явном режиме "Заказать в производство".
-        if payment.status == 'CONFIRMED' and order.fulfillment_source == 'production' and order.trailer_id is None and order.supply_needs.count() == 0:
-            can_request, message = order_can_request_production(order)
-            if not can_request:
-                flash(message, 'warning')
-            else:
-                order_line = _sync_primary_order_line(order, _order_snapshot(order))
-                db.session.flush()
-                need = SupplyNeed(
-                    order_id=order.id,
-                    order_line_id=order_line.id,
-                    item_id=order.item_id,
-                    warehouse_id=order.warehouse_id,
-                    quantity=order.quantity,
-                    status='NEW',
-                    priority=10,
-                    need_type='CUSTOMER_ORDER',
-                    required_by=order.expected_date,
-                    note='Потребность создана при подтверждении оплаты',
+        if payment.status == 'CONFIRMED':
+            created_needs = _ensure_production_needs_after_confirmed_payment(order)
+            if created_needs:
+                add_order_event(
+                    order,
+                    'production_need_created',
+                    new_value=created_needs,
+                    comment='Потребность создана при подтверждении оплаты',
                 )
-                _apply_snapshot(need, _order_snapshot(order))
-                db.session.add(need)
-                order.fulfillment_source = order.fulfillment_source or 'production'
+            elif (order.fulfillment_source or '').lower() == 'production' and not _order_has_lines(order):
+                can_request, message = order_can_request_production(order)
+                if not can_request and message:
+                    flash(message, 'warning')
 
         _refresh_order_status(order)
         add_order_event(order, 'payment_added', new_value=payment.amount, comment=payment.note)
@@ -7781,6 +8053,15 @@ def order_payment_add(order_id):
     db.session.add(payment)
     db.session.flush()
     _finish_idempotency(idem_key, 'OrderPayment', payment.id)
+    if payment.status == 'CONFIRMED':
+        created_needs = _ensure_production_needs_after_confirmed_payment(order)
+        if created_needs:
+            add_order_event(
+                order,
+                'production_need_created',
+                new_value=created_needs,
+                comment='Потребность создана при подтверждении оплаты',
+            )
     old_status = order.status
     _refresh_order_status(order)
     if old_status != order.status:
@@ -8253,6 +8534,7 @@ def order_detail(order_id):
     reservations = order.reservations.order_by(Reservation.created_at.desc()).all()
     supply_needs = order.supply_needs.order_by(SupplyNeed.created_at.desc()).all()
     order_lines = order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()).all()
+    has_order_lines = _order_has_lines(order)
     order_line_rows = []
     for line in order_lines:
         vin_rows = (
@@ -8320,6 +8602,61 @@ def order_detail(order_id):
             and not _line_has_any_realization(line)
             and _order_line_vin_modification_code(line, order)
         )
+        attachable_produced_units = []
+        attachable_ready_trailers = []
+        if (
+            can_manage_order(order)
+            and (line.fulfillment_source or '').lower() == 'production'
+            and not order.documents_issued
+            and not order.is_shipped
+            and order.status != 'cancelled'
+            and order.warehouse_id
+        ):
+            for unit in (
+                ProducedUnit.query
+                .filter(
+                    ProducedUnit.target_warehouse_id == order.warehouse_id,
+                    ProducedUnit.item_id == line.item_id,
+                    ProducedUnit.status == 'produced_no_vin',
+                )
+                .order_by(ProducedUnit.created_at.desc(), ProducedUnit.id.desc())
+                .limit(15)
+                .all()
+            ):
+                can_attach_unit, _ = _order_line_can_attach_produced_unit(line, order, unit)
+                if can_attach_unit:
+                    attachable_produced_units.append({
+                        'unit': unit,
+                        'context': _produced_unit_context(unit),
+                    })
+            production_warehouse = _default_production_warehouse()
+            if production_warehouse:
+                ready_trailer_ids = set()
+                ready_units = (
+                    ProducedUnit.query
+                    .join(Trailer, Trailer.id == ProducedUnit.trailer_id)
+                    .filter(
+                        ProducedUnit.item_id == line.item_id,
+                        ProducedUnit.status == 'vin_assigned',
+                        Trailer.warehouse_id == production_warehouse.id,
+                        or_(Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped'),
+                    )
+                    .order_by(ProducedUnit.created_at.desc(), ProducedUnit.id.desc())
+                    .limit(15)
+                    .all()
+                )
+                for unit in ready_units:
+                    trailer = unit.trailer
+                    if not trailer or trailer.id in ready_trailer_ids or _active_movement_for_trailer(trailer.id):
+                        continue
+                    can_attach_trailer, _ = _order_line_can_attach_ready_trailer(line, order, trailer)
+                    if can_attach_trailer:
+                        ready_trailer_ids.add(trailer.id)
+                        attachable_ready_trailers.append({
+                            'trailer': trailer,
+                            'unit': unit,
+                            'attach_state': _order_attachment_status_for_trailer(trailer, order, line),
+                        })
         order_line_rows.append({
             'line': line,
             'vin_rows': vin_rows,
@@ -8347,6 +8684,8 @@ def order_detail(order_id):
             'can_reserve_vin': can_reserve_vin,
             'vin_capacity_left': max((line.quantity or 1) - vin_count, 0),
             'line_vin_modification': _order_line_vin_modification_code(line, order),
+            'attachable_produced_units': attachable_produced_units,
+            'attachable_ready_trailers': attachable_ready_trailers,
         })
     add_line_stock_trailers = [
         trailer for trailer in (
@@ -8370,23 +8709,36 @@ def order_detail(order_id):
     future_produced_unit_rows = []
     future_ready_trailer_rows = []
     future_inbound_movements = []
+    line_item_ids = {line.item_id for line in order_lines if line.item_id}
+    if not line_item_ids and order.item_id:
+        line_item_ids = {order.item_id}
     if order.warehouse_id:
+        production_item_filter = (
+            ProductionRequestLine.item_id.in_(line_item_ids)
+            if line_item_ids
+            else ProductionRequestLine.item_id == order.item_id
+        )
         future_production_lines = (
             ProductionRequestLine.query
             .join(ProductionRequest, ProductionRequest.id == ProductionRequestLine.production_request_id)
             .filter(
                 ProductionRequest.target_warehouse_id == order.warehouse_id,
-                ProductionRequestLine.item_id == order.item_id,
+                production_item_filter,
                 ProductionRequestLine.status.in_(['planned', 'PLANNED', 'in_production', 'partial_ready']),
             )
             .order_by(ProductionRequest.created_at.desc(), ProductionRequestLine.id.desc())
             .all()
         )
+        produced_item_filter = (
+            ProducedUnit.item_id.in_(line_item_ids)
+            if line_item_ids
+            else ProducedUnit.item_id == order.item_id
+        )
         produced_units = (
             ProducedUnit.query
             .filter(
                 ProducedUnit.target_warehouse_id == order.warehouse_id,
-                ProducedUnit.item_id == order.item_id,
+                produced_item_filter,
                 ProducedUnit.status == 'produced_no_vin',
             )
             .order_by(ProducedUnit.created_at.desc(), ProducedUnit.id.desc())
@@ -8404,6 +8756,7 @@ def order_detail(order_id):
             context['attach_state'] = attach_state
             context['can_attach'] = (
                 can_manage_order(order)
+                and not has_order_lines
                 and attach_state in ('free', 'current')
                 and attach_state != 'current'
                 and not order.trailer_id
@@ -8440,6 +8793,7 @@ def order_detail(order_id):
                 context['attach_state'] = attach_state
                 context['can_attach'] = (
                     can_manage_order(order)
+                    and not has_order_lines
                     and attach_state == 'free'
                     and not order.trailer_id
                     and _order_is_open_for_attachment(order)
@@ -8450,10 +8804,15 @@ def order_detail(order_id):
                     and not _active_movement_for_trailer(trailer.id)
                 )
                 future_ready_trailer_rows.append(context)
+            trailer_item_filter = (
+                Trailer.item_id.in_(line_item_ids)
+                if line_item_ids
+                else Trailer.item_id == order.item_id
+            )
             extra_ready_trailers = (
                 Trailer.query
                 .filter(
-                    Trailer.item_id == order.item_id,
+                    trailer_item_filter,
                     Trailer.warehouse_id == production_warehouse.id,
                     Trailer.status.in_(['IN_STOCK', 'RESERVED']),
                     or_(Trailer.lifecycle_status.is_(None), Trailer.lifecycle_status != 'customer_shipped'),
@@ -8476,6 +8835,7 @@ def order_detail(order_id):
                     'attach_state': attach_state,
                     'can_attach': (
                         can_manage_order(order)
+                        and not has_order_lines
                         and attach_state == 'free'
                         and not order.trailer_id
                         and _order_is_open_for_attachment(order)
@@ -8662,18 +9022,16 @@ def order_edit(order_id):
 
         if new_trailer_id:
             order.fulfillment_source = order.fulfillment_source or 'stock'
-        elif order.fulfillment_source == 'production' and order.supply_needs.count() == 0:
-            can_request, message = order_can_request_production(order)
-            if not can_request:
-                flash(message, 'warning')
-                return _render_order_form(form, 'Редактирование заказа')
-            need = SupplyNeed(order_id=order.id, order_line_id=order_line.id, item_id=order.item_id, warehouse_id=order.warehouse_id, quantity=order.quantity, status='NEW', priority=10, need_type='CUSTOMER_ORDER', required_by=order.expected_date)
-            _apply_snapshot(need, configured_snapshot or _order_snapshot(order))
-            db.session.add(need)
         elif order.fulfillment_source == 'production':
-            warning = _sync_editable_order_production_need(order, configured_snapshot)
-            if warning:
-                flash(warning, 'warning')
+            created = _ensure_production_needs_after_confirmed_payment(order)
+            if not created:
+                warning = _sync_editable_order_production_need(order, configured_snapshot)
+                if warning:
+                    flash(warning, 'warning')
+                elif not _order_has_lines(order):
+                    can_request, message = order_can_request_production(order)
+                    if not can_request and message:
+                        flash(message, 'warning')
 
         _refresh_order_status(order)
         _set_line_source_state(order_line, order_line.fulfillment_source, order.status)
@@ -8787,7 +9145,7 @@ def order_line_add_stock(order_id):
     line = _create_order_line_from_trailer(order, trailer, source_type)
     if not order.item_id:
         order.item_id = trailer.item_id
-    if not order.trailer_id:
+    if order.lines.count() == 1 and not order.trailer_id:
         order.trailer_id = trailer.id
         order.source_warehouse_id = trailer.warehouse_id
     order.fulfillment_source = 'stock'
@@ -8968,10 +9326,10 @@ def order_line_link_vin(order_id, line_id):
     return redirect(url_for('main.order_detail', order_id=order.id))
 
 
-def _posted_realization_for_trailer(trailer_id: int | None):
+def _posted_realization_for_trailer(trailer_id: int | None, exclude_realization_id: int | None = None):
     if not trailer_id:
         return None
-    return (
+    query = (
         SalesRealizationLine.query
         .join(SalesRealization, SalesRealization.id == SalesRealizationLine.realization_id)
         .filter(
@@ -8979,8 +9337,40 @@ def _posted_realization_for_trailer(trailer_id: int | None):
             SalesRealizationLine.trailer_id == trailer_id,
             SalesRealizationLine.inventory_effect == 'trailer_unit',
         )
-        .first()
     )
+    if exclude_realization_id:
+        query = query.filter(SalesRealization.id != exclude_realization_id)
+    return query.first()
+
+
+def _restore_trailer_status_after_unpost(
+    trailer: Trailer,
+    order: CustomerOrder | None,
+    exclude_realization_id: int | None = None,
+) -> None:
+    if not trailer:
+        return
+    if _posted_realization_for_trailer(trailer.id, exclude_realization_id=exclude_realization_id):
+        return
+    if order:
+        if any(
+            reservation.status == 'ACTIVE' and reservation.order_id == order.id
+            for reservation in (trailer.reservations or [])
+        ):
+            trailer.status = 'RESERVED'
+            trailer.lifecycle_status = 'reserved'
+            return
+        if order.trailer_id == trailer.id:
+            trailer.status = 'RESERVED'
+            trailer.lifecycle_status = 'reserved'
+            return
+    other_order = _active_order_for_trailer(trailer.id)
+    if other_order:
+        trailer.status = 'RESERVED'
+        trailer.lifecycle_status = 'reserved'
+        return
+    trailer.status = 'IN_STOCK'
+    trailer.lifecycle_status = 'in_stock'
 
 
 def _order_realization_lines_source(order: CustomerOrder) -> list[CustomerOrderLine]:
@@ -9755,6 +10145,9 @@ def order_reserve_trailer(order_id):
     _ensure_can_manage_order(order)
     if order.is_shipped or order.status == 'cancelled':
         abort(400)
+    if _order_has_lines(order):
+        flash('Для заказа со строками резервируйте VIN через позицию заказа или подбор прицепа.', 'warning')
+        return redirect(url_for('main.order_detail', order_id=order.id))
     trailer = Trailer.query.get_or_404(request.form.get('trailer_id', type=int))
     if trailer.item_id != order.item_id:
         flash('Выбранный VIN не соответствует модели заказа.', 'danger')
@@ -9831,11 +10224,10 @@ def order_request_transfer(order_id):
         if trailer.status == 'IN_STOCK':
             trailer.status = 'RESERVED'
             trailer.lifecycle_status = 'reserved'
-        if order.lines.count() == 1 and order.trailer_id != trailer.id:
-            order.trailer_id = trailer.id
+        if order.lines.count() == 1:
+            if order.trailer_id != trailer.id:
+                order.trailer_id = trailer.id
             order.fulfillment_source = 'other_warehouse'
-        elif not order.trailer_id:
-            order.trailer_id = trailer.id
     else:
         order.fulfillment_source = 'other_warehouse'
         ok, message = _sync_order_trailer_links(order, old_trailer, trailer, 'TRANSFER')
@@ -9922,6 +10314,62 @@ def order_attach_transit(order_id):
     return redirect(url_for('main.order_detail', order_id=order.id))
 
 
+@main_bp.route('/orders/<int:order_id>/lines/<int:line_id>/attach-produced-unit/<int:unit_id>', methods=['POST'])
+@login_required
+def order_line_attach_produced_unit(order_id, line_id, unit_id):
+    order = CustomerOrder.query.get_or_404(order_id)
+    _ensure_can_manage_order(order)
+    line = CustomerOrderLine.query.filter_by(id=line_id, order_id=order.id).first_or_404()
+    unit = ProducedUnit.query.get_or_404(unit_id)
+    can_attach, message = _order_line_can_attach_produced_unit(line, order, unit)
+    if not can_attach:
+        flash(message, 'warning' if unit.order_id == order.id else 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
+    _attach_produced_unit_to_order_line(order, line, unit)
+    add_order_event(
+        order,
+        'trailer_assigned',
+        new_value=f'ProducedUnit #{unit.id}',
+        comment=f'Выпуск без VIN закреплён за позицией #{line.line_no}',
+    )
+    _finish_idempotency(idem_key, 'CustomerOrderLine', line.id)
+    db.session.commit()
+    flash(f'Выпуск #{unit.id} закреплён за позицией #{line.line_no}.', 'success')
+    return redirect(url_for('main.order_detail', order_id=order.id))
+
+
+@main_bp.route('/orders/<int:order_id>/lines/<int:line_id>/attach-ready-trailer/<int:trailer_id>', methods=['POST'])
+@login_required
+def order_line_attach_ready_trailer(order_id, line_id, trailer_id):
+    order = CustomerOrder.query.get_or_404(order_id)
+    _ensure_can_manage_order(order)
+    line = CustomerOrderLine.query.filter_by(id=line_id, order_id=order.id).first_or_404()
+    trailer = Trailer.query.get_or_404(trailer_id)
+    can_attach, message = _order_line_can_attach_ready_trailer(line, order, trailer)
+    if not can_attach:
+        flash(message, 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
+    movement = _attach_ready_trailer_to_order_line(order, line, trailer)
+    add_order_event(
+        order,
+        'trailer_assigned',
+        new_value=trailer.vin,
+        comment=f'Готовый VIN закреплён за позицией #{line.line_no}',
+    )
+    if movement:
+        add_order_event(order, 'transfer_started', new_value=trailer.vin, comment=f'Перемещение под позицию #{line.line_no}')
+    _finish_idempotency(idem_key, 'CustomerOrderLine', line.id)
+    db.session.commit()
+    flash(f'VIN {trailer.vin} закреплён за позицией #{line.line_no}.', 'success')
+    return redirect(url_for('main.order_detail', order_id=order.id))
+
+
 @main_bp.route('/orders/<int:order_id>/attach-produced-unit/<int:unit_id>', methods=['POST'])
 @login_required
 def order_attach_produced_unit(order_id, unit_id):
@@ -9931,32 +10379,24 @@ def order_attach_produced_unit(order_id, unit_id):
     if _order_has_lines(order):
         flash('Для заказа со строками закрепляйте выпуск через конкретную позицию заказа.', 'warning')
         return redirect(url_for('main.order_detail', order_id=order.id))
-    if not _order_is_open_for_attachment(order):
-        flash('Нельзя закрепить единицу: заказ отменён или уже отгружен.', 'danger')
+    line = _sync_primary_order_line(order, _order_snapshot(order))
+    can_attach, message = _order_line_can_attach_produced_unit(line, order, unit)
+    if not can_attach:
+        flash(message, 'warning' if unit.order_id == order.id else 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
     if order.trailer_id:
         flash('У заказа уже есть конкретный VIN.', 'warning')
         return redirect(url_for('main.order_detail', order_id=order.id))
-    if unit.status != 'produced_no_vin' or unit.trailer_id:
-        flash('Можно закрепить только выпущенную единицу без VIN.', 'danger')
-        return redirect(url_for('main.order_detail', order_id=order.id))
-    other_order = _active_order_for_produced_unit(unit, exclude_order_id=order.id)
-    if other_order:
-        flash(f'Эта единица уже закреплена за заказом {other_order.order_number}.', 'danger')
-        return redirect(url_for('main.order_detail', order_id=order.id))
-    if unit.order_id == order.id:
-        flash('Эта выпущенная единица уже закреплена за этим заказом.', 'warning')
-        return redirect(url_for('main.order_detail', order_id=order.id))
-    if not _ensure_item_matches_order(unit.item_id, order):
-        flash('Выпущенная единица не соответствует модели заказа.', 'danger')
-        return redirect(url_for('main.order_detail', order_id=order.id))
     idem_key, duplicate = _reserve_idempotency_key()
     if duplicate:
         return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
-    unit.order_id = order.id
-    order.fulfillment_source = 'production'
+    _attach_produced_unit_to_order_line(order, line, unit)
     if order.status not in ('sold_not_shipped',):
-        order.status = 'waiting_transfer' if unit.target_warehouse_id and order.warehouse_id and unit.target_warehouse_id != order.warehouse_id else 'produced_waiting_vin'
+        order.status = (
+            'waiting_transfer'
+            if unit.target_warehouse_id and order.warehouse_id and unit.target_warehouse_id != order.warehouse_id
+            else 'produced_waiting_vin'
+        )
     add_order_event(order, 'trailer_assigned', new_value=f'ProducedUnit #{unit.id}', comment='Выпущенная единица без VIN закреплена за заказом')
     _finish_idempotency(idem_key, 'CustomerOrder', order.id)
     db.session.commit()
@@ -10042,6 +10482,8 @@ def order_attach_ready_trailer(order_id, trailer_id):
                 note=f'Перемещение под заказ №{order.order_number}',
             )
             db.session.add(movement)
+            db.session.flush()
+            _link_stock_movement_to_order_line(movement)
         if trailer.status != 'SOLD':
             trailer.status = 'IN_TRANSIT'
         trailer.lifecycle_status = 'in_transit'
@@ -10053,6 +10495,9 @@ def order_attach_ready_trailer(order_id, trailer_id):
             _refresh_order_status(order)
         else:
             flash('Склад выдачи / назначения не задан. Сначала укажите склад выдачи в заказе.', 'warning')
+    order_line = _sync_primary_order_line(order, _order_snapshot(order))
+    db.session.flush()
+    _sync_order_line_workflow_links(order_line)
     add_order_event(order, 'trailer_assigned', old_value=old_trailer_id, new_value=trailer.vin, comment='Готовый VIN на производственном складе закреплён за заказом')
     if movement:
         add_order_event(order, 'transfer_started', new_value=trailer.vin, comment='Автоматически создано перемещение под заказ')
