@@ -14,7 +14,7 @@ from flask_login import (
 )
 
 from extensions import db
-from models import Trailer, Item, ProductCategory, Warehouse, Customer, SalesContract, SalesContractLine, SalesRealization, SalesRealizationLine, ContractTemplate, User, OTTS, Lead, LeadMessage, CustomerOrder, CustomerOrderLine, OrderPayment, OrderEvent, Reservation, SupplyNeed, ProductionRequest, ProductionRequestLine, ProducedUnit, StockMovement, IdempotencyKey, VinRegistry, VinRegistryEvent
+from models import Trailer, Item, ProductCategory, Warehouse, Customer, SalesContract, SalesContractLine, SalesRealization, SalesRealizationLine, ContractTemplate, User, OTTS, Lead, LeadMessage, CustomerOrder, CustomerOrderLine, OrderPayment, OrderEvent, Reservation, SupplyNeed, ProductionRequest, ProductionRequestLine, ProducedUnit, StockMovement, IdempotencyKey, VinRegistry, VinRegistryEvent, InventoryTransaction
 from models import (
     TrailerAllowedOption, TrailerBoardHeight, TrailerBoardPriceMatrix, TrailerBodyExecution, TrailerBodySize,
     TrailerDimensionMatrix, TrailerHubOption, TrailerHubPriceMatrix, TrailerOtssModificationMatrix,
@@ -4930,6 +4930,40 @@ def _order_line_operation_blockers(line: CustomerOrderLine) -> list[str]:
     return blockers
 
 
+def _order_line_delete_blockers(line: CustomerOrderLine) -> list[str]:
+    blockers = []
+    if line.contract_lines:
+        blockers.append('есть строка договора')
+    if _line_has_any_realization(line):
+        blockers.append('есть реализация')
+    if line.movements:
+        blockers.append('есть перемещение')
+    if line.produced_units:
+        blockers.append('есть выпуск')
+    if line.production_outputs:
+        blockers.append('есть производственные результаты')
+    if line.assembly_operations:
+        blockers.append('есть операция комплектации')
+    if line.inventory_operations:
+        blockers.append('есть складская операция')
+    if InventoryTransaction.query.filter(InventoryTransaction.related_order_line_id == line.id).first():
+        blockers.append('есть складская транзакция')
+    for row in _active_vin_rows_for_order_line(line):
+        if row.docs_issued_at or row.docs_issued_order_id:
+            blockers.append('по VIN уже выданы документы')
+        if row.sales_contract_id:
+            blockers.append('VIN уже связан с договором')
+    for need in _line_active_supply_needs(line):
+        if _supply_need_started(need) or _supply_need_has_produced_output(need):
+            blockers.append(f'производство по потребности #{need.id} уже начато')
+    active_need_ids = {need.id for need in _line_active_supply_needs(line)}
+    for production_line in line.production_lines:
+        if production_line.supply_need_id not in active_need_ids:
+            blockers.append('есть производственное задание')
+            break
+    return blockers
+
+
 def _order_line_quantity_blockers(line: CustomerOrderLine) -> list[str]:
     blockers = []
     if any(row.status == 'ACTIVE' for row in line.reservations):
@@ -4962,7 +4996,7 @@ def _can_delete_order_line(line: CustomerOrderLine) -> tuple[bool, str]:
         return False, 'Позиции можно удалять только до выдачи документов и отгрузки.'
     if line.order.lines.count() <= 1:
         return False, 'Нельзя удалить последнюю позицию заказа.'
-    blockers = _order_line_operation_blockers(line)
+    blockers = _order_line_delete_blockers(line)
     if blockers:
         return False, 'Нельзя удалить позицию: ' + ', '.join(blockers) + '.'
     return True, ''
@@ -5186,6 +5220,29 @@ def change_line_source_stock_to_production(line_id: int, target_item_id: int, qt
     _refresh_order_status(order)
     add_order_event(order, 'production_need_created', new_value=item.article or item.name, comment=f'Позиция #{line.line_no}: {reason}')
     return line
+
+
+def _release_order_line_before_delete(line: CustomerOrderLine, user_id: int, reason: str) -> None:
+    _release_line_stock_links(line, reason)
+    for need in _line_active_supply_needs(line):
+        _cancel_supply_need_and_production_lines(need, reason, user_id)
+        need.order_line_id = None
+    for reservation in line.reservations:
+        reservation.order_line_id = None
+    for production_line in line.production_lines:
+        production_line.order_line_id = None
+    for row in VinRegistry.query.filter(VinRegistry.order_line_id == line.id).all():
+        if row.docs_issued_at or row.docs_issued_order_id or row.sales_contract_id:
+            raise ValueError('Нельзя удалить позицию: по VIN уже есть документы или договор.')
+        if row.status in ('reserved', 'assigned', 'confirmed'):
+            if row.status == 'reserved' and not row.trailer_id:
+                _free_reserved_vin_row(row, line.order, reason)
+            else:
+                _release_assigned_vin_from_order(row, line.order, reason)
+        row.order_line_id = None
+    for event in VinRegistryEvent.query.filter(VinRegistryEvent.order_line_id == line.id).all():
+        event.order_line_id = None
+    _sync_order_line_workflow_links(line)
 
 
 def _active_vin_rows_for_order_line(line: CustomerOrderLine) -> list[VinRegistry]:
@@ -5915,6 +5972,7 @@ def _free_reserved_vin_row(row: VinRegistry, order: CustomerOrder, reason: str) 
     old_status = row.status
     _add_vin_event(row, 'reservation_cancelled', old_status, 'free', comment=reason)
     row.customer_order_id = None
+    row.order_line_id = None
     row.supply_need_id = None
     row.reserved_by_user_id = None
     row.assigned_by_user_id = None
@@ -8445,6 +8503,12 @@ def order_line_delete(order_id, line_id):
         return redirect(url_for('main.order_detail', order_id=order.id))
     old_line_no = line.line_no
     old_label = line.article_snapshot or (line.item.article if line.item else '') or f'#{old_line_no}'
+    try:
+        _release_order_line_before_delete(line, current_user.id, f'Удаление лишней позиции #{old_line_no} из заказа {order.order_number}')
+    except ValueError as exc:
+        db.session.rollback()
+        flash(str(exc), 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
     db.session.delete(line)
     db.session.flush()
     remaining_lines = order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()).all()
