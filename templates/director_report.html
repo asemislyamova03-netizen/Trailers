@@ -76,7 +76,7 @@
       <select name="direction" class="form-select">
         <option value="all" {% if report_direction == 'all' %}selected{% endif %}>Все</option>
         <option value="light" {% if report_direction == 'light' %}selected{% endif %}>Легковые</option>
-        <option value="cargo" {% if report_direction == 'cargo' %}selected{% endif %}>Грузовые / спец</option>
+        <option value="cargo" {% if report_direction == 'cargo' %}selected{% endif %}>Грузовые прицепы</option>
         <option value="other" {% if report_direction == 'other' %}selected{% endif %}>Без VIN / прочее</option>
       </select>
     </div>
@@ -133,7 +133,7 @@
           <td>{{ (row.realization.customer.name if row.realization and row.realization.customer else (row.contract.customer.name if row.contract and row.contract.customer else '—')) }}</td>
           <td>{{ row.revenue|money }}</td>
           <td>{{ row.trailer.vin if row.trailer else '—' }}</td>
-          <td>{{ {'light':'Легковые','cargo':'Грузовые / спец','other':'Без VIN / прочее'}.get(row.direction, row.direction) }}</td>
+          <td>{{ {'light':'Легковые прицепы','cargo':'Грузовые прицепы','other':'Комплектующие / прочее'}.get(row.direction, row.direction) }}</td>
         </tr>
       {% endfor %}
       </tbody>

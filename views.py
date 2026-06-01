@@ -4229,7 +4229,7 @@ def _refresh_order_status(order: CustomerOrder) -> None:
         return
 
     if order.id and order.lines.count() > 0:
-        mapped = _order_status_from_deal_code(_order_list_filter_state(order)['code'])
+        mapped = _order_status_from_deal_code(_order_list_state(order)['code'])
         if mapped:
             order.status = mapped
         return
