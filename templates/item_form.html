@@ -104,7 +104,14 @@
         </div>
         <div class="col-md-4 mb-3">
             {{ form.unit.label(class="form-label") }}
-            {{ form.unit(class="form-control") }}
+            {{ form.unit(class="form-select") }}
+            <div class="form-text">Для металла — кг или т, для листа/профиля — м или м², для болтов — шт.</div>
+        </div>
+        <div class="col-md-4 mb-3 d-flex align-items-center">
+            <div class="form-check mt-4">
+                {{ form.is_internal_bom_item(class="form-check-input") }}
+                {{ form.is_internal_bom_item.label(class="form-check-label") }}
+            </div>
         </div>
         <div class="col-md-4 mb-3 d-flex align-items-center">
             <div class="form-check mt-4">

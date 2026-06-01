@@ -1,0 +1,44 @@
+{% extends 'base.html' %}
+{% block title %}Приходы ТМЦ{% endblock %}
+{% block content %}
+<div class="compact-page-header">
+  <div>
+    <h1>Приходы ТМЦ</h1>
+    <div class="text-muted small">Последние проведённые приходы в CRM.</div>
+  </div>
+  <a href="{{ url_for('main.inventory_receipt_create') }}" class="btn btn-orange btn-sm">Новый приход</a>
+</div>
+
+<div class="app-card">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Дата</th>
+          <th>Склад</th>
+          <th>Зона</th>
+          <th>Позиций</th>
+          <th>Комментарий</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for op in operations %}
+        <tr>
+          <td>{{ op.id }}</td>
+          <td>{{ (op.posted_at or op.created_at)|date_format }}</td>
+          <td>{{ op.target_warehouse.name if op.target_warehouse else '—' }}</td>
+          <td>{{ op.target_area.name if op.target_area else '—' }}</td>
+          <td>{{ op.lines.count() }}</td>
+          <td class="small text-muted">{{ op.comment or '' }}</td>
+          <td><a href="{{ url_for('main.inventory_receipt_detail', operation_id=op.id) }}" class="btn btn-sm btn-soft">Открыть</a></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7" class="text-muted p-3">Приходов пока нет</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

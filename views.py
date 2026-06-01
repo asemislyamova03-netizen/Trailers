@@ -14,7 +14,7 @@ from flask_login import (
 )
 
 from extensions import db
-from models import Trailer, Item, ProductCategory, Warehouse, Customer, SalesContract, SalesContractLine, SalesRealization, SalesRealizationLine, ContractTemplate, User, OTTS, Lead, LeadMessage, CustomerOrder, CustomerOrderLine, OrderPayment, OrderEvent, Reservation, SupplyNeed, ProductionRequest, ProductionRequestLine, ProducedUnit, StockMovement, IdempotencyKey, VinRegistry, VinRegistryEvent, InventoryTransaction
+from models import Trailer, Item, ProductCategory, Warehouse, Customer, SalesContract, SalesContractLine, SalesRealization, SalesRealizationLine, ContractTemplate, User, OTTS, Lead, LeadMessage, CustomerOrder, CustomerOrderLine, OrderPayment, OrderEvent, Reservation, SupplyNeed, ProductionRequest, ProductionRequestLine, ProducedUnit, StockMovement, IdempotencyKey, VinRegistry, VinRegistryEvent, InventoryTransaction, InventoryBalance, InventoryOperation, InventoryOperationLine, WarehouseStorageArea, ItemBillOfMaterials, ItemBillOfMaterialsLine
 from models import (
     TrailerAllowedOption, TrailerBoardHeight, TrailerBoardPriceMatrix, TrailerBodyExecution, TrailerBodySize,
     TrailerDimensionMatrix, TrailerHubOption, TrailerHubPriceMatrix, TrailerOtssModificationMatrix,
@@ -27,8 +27,22 @@ from forms import (
     CustomerForm, SalesContractForm, LoginForm, UserForm, OTTSForm, LeadForm, CustomerOrderForm, OrderPaymentForm,
     SupplyNeedForm, ProductionRequestForm, ProductionRequestLineForm, StockMovementForm, StockMovementBatchForm,
     AssignVinForm, SendTrailerForm, StockReplenishmentForm, TrailerItemChangeForm, ContractTemplateForm,
-    KaspiOrderImportForm, KaspiOrderListImportForm
+    KaspiOrderImportForm, KaspiOrderListImportForm, InventoryReceiptForm,
 )
+from inventory_service import (
+    InsufficientInventoryError,
+    apply_inventory_receipt,
+    apply_production_consumption,
+    check_bom_shortages,
+    ensure_storage_areas_for_warehouse,
+    get_active_bom,
+    group_inventory_balances,
+    inventory_balances_query,
+    item_has_positive_balance,
+    production_warehouse_ids,
+    resolve_material_warehouse_id,
+)
+from inventory_units import format_inventory_quantity, normalize_unit, quantity_input_step
 from collections import defaultdict
 import sqlalchemy as sa
 from sqlalchemy import and_, or_
@@ -100,6 +114,8 @@ def navigation_section(endpoint: str | None = None, path: str | None = None) -> 
         return 'availability'
     if path.startswith('/stock-replenishment'):
         return 'availability'
+    if path.startswith('/inventory'):
+        return 'inventory'
     if path.startswith('/stock-movements'):
         return 'movements'
     if path.startswith('/realizations'):
@@ -335,6 +351,29 @@ def _need_type_key(need: SupplyNeed | None) -> str:
 
 def _is_stock_replenishment_need(need: SupplyNeed | None) -> bool:
     return _need_type_key(need) == 'STOCK_REPLENISHMENT'
+
+
+def _is_paid_customer_need(need: SupplyNeed | None) -> bool:
+    if not need or _is_stock_replenishment_need(need):
+        return False
+    order = need.order
+    if not order:
+        return False
+    return order.remaining_amount <= 0 and order.total_amount > 0
+
+
+def _production_line_sort_key(line: ProductionRequestLine):
+    need = line.supply_need
+    if need and _is_paid_customer_need(need):
+        tier = 0
+    elif need and not _is_stock_replenishment_need(need):
+        tier = 1
+    elif need and _is_stock_replenishment_need(need):
+        tier = 2
+    else:
+        tier = 3
+    required_by = need.required_by if need and need.required_by else date.max
+    return (tier, required_by, line.id or 0)
 
 
 def _vin_registry_for_order_or_need(order: CustomerOrder | None = None, need: SupplyNeed | None = None) -> VinRegistry | None:
@@ -1091,6 +1130,16 @@ def money(value):
     except (TypeError, ValueError):
         amount = 0
     return f"{amount:,.0f}".replace(",", " ") + " ₸"
+
+
+@main_bp.app_template_filter('inventory_qty')
+def inventory_qty_filter(value, unit=None):
+    return format_inventory_quantity(value, unit)
+
+
+@main_bp.app_template_filter('qty_step')
+def qty_step_filter(unit=None):
+    return quantity_input_step(unit)
 
 
 @main_bp.app_template_filter('date_format')
@@ -2250,10 +2299,11 @@ def item_create():
             size_external=form.size_external.data.strip() if form.size_external.data else None,
             size_body=form.size_body.data.strip() if form.size_body.data else None,
             base_price=form.base_price.data,
-            unit=form.unit.data.strip() if form.unit.data else 'шт',
+            unit=normalize_unit(form.unit.data),
             product_category_id=category.id if category else None,
             is_sellable=bool(form.is_sellable.data),
             requires_vin=bool(form.requires_vin.data if form.requires_vin.data is not None else item_type == 'TRAILER'),
+            is_internal_bom_item=bool(form.is_internal_bom_item.data) if item_type == 'COMPONENT' else False,
             is_active=form.is_active.data,
         )
         db.session.add(item)
@@ -2302,16 +2352,26 @@ def item_edit(item_id):
         form.size_external.data = item.size_external
         form.size_body.data = item.size_body
         form.base_price.data = item.base_price
-        form.unit.data = item.unit
+        form.unit.data = normalize_unit(item.unit)
+        form.is_internal_bom_item.data = item.is_internal_bom_item
         form.is_active.data = item.is_active
 
     if form.validate_on_submit():
         item_type = form.item_type.data
         article = form.article.data.strip() if form.article.data else None
         category = ProductCategory.query.get(form.product_category_id.data) if form.product_category_id.data else _default_product_category_for_item_type(item_type)
+        new_unit = normalize_unit(form.unit.data)
 
         if item_type == 'TRAILER' and not article:
             flash('Для прицепа обязательно укажите артикул', 'danger')
+            return render_template('item_form.html', form=form, title='Редактирование номенклатуры')
+
+        if normalize_unit(item.unit) != new_unit and item_has_positive_balance(item.id):
+            flash(
+                'Нельзя сменить единицу измерения: по позиции есть ненулевой складской остаток. '
+                'Сначала спишите или скорректируйте остаток.',
+                'danger',
+            )
             return render_template('item_form.html', form=form, title='Редактирование номенклатуры')
 
         # Проверка уникальности при изменении типа/артикула
@@ -2351,7 +2411,8 @@ def item_edit(item_id):
         item.size_external = form.size_external.data.strip() if form.size_external.data else None
         item.size_body = form.size_body.data.strip() if form.size_body.data else None
         item.base_price = form.base_price.data
-        item.unit = form.unit.data.strip() if form.unit.data else 'шт'
+        item.unit = new_unit
+        item.is_internal_bom_item = bool(form.is_internal_bom_item.data) if item_type == 'COMPONENT' else False
         item.is_active = form.is_active.data
 
         db.session.commit()
@@ -11775,6 +11836,196 @@ def _refresh_production_request_status(production_request: ProductionRequest) ->
         production_request.status = 'in_progress'
 
 
+def _inventory_warehouse_choices() -> list[tuple[int, str]]:
+    warehouses = Warehouse.query.filter_by(is_active=True).order_by(
+        Warehouse.is_production.desc(),
+        Warehouse.name.asc(),
+    ).all()
+    return [(w.id, w.name) for w in warehouses]
+
+
+def _inventory_storage_area_choices(warehouse_id: int | None) -> list[tuple[int, str]]:
+    if not warehouse_id:
+        return [(0, '— без зоны —')]
+    ensure_storage_areas_for_warehouse(warehouse_id)
+    areas = (
+        WarehouseStorageArea.query.filter_by(warehouse_id=warehouse_id, is_active=True)
+        .order_by(WarehouseStorageArea.sort_order.asc(), WarehouseStorageArea.name.asc())
+        .all()
+    )
+    return [(0, '— без зоны —')] + [(area.id, f'{area.name} ({area.code})') for area in areas]
+
+
+def _inventory_receipt_items() -> list[Item]:
+    items = (
+        Item.query.filter(Item.is_active == True, Item.item_type == 'COMPONENT')
+        .order_by(Item.name.asc())
+        .all()
+    )
+    if not items:
+        items = (
+            Item.query.filter(Item.is_active == True, Item.item_type != 'TRAILER')
+            .order_by(Item.name.asc())
+            .limit(500)
+            .all()
+        )
+    return items
+
+
+def _parse_inventory_receipt_lines() -> list[tuple[int, float, str | None, str | None]]:
+    item_ids = request.form.getlist('line_item_id')
+    quantities = request.form.getlist('line_quantity')
+    units = request.form.getlist('line_unit')
+    comments = request.form.getlist('line_comment')
+    parsed: list[tuple[int, float, str | None, str | None]] = []
+    for index, raw_item_id in enumerate(item_ids):
+        try:
+            item_id = int(raw_item_id or 0)
+        except (TypeError, ValueError):
+            continue
+        if item_id <= 0:
+            continue
+        try:
+            quantity = float(quantities[index] if index < len(quantities) else 0)
+        except (TypeError, ValueError):
+            continue
+        if quantity <= 0:
+            continue
+        line_unit = (units[index] if index < len(units) else '') or None
+        if line_unit:
+            line_unit = normalize_unit(line_unit)
+        line_comment = (comments[index] if index < len(comments) else '') or None
+        if line_comment:
+            line_comment = line_comment.strip() or None
+        parsed.append((item_id, quantity, line_comment, line_unit))
+    return parsed
+
+
+@main_bp.route('/inventory/balances')
+@role_required('director', 'manager', 'production')
+def inventory_balances_list():
+    warehouse_id = request.args.get('warehouse_id', type=int)
+    storage_area_id = request.args.get('storage_area_id', type=int)
+    item_type = (request.args.get('item_type') or '').strip() or None
+    only_positive = request.args.get('only_positive', '1') == '1'
+    warehouses = Warehouse.query.filter_by(is_active=True).order_by(Warehouse.name.asc()).all()
+    if not warehouse_id and warehouses:
+        production_ids = production_warehouse_ids()
+        if production_ids:
+            warehouse_id = production_ids[0]
+    if warehouse_id:
+        ensure_storage_areas_for_warehouse(warehouse_id)
+    balances = inventory_balances_query(
+        warehouse_id=warehouse_id,
+        storage_area_id=storage_area_id or None,
+        item_type=item_type,
+        only_positive=only_positive,
+        tmz_only=True,
+    ).all()
+    balance_groups = group_inventory_balances(balances)
+    storage_areas = (
+        WarehouseStorageArea.query.filter_by(warehouse_id=warehouse_id, is_active=True)
+        .order_by(WarehouseStorageArea.sort_order.asc())
+        .all()
+        if warehouse_id
+        else []
+    )
+    return render_template(
+        'inventory_balances_list.html',
+        balances=balances,
+        balance_groups=balance_groups,
+        warehouses=warehouses,
+        storage_areas=storage_areas,
+        warehouse_id=warehouse_id,
+        storage_area_id=storage_area_id,
+        item_type=item_type,
+        only_positive=only_positive,
+    )
+
+
+@main_bp.route('/inventory/receipts')
+@role_required('director')
+def inventory_receipts_list():
+    operations = (
+        InventoryOperation.query.filter_by(operation_type='receipt', status='posted')
+        .order_by(InventoryOperation.posted_at.desc(), InventoryOperation.id.desc())
+        .limit(80)
+        .all()
+    )
+    return render_template('inventory_receipts_list.html', operations=operations)
+
+
+@main_bp.route('/inventory/receipts/new', methods=['GET', 'POST'])
+@role_required('director')
+def inventory_receipt_create():
+    form = InventoryReceiptForm()
+    form.warehouse_id.choices = _inventory_warehouse_choices()
+    selected_warehouse_id = form.warehouse_id.data or request.args.get('warehouse_id', type=int)
+    if request.method == 'GET' and not selected_warehouse_id:
+        production_ids = production_warehouse_ids()
+        if production_ids:
+            selected_warehouse_id = production_ids[0]
+            form.warehouse_id.data = selected_warehouse_id
+    if request.method == 'POST':
+        selected_warehouse_id = request.form.get('warehouse_id', type=int) or selected_warehouse_id
+    form.storage_area_id.choices = _inventory_storage_area_choices(selected_warehouse_id)
+    receipt_items = _inventory_receipt_items()
+
+    if form.validate_on_submit():
+        warehouse_id = form.warehouse_id.data
+        storage_area_id = form.storage_area_id.data or None
+        if storage_area_id == 0:
+            storage_area_id = None
+        receipt_lines = _parse_inventory_receipt_lines()
+        if not receipt_lines:
+            flash('Добавьте хотя бы одну позицию с количеством больше нуля.', 'danger')
+        else:
+            idem_key, duplicate = _reserve_idempotency_key()
+            if duplicate:
+                return _duplicate_redirect(idem_key, url_for('main.inventory_balances_list', warehouse_id=warehouse_id))
+            try:
+                operation = apply_inventory_receipt(
+                    warehouse_id=warehouse_id,
+                    storage_area_id=storage_area_id,
+                    lines=receipt_lines,
+                    created_by_user_id=current_user.id,
+                    document_ref=(form.document_ref.data or '').strip() or None,
+                    comment=(form.comment.data or '').strip() or None,
+                )
+                _finish_idempotency(idem_key, 'InventoryOperation', operation.id)
+                db.session.commit()
+                flash(f'Приход ТМЦ проведён (#{operation.id}), позиций: {len(receipt_lines)}.', 'success')
+                return redirect(url_for('main.inventory_balances_list', warehouse_id=warehouse_id))
+            except ValueError as exc:
+                db.session.rollback()
+                flash(str(exc), 'danger')
+            except Exception:
+                db.session.rollback()
+                flash('Не удалось провести приход. Проверьте данные и повторите.', 'danger')
+
+    return render_template(
+        'inventory_receipt_form.html',
+        form=form,
+        receipt_items=receipt_items,
+        title='Приход ТМЦ',
+    )
+
+
+@main_bp.route('/inventory/receipts/<int:operation_id>')
+@role_required('director', 'manager', 'production')
+def inventory_receipt_detail(operation_id):
+    operation = InventoryOperation.query.filter_by(
+        id=operation_id,
+        operation_type='receipt',
+    ).first_or_404()
+    lines = operation.lines.order_by(InventoryOperationLine.id.asc()).all()
+    return render_template(
+        'inventory_receipt_detail.html',
+        operation=operation,
+        lines=lines,
+    )
+
+
 @main_bp.route('/production/workspace')
 @role_required('production', 'director', 'manager')
 def production_workspace():
@@ -11812,19 +12063,37 @@ def production_workspace():
     frame_rows = [{'label': label, 'quantity': qty} for label, qty in sorted(frame_groups.items())]
 
     lines = []
-    if active_tab == 'in_work':
-        lines = base_query.filter(ProductionRequestLine.status.in_(['in_production', 'partial_ready'])).order_by(ProductionRequest.created_at.asc(), ProductionRequestLine.id.asc()).all()
+    material_balances = []
+    material_balance_groups = []
+    if active_tab == 'materials':
+        prod_wh_ids = production_warehouse_ids()
+        if prod_wh_ids:
+            for wh_id in prod_wh_ids:
+                ensure_storage_areas_for_warehouse(wh_id)
+            material_balances = (
+                inventory_balances_query(warehouse_id=None, only_positive=True, tmz_only=True)
+                .filter(InventoryBalance.warehouse_id.in_(prod_wh_ids))
+                .all()
+            )
+        material_balance_groups = group_inventory_balances(material_balances)
+    elif active_tab == 'in_work':
+        lines = base_query.filter(
+            ProductionRequestLine.status.in_(['in_production', 'partial_ready'])
+        ).all()
+        lines = sorted(lines, key=_production_line_sort_key)
     elif active_tab == 'overdue':
         lines = base_query.filter(
             ~ProductionRequestLine.status.in_(['ready', 'closed', 'cancelled', 'CANCELLED']),
             SupplyNeed.required_by.isnot(None),
             SupplyNeed.required_by < date.today(),
-        ).order_by(SupplyNeed.required_by.asc(), ProductionRequestLine.id.asc()).all()
-    elif active_tab == 'materials':
-        lines = sorted(open_lines, key=lambda row: (row.supply_need.required_by if row.supply_need and row.supply_need.required_by else date.max, row.id))
+        ).all()
+        lines = sorted(lines, key=_production_line_sort_key)
     elif active_tab not in ('done_today', 'history', 'warehouses', 'frames'):
         active_tab = 'todo'
-        lines = base_query.filter(ProductionRequestLine.status.in_(['planned', 'PLANNED', 'draft', 'DRAFT', 'waiting_production'])).order_by(ProductionRequest.created_at.asc(), ProductionRequestLine.id.asc()).all()
+        lines = base_query.filter(
+            ProductionRequestLine.status.in_(['planned', 'PLANNED', 'draft', 'DRAFT', 'waiting_production'])
+        ).all()
+        lines = sorted(lines, key=_production_line_sort_key)
 
     today_units = (
         ProducedUnit.query
@@ -11846,6 +12115,8 @@ def production_workspace():
         warehouse_rows=warehouse_rows,
         frame_rows=frame_rows,
         active_tab=active_tab,
+        material_balances=material_balances,
+        material_balance_groups=material_balance_groups,
     )
 
 
@@ -11880,6 +12151,22 @@ def production_line_produce_one(line_id):
     if line.produced_qty >= line.quantity:
         flash('По этой позиции уже выпущено нужное количество', 'warning')
         return redirect(url_for('main.production_workspace', tab='in_work'))
+
+    finished_wh_id = line.production_request.target_warehouse_id if line.production_request else None
+    material_wh_id = resolve_material_warehouse_id(finished_wh_id)
+    if line.item_id and get_active_bom(line.item_id):
+        if not material_wh_id:
+            flash('Не найден производственный склад филиала для списания материалов.', 'danger')
+            return redirect(url_for('main.production_workspace', tab='in_work'))
+        shortages = check_bom_shortages(
+            finished_item_id=line.item_id,
+            material_warehouse_id=material_wh_id,
+            units_count=1,
+        )
+        if shortages:
+            flash(str(InsufficientInventoryError(shortages)), 'danger')
+            return redirect(url_for('main.production_workspace', tab='in_work'))
+
     idem_key, duplicate = _reserve_idempotency_key()
     if duplicate:
         return _duplicate_redirect(idem_key, url_for('main.production_workspace', tab='done_today'))
@@ -11903,6 +12190,20 @@ def production_line_produce_one(line_id):
     )
     db.session.add(produced_unit)
     db.session.flush()
+    consumption_op = None
+    try:
+        consumption_op = apply_production_consumption(
+            line=line,
+            produced_unit_id=produced_unit.id,
+            created_by_user_id=current_user.id,
+            units_count=1,
+        )
+    except (InsufficientInventoryError, ValueError) as exc:
+        if idem_key:
+            db.session.delete(idem_key)
+        db.session.rollback()
+        flash(str(exc), 'danger')
+        return redirect(url_for('main.production_workspace', tab='in_work'))
     _finish_idempotency(idem_key, 'ProducedUnit', produced_unit.id)
     if line.supply_need:
         line.supply_need.status = 'READY' if line.status == 'ready' else 'IN_PRODUCTION'
@@ -11911,8 +12212,89 @@ def production_line_produce_one(line_id):
             add_order_event(line.supply_need.order, 'produced_without_vin', new_value=line.item.article if line.item else line.item_id)
     _refresh_production_request_status(line.production_request)
     db.session.commit()
-    flash('Выпущена 1 единица без VIN.', 'success')
+    if consumption_op:
+        flash('Выпущена 1 единица без VIN. Материалы списаны со склада производства.', 'success')
+    elif line.item_id and not get_active_bom(line.item_id):
+        flash('Выпущена 1 единица без VIN. Спецификация (BOM) не задана — списание не выполнялось.', 'warning')
+    else:
+        flash('Выпущена 1 единица без VIN.', 'success')
     return redirect(url_for('main.production_workspace', tab='done_today'))
+
+
+@main_bp.route('/items/<int:item_id>/bom', methods=['GET', 'POST'])
+@role_required('director')
+def item_bom_edit(item_id):
+    item = Item.query.get_or_404(item_id)
+    if item.item_type != 'TRAILER':
+        flash('Спецификация задаётся только для модели прицепа (номенклатура TRAILER).', 'warning')
+        return redirect(url_for('main.items_list'))
+
+    bom = get_active_bom(item.id)
+    if not bom:
+        bom = ItemBillOfMaterials(
+            item_id=item.id,
+            version='default',
+            name=f'Сборка {item.article or item.name}',
+            is_active=True,
+        )
+        db.session.add(bom)
+        db.session.commit()
+
+    component_items = (
+        Item.query.filter(Item.is_active == True, Item.item_type == 'COMPONENT')
+        .order_by(Item.name.asc())
+        .all()
+    )
+
+    if request.method == 'POST':
+        ItemBillOfMaterialsLine.query.filter_by(bom_id=bom.id).delete()
+        component_ids = request.form.getlist('component_item_id')
+        quantities = request.form.getlist('quantity_per_unit')
+        required_indexes = set(request.form.getlist('is_required'))
+        for index, raw_component_id in enumerate(component_ids):
+            try:
+                component_id = int(raw_component_id or 0)
+            except (TypeError, ValueError):
+                continue
+            if component_id <= 0:
+                continue
+            component = Item.query.get(component_id)
+            if not component or component.item_type != 'COMPONENT':
+                continue
+            try:
+                qty = Decimal(str(quantities[index] if index < len(quantities) else 0))
+            except Exception:
+                continue
+            if qty <= 0:
+                continue
+            is_required = str(index) in required_indexes
+            db.session.add(
+                ItemBillOfMaterialsLine(
+                    bom_id=bom.id,
+                    component_item_id=component.id,
+                    quantity_per_unit=qty,
+                    unit=normalize_unit(component.unit),
+                    is_required=is_required,
+                    sort_order=(index + 1) * 10,
+                    is_active=True,
+                )
+            )
+        db.session.commit()
+        flash('Спецификация сохранена.', 'success')
+        return redirect(url_for('main.item_bom_edit', item_id=item.id))
+
+    bom_lines = (
+        ItemBillOfMaterialsLine.query.filter_by(bom_id=bom.id, is_active=True)
+        .order_by(ItemBillOfMaterialsLine.sort_order.asc(), ItemBillOfMaterialsLine.id.asc())
+        .all()
+    )
+    return render_template(
+        'item_bom.html',
+        item=item,
+        bom=bom,
+        bom_lines=bom_lines,
+        component_items=component_items,
+    )
 
 
 @main_bp.route('/production/lines/<int:line_id>/comment', methods=['POST'])

@@ -1,0 +1,128 @@
+{% extends 'base.html' %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<div class="app-card p-4">
+  <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+    <div>
+      <h1 class="h4 mb-1">{{ title }}</h1>
+      <p class="text-muted mb-0">Количество в единице номенклатуры. Зона — физический участок склада (металл, сборка), не тип ТМЦ.</p>
+    </div>
+    <a class="btn btn-soft" href="{{ url_for('main.inventory_balances_list') }}">Остатки</a>
+  </div>
+
+  <form method="post" id="inventoryReceiptForm">
+    {{ form.hidden_tag() }}
+    <div class="row g-3 mb-3">
+      <div class="col-md-5">
+        {{ form.warehouse_id.label(class="form-label") }}
+        {{ form.warehouse_id(class="form-select", id="receiptWarehouse") }}
+      </div>
+      <div class="col-md-5">
+        {{ form.storage_area_id.label(class="form-label") }}
+        {{ form.storage_area_id(class="form-select", id="receiptStorageArea") }}
+      </div>
+      <div class="col-md-5">
+        {{ form.document_ref.label(class="form-label") }}
+        {{ form.document_ref(class="form-control") }}
+      </div>
+      <div class="col-12">
+        {{ form.comment.label(class="form-label") }}
+        {{ form.comment(class="form-control", rows=2) }}
+      </div>
+    </div>
+
+    <h2 class="h6">Позиции</h2>
+    <div class="table-responsive mb-3">
+      <table class="table table-sm align-middle" id="receiptLinesTable">
+        <thead>
+          <tr>
+            <th style="min-width:280px">Номенклатура</th>
+            <th style="width:110px">Ед.</th>
+            <th style="width:130px">Количество</th>
+            <th>Комментарий</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for i in range(5) %}
+          <tr class="receipt-line-row">
+            <td>
+              <select name="line_item_id" class="form-select form-select-sm receipt-item-select">
+                <option value="" data-unit="шт">— не выбрано —</option>
+                {% for item in receipt_items %}
+                  <option value="{{ item.id }}" data-unit="{{ item.unit|default('шт') }}">{{ item.article or '—' }} — {{ item.name }}</option>
+                {% endfor %}
+              </select>
+            </td>
+            <td>
+              <input type="hidden" name="line_unit" class="receipt-unit-input" value="">
+              <span class="badge text-bg-light receipt-unit-label">—</span>
+            </td>
+            <td>
+              <input type="number" name="line_quantity" class="form-control form-control-sm receipt-qty-input" min="0" step="1" placeholder="0">
+            </td>
+            <td><input type="text" name="line_comment" class="form-control form-control-sm" placeholder="Необязательно"></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <button type="button" class="btn btn-soft btn-sm mb-3" id="addReceiptLine">+ строка</button>
+    {{ form.submit(class="btn btn-orange") }}
+  </form>
+</div>
+
+<script>
+(function () {
+  const unitSteps = { 'шт': '1', 'компл': '1', 'упак': '1', 'кг': '0.001', 'т': '0.001', 'м': '0.001', 'м²': '0.001', 'м³': '0.001', 'л': '0.001' };
+
+  function applyRowUnit(row) {
+    const select = row.querySelector('.receipt-item-select');
+    const unitInput = row.querySelector('.receipt-unit-input');
+    const unitLabel = row.querySelector('.receipt-unit-label');
+    const qtyInput = row.querySelector('.receipt-qty-input');
+    if (!select || !unitInput || !unitLabel || !qtyInput) return;
+    const option = select.options[select.selectedIndex];
+    const unit = option ? (option.getAttribute('data-unit') || 'шт') : 'шт';
+    unitInput.value = unit;
+    unitLabel.textContent = unit;
+    qtyInput.step = unitSteps[unit] || '0.001';
+  }
+
+  function bindRow(row) {
+    const select = row.querySelector('.receipt-item-select');
+    if (!select) return;
+    select.addEventListener('change', function () { applyRowUnit(row); });
+    applyRowUnit(row);
+  }
+
+  document.querySelectorAll('.receipt-line-row').forEach(bindRow);
+
+  const warehouseSelect = document.getElementById('receiptWarehouse');
+  if (warehouseSelect) {
+    warehouseSelect.addEventListener('change', function () {
+      const id = this.value;
+      if (id) {
+        window.location.href = '{{ url_for("main.inventory_receipt_create") }}?warehouse_id=' + encodeURIComponent(id);
+      }
+    });
+  }
+
+  const tableBody = document.querySelector('#receiptLinesTable tbody');
+  const addBtn = document.getElementById('addReceiptLine');
+  if (addBtn && tableBody) {
+    addBtn.addEventListener('click', function () {
+      const template = tableBody.querySelector('.receipt-line-row');
+      if (!template) return;
+      const clone = template.cloneNode(true);
+      clone.querySelectorAll('select, input').forEach(function (el) {
+        if (el.type !== 'hidden') el.value = '';
+        else el.value = '';
+      });
+      clone.querySelector('.receipt-unit-label').textContent = '—';
+      tableBody.appendChild(clone);
+      bindRow(clone);
+    });
+  }
+})();
+</script>
+{% endblock %}

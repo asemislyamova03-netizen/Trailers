@@ -4,6 +4,15 @@
 
 Дата: 2026-06-01
 Проект: trailers
+Модуль: учёт ТМЦ / производство
+Что сделано: приход и остатки ТМЦ (`inventory_service.py`, `/inventory/balances`, `/inventory/receipts/new`); зоны METAL/COMPONENTS/SEMI_FINISHED и др.; производство — приоритет оплаченных заказов, вкладка «Материалы» = остатки; меню: приход/остатки (админ/директор), пополнение склада у менеджера.
+Какие файлы: `inventory_service.py`, `views.py`, `forms.py`, `templates/inventory_*.html`, `templates/production_workspace.html`, `templates/base.html`, `docs/planning/*`.
+Следующий шаг: deploy; первый приход металла; завести COMPONENT в номенклатуре.
+
+---
+
+Дата: 2026-06-01
+Проект: trailers
 Модуль: multi-line / VIN / производство / оплата
 Что сделано: VIN в шапке/договорах по всем строкам; откат реализации восстанавливает `RESERVED`/`IN_STOCK`. Построчно: закрепление выпуска без VIN и готового VIN с производственного склада (`order_line_attach_*`), кнопки в карточке позиции. Legacy order-level резерв/производство скрыт при нескольких строках. Оплата `CONFIRMED` создаёт `SupplyNeed` по каждой производственной строке. Подбор прицепа не зеркалит `trailer_id` в шапку при 2+ строках. `_ensure_item_matches_order` учитывает item_id всех строк.
 Какие файлы: `views.py`, `templates/order_detail.html`, `docs/planning/*`.

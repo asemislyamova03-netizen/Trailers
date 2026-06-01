@@ -1,0 +1,81 @@
+{% extends 'base.html' %}
+{% block title %}Остатки ТМЦ{% endblock %}
+{% block content %}
+<div class="compact-page-header">
+  <div>
+    <h1>Остатки ТМЦ</h1>
+    <div class="text-muted small">Комплектующие, металл и заготовки. Готовые прицепы — в разделе «Прицепы», не здесь.</div>
+  </div>
+  {% if current_user.is_admin or current_user.is_director %}
+  <a href="{{ url_for('main.inventory_receipt_create', warehouse_id=warehouse_id) }}" class="btn btn-orange btn-sm"><i class="bi bi-box-arrow-in-down me-1"></i>Приход</a>
+  {% endif %}
+</div>
+
+<form method="get" class="app-card p-3 mb-3">
+  <div class="row g-2 align-items-end">
+    <div class="col-md-5">
+      <label class="form-label">Склад / филиал (производство)</label>
+      <select name="warehouse_id" class="form-select" onchange="this.form.submit()">
+        <option value="">— все производственные —</option>
+        {% for w in warehouses %}
+          {% if w.is_production or w.warehouse_kind in ['production', 'assembly', 'raw_materials'] %}
+          <option value="{{ w.id }}" {% if warehouse_id == w.id %}selected{% endif %}>{{ w.name }}</option>
+          {% endif %}
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Участок (физическая зона)</label>
+      <select name="storage_area_id" class="form-select" onchange="this.form.submit()">
+        <option value="">— все —</option>
+        {% for area in storage_areas %}
+          <option value="{{ area.id }}" {% if storage_area_id == area.id %}selected{% endif %}>{{ area.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-3">
+      <div class="form-check mt-4">
+        <input class="form-check-input" type="checkbox" name="only_positive" value="1" id="onlyPositive" {% if only_positive %}checked{% endif %} onchange="this.form.submit()">
+        <label class="form-check-label" for="onlyPositive">Только &gt; 0</label>
+      </div>
+    </div>
+  </div>
+</form>
+
+{% for group in balance_groups %}
+<div class="app-card mb-3">
+  <div class="px-3 pt-3 pb-1 fw-semibold">{{ group.label }}</div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Склад</th>
+          <th>Участок</th>
+          <th>Артикул</th>
+          <th>Наименование</th>
+          <th class="text-end">Остаток</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for row in group.rows %}
+        <tr>
+          <td>{{ row.warehouse.name if row.warehouse else '—' }}</td>
+          <td>{{ row.storage_area.name if row.storage_area else '—' }}</td>
+          <td class="fw-semibold">{{ row.item.article if row.item else '' }}</td>
+          <td>{{ row.item.name if row.item else '' }}</td>
+          <td class="text-end fw-semibold">{{ row.quantity|inventory_qty(row.unit or (row.item.unit if row.item else 'шт')) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="app-card p-3 text-muted">
+  Остатков нет.
+  {% if current_user.is_admin or current_user.is_director %}
+  <a href="{{ url_for('main.inventory_receipt_create') }}">Провести приход</a>
+  {% endif %}
+</div>
+{% endfor %}
+{% endblock %}

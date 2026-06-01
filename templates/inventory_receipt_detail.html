@@ -1,0 +1,44 @@
+{% extends 'base.html' %}
+{% block title %}Приход #{{ operation.id }}{% endblock %}
+{% block content %}
+<div class="compact-page-header">
+  <div>
+    <h1>Приход ТМЦ #{{ operation.id }}</h1>
+    <div class="text-muted small">
+      {{ (operation.posted_at or operation.created_at)|date_format }}
+      · {{ operation.target_warehouse.name if operation.target_warehouse else '—' }}
+      {% if operation.target_area %}· {{ operation.target_area.name }}{% endif %}
+    </div>
+  </div>
+  <a href="{{ url_for('main.inventory_receipts_list') }}" class="btn btn-soft btn-sm">К списку</a>
+</div>
+
+{% if operation.comment %}
+<div class="app-card p-3 mb-3 small text-muted">{{ operation.comment }}</div>
+{% endif %}
+
+<div class="app-card">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Артикул</th>
+          <th>Наименование</th>
+          <th class="text-end">Количество</th>
+          <th>Комментарий</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for line in lines %}
+        <tr>
+          <td class="fw-semibold">{{ line.item.article if line.item else '' }}</td>
+          <td>{{ line.item.name if line.item else '' }}</td>
+          <td class="text-end fw-semibold">{{ line.quantity|inventory_qty(line.unit) }}</td>
+          <td class="small text-muted">{{ line.comment or '' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

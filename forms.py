@@ -8,6 +8,7 @@ from wtforms import (
 from wtforms.validators import DataRequired, Optional, Length, NumberRange, Email, input_required
 from wtforms import ValidationError
 from models import SalesContract, CustomerOrder
+from inventory_units import inventory_unit_choices
 
 
 class IdempotentFlaskForm(FlaskForm):
@@ -94,6 +95,10 @@ class WarehouseForm(IdempotentFlaskForm):
 # -------- Номенклатура (прицепы + комплектующие) --------
 
 class ItemForm(IdempotentFlaskForm):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.unit.choices = inventory_unit_choices()
+
     item_type = SelectField(
         'Тип позиции',
         choices=[
@@ -105,6 +110,7 @@ class ItemForm(IdempotentFlaskForm):
     product_category_id = SelectField('Категория номенклатуры', coerce=int, validators=[Optional()])
     is_sellable = BooleanField('Можно продавать отдельно', default=True)
     requires_vin = BooleanField('Требует VIN', default=False)
+    is_internal_bom_item = BooleanField('Полуфабрикат / заготовка (учёт ТМЦ)', default=False)
     article = StringField(
         'Артикул',
         validators=[Optional(), Length(max=64)]
@@ -163,10 +169,11 @@ class ItemForm(IdempotentFlaskForm):
         places=2,
         validators=[Optional(), NumberRange(min=0)]
     )
-    unit = StringField(
+    unit = SelectField(
         'Ед. изм.',
+        choices=[],
         default='шт',
-        validators=[Optional(), Length(max=16)]
+        validators=[DataRequired()],
     )
 
     is_active = BooleanField('Активен', default=True)
@@ -819,3 +826,11 @@ class StockMovementBatchForm(IdempotentFlaskForm):
     arrival_date = DateField('Ожидаемое прибытие', format='%Y-%m-%d', validators=[Optional()])
     note = TextAreaField('Комментарий', validators=[Optional()])
     submit = SubmitField('Создать партию')
+
+
+class InventoryReceiptForm(IdempotentFlaskForm):
+    warehouse_id = SelectField('Склад', coerce=int, validators=[DataRequired()])
+    storage_area_id = SelectField('Зона хранения', coerce=int, validators=[Optional()])
+    document_ref = StringField('Накладная / документ', validators=[Optional(), Length(max=120)])
+    comment = TextAreaField('Комментарий', validators=[Optional()])
+    submit = SubmitField('Провести приход')

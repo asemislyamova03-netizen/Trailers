@@ -16,6 +16,7 @@
             <th>Категория</th>
             <th>Артикул</th>
             <th>Наименование</th>
+            <th>Ед.</th>
             <th>Оси</th>
             <th>Размеры габаритные</th>
             <th>Размеры кузова</th>
@@ -32,6 +33,7 @@
             <td>{{ i.product_category.name if i.product_category else '' }}</td>
             <td>{{ i.article or '' }}</td>
             <td>{{ i.name }}</td>
+            <td>{{ i.unit or 'шт' }}</td>
             <td>{{ i.axle_count or '' }}</td>
             <td>{{ i.size_external or '' }}</td>
             <td>{{ i.size_body or '' }}</td>
@@ -43,7 +45,10 @@
                     <span class="badge bg-secondary">Нет</span>
                 {% endif %}
             </td>
-            <td>
+            <td class="text-nowrap">
+                {% if i.item_type == 'TRAILER' %}
+                <a href="{{ url_for('main.item_bom_edit', item_id=i.id) }}" class="btn btn-sm btn-outline-secondary">BOM</a>
+                {% endif %}
                 <a href="{{ url_for('main.item_edit', item_id=i.id) }}"
                    class="btn btn-sm btn-outline-primary">Изменить</a>
                 <a href="{{ url_for('main.item_delete', item_id=i.id) }}"

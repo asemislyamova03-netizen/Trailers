@@ -72,19 +72,55 @@
     </table>
   </div>
 </div>
+{% elif active_tab == 'materials' %}
+<div class="app-card">
+  <div class="px-3 pt-3 text-muted small">Только ТМЦ (не прицепы). При выпуске (+1) материалы списываются по спецификации (BOM) с производственного склада филиала.</div>
+  {% for group in material_balance_groups %}
+  <div class="px-3 pt-2 fw-semibold small text-uppercase text-muted">{{ group.label }}</div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-2">
+      <thead><tr><th>Склад</th><th>Участок</th><th>Артикул</th><th>Наименование</th><th class="text-end">Остаток</th></tr></thead>
+      <tbody>
+      {% for row in group.rows %}
+        <tr>
+          <td>{{ row.warehouse.name if row.warehouse else '' }}</td>
+          <td>{{ row.storage_area.name if row.storage_area else '—' }}</td>
+          <td class="fw-semibold">{{ row.item.article if row.item else '' }}</td>
+          <td>{{ row.item.name if row.item else '' }}</td>
+          <td class="text-end fw-semibold">{{ row.quantity|inventory_qty(row.unit or (row.item.unit if row.item else 'шт')) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="p-3 text-muted">Остатков нет — проведите приход ТМЦ</div>
+  {% endfor %}
+</div>
 {% else %}
 <div class="app-card">
-  {% if active_tab == 'materials' %}
-  <div class="px-3 pt-3 text-muted small">Показываются активные задания, по которым нужно обеспечить материалы. Списание по BOM будет отдельным этапом после приёмки Итерации 1.</div>
+  {% if active_tab == 'todo' %}
+  <div class="px-3 pt-3 text-muted small">Сверху — оплаченные клиентские заказы, затем остальные клиентские, пополнение склада.</div>
   {% endif %}
   <div class="table-responsive">
     <table class="table table-sm align-middle mb-0">
-      <thead><tr><th>Задание</th><th>Модель</th><th>Склад</th><th>Срок</th><th>Выпуск</th><th>VIN</th><th>Статус</th><th class="text-end">Действия</th></tr></thead>
+      <thead><tr><th>Приоритет</th><th>Задание</th><th>Модель</th><th>Склад</th><th>Срок</th><th>Выпуск</th><th>VIN</th><th>Статус</th><th class="text-end">Действия</th></tr></thead>
       <tbody>
       {% for line in lines %}
         {% set vin_row = production_vin_row_for_line(line) %}
         {% set config_parts = production_config_summary(line) %}
         <tr>
+          <td>
+            {% if line.supply_need and line.supply_need.need_type == 'CUSTOMER_ORDER' and line.supply_need.order and line.supply_need.order.remaining_amount <= 0 and line.supply_need.order.total_amount > 0 %}
+              <span class="badge text-bg-danger">Оплачен</span>
+            {% elif line.supply_need and line.supply_need.need_type == 'CUSTOMER_ORDER' %}
+              <span class="badge text-bg-warning">Клиент</span>
+            {% elif line.supply_need and line.supply_need.need_type == 'STOCK_REPLENISHMENT' %}
+              <span class="badge text-bg-secondary">Склад</span>
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
           <td>
             <div class="fw-semibold">{{ line.production_request.request_number }}</div>
             <div class="small text-muted">#{{ line.id }}</div>
@@ -118,7 +154,7 @@
           </td>
         </tr>
         <tr class="collapse" id="productionComment{{ line.id }}">
-          <td colspan="8">
+          <td colspan="9">
             <div class="small mb-2">
               {% if line.production_request.note %}<div><strong>Заявка:</strong> {{ line.production_request.note }}</div>{% endif %}
               {% if line.note %}<div><strong>Позиция:</strong> {{ line.note }}</div>{% endif %}
@@ -133,7 +169,7 @@
           </td>
         </tr>
       {% else %}
-        <tr><td colspan="8" class="text-muted p-3">Производственных заданий нет</td></tr>
+        <tr><td colspan="9" class="text-muted p-3">Производственных заданий нет</td></tr>
       {% endfor %}
       </tbody>
     </table>
