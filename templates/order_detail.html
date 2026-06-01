@@ -270,6 +270,27 @@
                   </div>
                   {% endif %}
 
+                  {% if row.can_reserve_vin %}
+                  <div class="border-top pt-2">
+                    <div class="small fw-semibold mb-1">Зарезервировать новый VIN (логист / директор)</div>
+                    <form method="post" action="{{ url_for('main.order_line_reserve_vin', order_id=order.id, line_id=line.id) }}" class="row g-2 align-items-end">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <div class="col-md-2">
+                        <label class="form-label small mb-1">Код года</label>
+                        <input class="form-control form-control-sm" name="year_code" maxlength="1" required placeholder="T">
+                      </div>
+                      <div class="col-md-5">
+                        <label class="form-label small mb-1">Комментарий</label>
+                        <input class="form-control form-control-sm" name="comment" placeholder="Необязательно">
+                      </div>
+                      <div class="col-md-3">
+                        <div class="small text-muted mb-1">Модификация {{ row.line_vin_modification or '—' }}</div>
+                        <button class="btn btn-sm btn-outline-secondary w-100">Зарезервировать VIN (осталось {{ row.vin_capacity_left }})</button>
+                      </div>
+                    </form>
+                  </div>
+                  {% endif %}
+
                   {% if row.can_change_source %}
                     {% if (line.fulfillment_source or '') == 'production' %}
                     <form method="post" action="{{ url_for('main.order_line_source_to_stock', order_id=order.id, line_id=line.id) }}" class="row g-2 align-items-end border-top pt-2">

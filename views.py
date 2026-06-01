@@ -3961,11 +3961,24 @@ def _next_number(prefix: str, model, attr: str) -> str:
     return f"{prefix}-{next_id:06d}"
 
 
-def _refresh_order_status(order: CustomerOrder) -> None:
-    paid = order.confirmed_paid_amount
-    price = float(order.price or 0)
-    required_prepayment = price * float(order.prepayment_percent or 0) / 100
+def _order_status_from_deal_code(code: str) -> str | None:
+    return {
+        'new': 'waiting_payment',
+        'waiting_vin': 'produced_waiting_vin',
+        'waiting_vin_confirm': 'produced_waiting_vin',
+        'waiting_kit': 'waiting_production',
+        'waiting_payment': 'waiting_payment',
+        'waiting_contract': 'confirmed',
+        'waiting_docs': 'confirmed',
+        'waiting_realization': 'sold_not_shipped',
+        'waiting_movement': 'waiting_transfer',
+        'ready_to_ship': 'ready_to_ship',
+        'shipped': 'shipped',
+        'problem': 'cancelled',
+    }.get(code or '')
 
+
+def _refresh_order_status(order: CustomerOrder) -> None:
     if order.status == 'cancelled':
         return
 
@@ -3976,6 +3989,16 @@ def _refresh_order_status(order: CustomerOrder) -> None:
     if order.documents_issued:
         order.status = 'sold_not_shipped'
         return
+
+    if order.id and order.lines.count() > 0:
+        mapped = _order_status_from_deal_code(_order_list_filter_state(order)['code'])
+        if mapped:
+            order.status = mapped
+        return
+
+    paid = order.confirmed_paid_amount
+    price = float(order.price or 0)
+    required_prepayment = price * float(order.prepayment_percent or 0) / 100
 
     if price > 0 and paid >= price and order.trailer_id:
         if order.trailer and order.warehouse_id and order.trailer.warehouse_id == order.warehouse_id:
@@ -4869,13 +4892,16 @@ def _sync_order_totals_from_lines(order: CustomerOrder) -> None:
     order.quantity = sum(line.quantity or 0 for line in lines) or 1
     totals = [line.total_price for line in lines if line.total_price is not None]
     order.price = sum(totals) if totals else None
-    first_line = lines[0]
-    order.item_id = first_line.item_id
-    order.fulfillment_source = first_line.fulfillment_source
-    first_reservation = next((row for row in first_line.reservations if row.status == 'ACTIVE'), None)
-    if first_reservation and first_reservation.trailer_id:
-        order.trailer_id = first_reservation.trailer_id
-        order.source_warehouse_id = first_reservation.trailer.warehouse_id if first_reservation.trailer else order.source_warehouse_id
+    if len(lines) == 1:
+        first_line = lines[0]
+        order.item_id = first_line.item_id
+        order.fulfillment_source = first_line.fulfillment_source
+        first_reservation = next((row for row in first_line.reservations if row.status == 'ACTIVE'), None)
+        if first_reservation and first_reservation.trailer_id:
+            order.trailer_id = first_reservation.trailer_id
+            order.source_warehouse_id = (
+                first_reservation.trailer.warehouse_id if first_reservation.trailer else order.source_warehouse_id
+            )
 
 
 def _next_order_line_no(order: CustomerOrder) -> int:
@@ -5988,6 +6014,77 @@ def _free_vin_row_for_reservation() -> VinRegistry:
     db.session.add(row)
     db.session.flush()
     _add_vin_event(row, 'created', None, 'free', comment='Автоматически сгенерирован serial7')
+    return row
+
+
+def _allocate_vin_row_for_reservation(max_attempts: int = 8) -> VinRegistry:
+    last_error: Exception | None = None
+    for _ in range(max_attempts):
+        try:
+            with db.session.begin_nested():
+                row = _free_vin_row_for_reservation()
+            return row
+        except IntegrityError as exc:
+            last_error = exc
+    if last_error:
+        raise last_error
+    raise RuntimeError('Не удалось зарезервировать serial7 для VIN.')
+
+
+def _active_supply_need_for_order_line(order_line_id: int | None):
+    if not order_line_id:
+        return None
+    return (
+        SupplyNeed.query
+        .filter(
+            SupplyNeed.order_line_id == order_line_id,
+            SupplyNeed.status.notin_(('CANCELLED', 'cancelled', 'DONE', 'done', 'closed', 'void')),
+        )
+        .order_by(SupplyNeed.created_at.desc(), SupplyNeed.id.desc())
+        .first()
+    )
+
+
+def _reserve_vin_for_order_line(
+    order: CustomerOrder,
+    order_line: CustomerOrderLine,
+    year_code: str,
+    comment: str | None = None,
+) -> VinRegistry:
+    if order_line.line_type != 'TRAILER':
+        raise ValueError('VIN можно резервировать только для позиции техники.')
+    if order_line.order_id != order.id:
+        raise ValueError('Позиция не принадлежит этому заказу.')
+    if _order_line_vin_capacity_left(order_line) <= 0:
+        raise ValueError(
+            f'По позиции #{order_line.line_no} уже достаточно VIN: '
+            f'{_active_vin_registry_count_for_order_line(order_line.id)}/{order_line.quantity or 1}.'
+        )
+    modification = _order_line_vin_modification_code(order_line, order)
+    if not modification:
+        raise ValueError(
+            f'По позиции #{order_line.line_no} нет VIN-модификации. Сохраните конфигурацию или потребность в производство.'
+        )
+    row = _allocate_vin_row_for_reservation()
+    old_status = row.status
+    row.prefix = 'MX4'
+    row.vin_modification_code = modification
+    row.year_code = year_code
+    row.vin_full = f'{row.prefix}{modification}{year_code}{row.serial7}'
+    row.status = 'reserved'
+    row.customer_order_id = order.id
+    row.order_line_id = order_line.id
+    active_need = _active_supply_need_for_order_line(order_line.id) or _active_supply_need_for_order(order.id)
+    row.supply_need_id = active_need.id if active_need else None
+    row.reserved_by_user_id = current_user.id
+    row.reserved_at = datetime.utcnow()
+    row.source = row.source or 'order_reservation'
+    if comment:
+        row.comment = comment
+    order.reserved_vin_registry_id = row.id
+    order_line.vin_registry_id = row.id
+    _set_line_source_state(order_line, order_line.fulfillment_source or 'stock', 'reserved')
+    _add_vin_event(row, 'reserved', old_status, row.status, comment=row.comment)
     return row
 
 
@@ -8213,6 +8310,16 @@ def order_detail(order_id):
             )
             if not vin_link_candidates and not can_create_vin_from_trailer and line.trailer and line.trailer.vin:
                 vin_link_message = 'По прицепу строки нет свободной активной записи VIN-реестра.'
+        can_reserve_vin = bool(
+            (current_user.is_admin or current_user.is_director)
+            and line.line_type == 'TRAILER'
+            and vin_count < (line.quantity or 1)
+            and not order.documents_issued
+            and not order.is_shipped
+            and order.status != 'cancelled'
+            and not _line_has_any_realization(line)
+            and _order_line_vin_modification_code(line, order)
+        )
         order_line_rows.append({
             'line': line,
             'vin_rows': vin_rows,
@@ -8237,6 +8344,9 @@ def order_detail(order_id):
             'vin_link_candidates': vin_link_candidates,
             'can_create_vin_from_trailer': can_create_vin_from_trailer,
             'vin_link_message': vin_link_message,
+            'can_reserve_vin': can_reserve_vin,
+            'vin_capacity_left': max((line.quantity or 1) - vin_count, 0),
+            'line_vin_modification': _order_line_vin_modification_code(line, order),
         })
     add_line_stock_trailers = [
         trailer for trailer in (
@@ -10045,38 +10155,82 @@ def order_reserve_vin(order_id):
     if order.is_shipped or order.documents_issued or order.status in ('cancelled', 'canceled', 'closed', 'done'):
         flash('Нельзя зарезервировать VIN по закрытому или отгруженному заказу.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
-    if _active_vin_registry_for_order(order.id):
-        flash('По заказу уже есть активный VIN.', 'warning')
+    year_code = (request.form.get('year_code') or '').strip().upper()
+    if len(year_code) != 1:
+        flash('Укажите код года выпуска одним символом.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
-    modification = _order_vin_modification_code(order)
-    if not modification:
-        flash('В заказе нет VIN-модификации. Сначала сохраните конфигурацию.', 'danger')
+    line_id = request.form.get('order_line_id', type=int)
+    if line_id:
+        order_line = CustomerOrderLine.query.filter_by(id=line_id, order_id=order.id).first_or_404()
+    else:
+        order_line = _primary_order_line(order)
+        if not order_line:
+            flash('В заказе нет позиций для резерва VIN.', 'danger')
+            return redirect(url_for('main.order_detail', order_id=order.id))
+    try:
+        row = _reserve_vin_for_order_line(
+            order,
+            order_line,
+            year_code,
+            (request.form.get('comment') or '').strip() or None,
+        )
+    except ValueError as exc:
+        flash(str(exc), 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    except IntegrityError:
+        db.session.rollback()
+        flash('Не удалось зарезервировать VIN: конфликт serial7. Повторите попытку.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    add_order_event(
+        order,
+        'trailer_reserved',
+        new_value=row.vin_full,
+        comment=f'Зарезервирован VIN под позицию #{order_line.line_no}',
+    )
+    _refresh_order_status(order)
+    db.session.commit()
+    flash(f'VIN {row.vin_full} зарезервирован для позиции #{order_line.line_no}.', 'success')
+    return redirect(url_for('main.order_detail', order_id=order.id))
+
+
+@main_bp.route('/orders/<int:order_id>/lines/<int:line_id>/reserve-vin', methods=['POST'])
+@login_required
+def order_line_reserve_vin(order_id, line_id):
+    if not (current_user.is_admin or current_user.is_director):
+        abort(403)
+    order = CustomerOrder.query.get_or_404(order_id)
+    _ensure_can_access_order(order)
+    order_line = CustomerOrderLine.query.filter_by(id=line_id, order_id=order.id).first_or_404()
+    if order.is_shipped or order.documents_issued or order.status in ('cancelled', 'canceled', 'closed', 'done'):
+        flash('Нельзя зарезервировать VIN по закрытому или отгруженному заказу.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
     year_code = (request.form.get('year_code') or '').strip().upper()
     if len(year_code) != 1:
         flash('Укажите код года выпуска одним символом.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
-    row = _free_vin_row_for_reservation()
-    old_status = row.status
-    row.prefix = 'MX4'
-    row.vin_modification_code = modification
-    row.year_code = year_code
-    row.vin_full = f'{row.prefix}{modification}{year_code}{row.serial7}'
-    row.status = 'reserved'
-    row.customer_order_id = order.id
-    order_line = _primary_order_line(order)
-    row.order_line_id = order_line.id if order_line else None
-    active_need = _active_supply_need_for_order(order.id)
-    row.supply_need_id = active_need.id if active_need else (order.supply_needs.order_by(SupplyNeed.created_at.desc()).first().id if order.supply_needs.count() else None)
-    row.reserved_by_user_id = current_user.id
-    row.reserved_at = datetime.utcnow()
-    row.source = row.source or 'order_reservation'
-    row.comment = (request.form.get('comment') or '').strip() or row.comment
-    order.reserved_vin_registry_id = row.id
-    _add_vin_event(row, 'reserved', old_status, row.status, comment=row.comment)
-    add_order_event(order, 'trailer_reserved', new_value=row.vin_full, comment='Зарезервирован VIN под заказ')
+    try:
+        row = _reserve_vin_for_order_line(
+            order,
+            order_line,
+            year_code,
+            (request.form.get('comment') or '').strip() or None,
+        )
+    except ValueError as exc:
+        flash(str(exc), 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    except IntegrityError:
+        db.session.rollback()
+        flash('Не удалось зарезервировать VIN: конфликт serial7. Повторите попытку.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    add_order_event(
+        order,
+        'trailer_reserved',
+        new_value=row.vin_full,
+        comment=f'Зарезервирован VIN под позицию #{order_line.line_no}',
+    )
+    _refresh_order_status(order)
     db.session.commit()
-    flash(f'VIN {row.vin_full} зарезервирован под заказ.', 'success')
+    flash(f'VIN {row.vin_full} зарезервирован для позиции #{order_line.line_no}.', 'success')
     return redirect(url_for('main.order_detail', order_id=order.id))
 
 
