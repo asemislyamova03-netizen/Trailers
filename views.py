@@ -4810,12 +4810,7 @@ def _sync_order_line_workflow_links(line: CustomerOrderLine) -> None:
     line.production_request_line_id = active_production_line.id if active_production_line else None
     line.stock_movement_id = active_movement.id if active_movement else None
     line.vin_registry_id = active_vin.id if active_vin else None
-    if any(row.realization and row.realization.status == 'posted' for row in line.realization_lines):
-        line.realization_status = 'realized'
-    elif line.realization_lines:
-        line.realization_status = 'draft'
-    else:
-        line.realization_status = 'not_started'
+    line.realization_status = _order_line_realization_status(line)
     if (line.status or '').lower() == 'shipped':
         line.shipment_status = 'shipped'
     elif active_movement:
@@ -4839,12 +4834,7 @@ def _order_line_workflow_expected(line: CustomerOrderLine) -> dict:
         if (row.status or '').lower() in ('draft', 'sent', 'in_transit')
     ), None)
     active_vin = next((row for row in _active_vin_rows_for_order_line(line)), None)
-    if any(row.realization and row.realization.status == 'posted' for row in line.realization_lines):
-        realization_status = 'realized'
-    elif line.realization_lines:
-        realization_status = 'draft'
-    else:
-        realization_status = 'not_started'
+    realization_status = _order_line_realization_status(line)
     if (line.status or '').lower() == 'shipped':
         shipment_status = 'shipped'
     elif active_movement:
@@ -5081,7 +5071,6 @@ def _release_line_stock_links(line: CustomerOrderLine, reason: str) -> None:
             _free_reserved_vin_row(row, order, reason)
         else:
             _release_assigned_vin_from_order(row, order, reason)
-            row.order_line_id = None
 
     for row in line.reservations:
         if row.status == 'ACTIVE':
@@ -5239,7 +5228,6 @@ def _release_order_line_before_delete(line: CustomerOrderLine, user_id: int, rea
                 _free_reserved_vin_row(row, line.order, reason)
             else:
                 _release_assigned_vin_from_order(row, line.order, reason)
-        row.order_line_id = None
     for event in VinRegistryEvent.query.filter(VinRegistryEvent.order_line_id == line.id).all():
         event.order_line_id = None
     _sync_order_line_workflow_links(line)
@@ -5291,6 +5279,92 @@ def _order_lines_document_blockers(order: CustomerOrder) -> list[str]:
         if line.line_type == 'TRAILER' and vin_count < (line.quantity or 1):
             blockers.append(f'по позиции #{line.line_no} не хватает VIN: {vin_count}/{line.quantity or 1}')
     return blockers
+
+
+def _realization_create_blockers(order: CustomerOrder | None) -> list[str]:
+    """Минимальные проверки для черновика реализации (без документов/оплаты)."""
+    if not order:
+        return ['нет заказа']
+    blockers = []
+    if order.status == 'cancelled':
+        blockers.append('заказ отменён')
+    if order.is_shipped:
+        blockers.append('заказ уже отгружен')
+    if not _order_unrealized_lines_source(order):
+        blockers.append('нет непроведённых позиций для реализации')
+    return blockers
+
+
+def _realization_post_blockers(order: CustomerOrder | None) -> list[str]:
+    """Проведение — те же gate, что у выдачи документов."""
+    if not order:
+        return ['нет заказа']
+    blockers = list(_realization_create_blockers(order))
+    if not order.documents_issued:
+        blockers.append('документы не выданы')
+    blockers.extend(_order_lines_document_blockers(order))
+    if not SalesContract.query.filter_by(order_id=order.id).first():
+        blockers.append('нет договора')
+    if float(order.price or 0) <= 0:
+        blockers.append('сумма заказа должна быть больше 0')
+    if order.remaining_amount > 0:
+        blockers.append('заказ оплачен не полностью')
+    return blockers
+
+
+def _count_posted_trailer_realizations_for_line(
+    line: CustomerOrderLine,
+    exclude_realization_id: int | None = None,
+) -> int:
+    count = 0
+    for row in line.realization_lines:
+        if exclude_realization_id and row.realization_id == exclude_realization_id:
+            continue
+        if (
+            row.realization
+            and row.realization.status == 'posted'
+            and row.inventory_effect == 'trailer_unit'
+            and row.trailer_id
+        ):
+            count += 1
+    return count
+
+
+def _order_line_fully_realized(line: CustomerOrderLine, exclude_realization_id: int | None = None) -> bool:
+    if line.line_type != 'TRAILER':
+        return any(
+            row.realization
+            and row.realization.status == 'posted'
+            and (exclude_realization_id is None or row.realization_id != exclude_realization_id)
+            for row in line.realization_lines
+        )
+    required = int(line.quantity or 1)
+    return _count_posted_trailer_realizations_for_line(line, exclude_realization_id) >= required
+
+
+def _order_line_has_unrealized_trailer_units(line: CustomerOrderLine) -> bool:
+    if line.line_type != 'TRAILER':
+        return not _line_has_posted_realization(line)
+    required = int(line.quantity or 1)
+    return _count_posted_trailer_realizations_for_line(line) < required
+
+
+def _order_line_realization_status(line: CustomerOrderLine) -> str:
+    if line.line_type == 'TRAILER':
+        required = int(line.quantity or 1)
+        posted_count = _count_posted_trailer_realizations_for_line(line)
+        if posted_count >= required:
+            return 'realized'
+        if posted_count > 0:
+            return 'partial'
+        if line.realization_lines:
+            return 'draft'
+        return 'not_started'
+    if any(row.realization and row.realization.status == 'posted' for row in line.realization_lines):
+        return 'realized'
+    if line.realization_lines:
+        return 'draft'
+    return 'not_started'
 
 
 ORDER_LIST_FILTERS = [
@@ -5419,6 +5493,46 @@ def _order_line_can_ship(line: CustomerOrderLine) -> tuple[bool, str]:
     return True, ''
 
 
+def _infer_order_line_id_for_trailer(order_id: int | None, trailer_id: int | None) -> int | None:
+    if not order_id or not trailer_id:
+        return None
+    lines = (
+        CustomerOrderLine.query
+        .filter_by(order_id=order_id)
+        .order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc())
+        .all()
+    )
+    if not lines:
+        return None
+    matched: list[int] = []
+    for line in lines:
+        if line.trailer_id == trailer_id:
+            matched.append(line.id)
+            continue
+        if any(row.trailer_id == trailer_id and row.status == 'ACTIVE' for row in line.reservations):
+            matched.append(line.id)
+            continue
+        if any(row.trailer_id == trailer_id for row in _active_vin_rows_for_order_line(line)):
+            matched.append(line.id)
+    if len(matched) == 1:
+        return matched[0]
+    if len(lines) == 1:
+        return lines[0].id
+    return None
+
+
+def _link_stock_movement_to_order_line(movement: StockMovement) -> None:
+    if movement.order_line_id or not movement.order_id or not movement.trailer_id:
+        return
+    order_line_id = _infer_order_line_id_for_trailer(movement.order_id, movement.trailer_id)
+    if not order_line_id:
+        return
+    movement.order_line_id = order_line_id
+    line = CustomerOrderLine.query.get(order_line_id)
+    if line:
+        _sync_order_line_workflow_links(line)
+
+
 def _refresh_order_shipment_state(order: CustomerOrder) -> None:
     lines = order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()).all()
     if lines and all(line.status == 'shipped' for line in lines):
@@ -5440,18 +5554,21 @@ def _refresh_order_shipment_state(order: CustomerOrder) -> None:
 
 def _apply_realization_shipment_effect(realization: SalesRealization) -> None:
     order = realization.order
-    affected_lines = []
+    touched_order_lines: dict[int, CustomerOrderLine] = {}
     for line in realization.lines:
         if line.order_line:
-            _set_line_source_state(line.order_line, line.order_line.fulfillment_source, 'shipped')
-            _sync_order_line_workflow_links(line.order_line)
-            affected_lines.append(line.order_line)
-            for reservation in line.order_line.reservations:
-                if reservation.status == 'ACTIVE':
-                    reservation.status = 'CLOSED'
+            touched_order_lines[line.order_line.id] = line.order_line
         if line.inventory_effect == 'trailer_unit' and line.trailer:
             line.trailer.status = 'SOLD'
             line.trailer.lifecycle_status = 'customer_shipped'
+
+    for order_line in touched_order_lines.values():
+        if _order_line_fully_realized(order_line):
+            _set_line_source_state(order_line, order_line.fulfillment_source, 'shipped')
+            for reservation in order_line.reservations:
+                if reservation.status == 'ACTIVE':
+                    reservation.status = 'CLOSED'
+        _sync_order_line_workflow_links(order_line)
 
     if order:
         _refresh_order_shipment_state(order)
@@ -5462,17 +5579,22 @@ def _apply_realization_shipment_effect(realization: SalesRealization) -> None:
 
 def _revert_realization_shipment_effect(realization: SalesRealization) -> None:
     order = realization.order
+    touched_order_lines: dict[int, CustomerOrderLine] = {}
     for line in realization.lines:
-        if line.order_line and line.order_line.status == 'shipped':
-            _set_line_source_state(line.order_line, line.order_line.fulfillment_source, 'NEW')
         if line.order_line:
-            _sync_order_line_workflow_links(line.order_line)
+            touched_order_lines[line.order_line.id] = line.order_line
         if line.inventory_effect == 'trailer_unit' and line.trailer:
             line.trailer.status = 'RESERVED'
             line.trailer.lifecycle_status = 'reserved'
             for reservation in line.trailer.reservations:
                 if order and reservation.order_id == order.id and reservation.status == 'CLOSED':
                     reservation.status = 'ACTIVE'
+
+    for order_line in touched_order_lines.values():
+        still_fully_realized = _order_line_fully_realized(order_line, exclude_realization_id=realization.id)
+        if order_line.status == 'shipped' and not still_fully_realized:
+            _set_line_source_state(order_line, order_line.fulfillment_source, 'NEW')
+        _sync_order_line_workflow_links(order_line)
 
     if order:
         _refresh_order_shipment_state(order)
@@ -5988,15 +6110,28 @@ def _free_reserved_vin_row(row: VinRegistry, order: CustomerOrder, reason: str) 
         order.reserved_vin_registry_id = None
 
 
+def _detach_vin_from_order_line(row: VinRegistry) -> CustomerOrderLine | None:
+    line = None
+    if row.order_line_id:
+        line = CustomerOrderLine.query.get(row.order_line_id)
+        if line and line.vin_registry_id == row.id:
+            line.vin_registry_id = None
+    return line
+
+
 def _release_assigned_vin_from_order(row: VinRegistry, order: CustomerOrder, reason: str) -> None:
     old_status = row.status
-    _add_vin_event(row, 'reservation_cancelled', old_status, row.status, comment=reason)
+    line = _detach_vin_from_order_line(row)
     row.customer_order_id = None
+    row.order_line_id = None
     row.supply_need_id = None
     row.reserved_by_user_id = None
     row.reserved_at = None
     if order.reserved_vin_registry_id == row.id:
         order.reserved_vin_registry_id = None
+    _add_vin_event(row, 'reservation_cancelled', old_status, row.status, comment=reason)
+    if line:
+        _sync_order_line_workflow_links(line)
 
 
 def _release_order_produced_units_without_trailer(order: CustomerOrder, reason: str) -> None:
@@ -8484,6 +8619,7 @@ def order_line_update(order_id, line_id):
     line.total_price = (unit_price * (line.quantity or 1)) if unit_price is not None else None
     line.note = (request.form.get('note') or '').strip() or None
     _sync_order_totals_from_lines(order)
+    _sync_order_line_workflow_links(line)
     _refresh_order_status(order)
     add_order_event(order, 'comment_added', old_value=str(old_price or ''), new_value=str(unit_price or ''), comment=f'Обновлена позиция #{line.line_no}')
     db.session.commit()
@@ -8545,6 +8681,7 @@ def order_line_add_stock(order_id):
         order.trailer_id = trailer.id
         order.source_warehouse_id = trailer.warehouse_id
     order.fulfillment_source = 'stock'
+    _sync_order_line_workflow_links(line)
     _sync_order_totals_from_lines(order)
     _refresh_order_status(order)
     _finish_idempotency(idem_key, 'CustomerOrderLine', line.id)
@@ -8607,6 +8744,8 @@ def order_line_add_production(order_id):
     if not order.item_id:
         order.item_id = item.id
     order.fulfillment_source = 'production' if not order.trailer_id else order.fulfillment_source
+    line.supply_need = need
+    _sync_order_line_workflow_links(line)
     _sync_order_totals_from_lines(order)
     _refresh_order_status(order)
     _finish_idempotency(idem_key, 'CustomerOrderLine', line.id)
@@ -8746,9 +8885,8 @@ def _order_unrealized_lines_source(order: CustomerOrder) -> list[CustomerOrderLi
     source_lines = _order_realization_lines_source(order)
     result = []
     for line in source_lines:
-        if any(row.realization and row.realization.status == 'posted' for row in line.realization_lines):
-            continue
-        result.append(line)
+        if _order_line_has_unrealized_trailer_units(line):
+            result.append(line)
     return result
 
 
@@ -8759,13 +8897,7 @@ def _refresh_order_realization_status(order: CustomerOrder) -> None:
         order.realized_at = None
         return
     source_lines = _order_realization_lines_source(order)
-    realized_line_ids = {
-        line.order_line_id
-        for realization in posted
-        for line in realization.lines
-        if line.order_line_id
-    }
-    if source_lines and all(line.id in realized_line_ids for line in source_lines):
+    if source_lines and all(_order_line_fully_realized(line) for line in source_lines):
         order.realization_status = 'realized'
         order.realized_at = max((row.posted_at for row in posted if row.posted_at), default=datetime.utcnow())
     else:
@@ -8889,44 +9021,74 @@ def _create_vin_registry_from_line_trailer(order: CustomerOrder, line: CustomerO
     return vin_row
 
 
-def _resolve_realization_trailer_for_line(order: CustomerOrder, source_line: CustomerOrderLine):
-    if source_line.line_type != 'TRAILER':
-        return None, None, None
-
-    vin_row = (
-        VinRegistry.query
-        .filter(
-            VinRegistry.order_line_id == source_line.id,
-            VinRegistry.status.in_(['reserved', 'assigned', 'confirmed']),
-        )
-        .order_by(
-            VinRegistry.confirmed_at.desc().nullslast(),
-            VinRegistry.assigned_at.desc().nullslast(),
-            VinRegistry.id.desc(),
-        )
-        .first()
-    )
-    if not vin_row:
-        return None, None, f'Позиция #{source_line.line_no}: нет активного VIN в реестре по этой строке заказа. Привяжите правильный VIN к строке перед созданием реализации.'
-
-    trailer = vin_row.trailer
-
+def _validate_realization_trailer_unit(
+    order: CustomerOrder,
+    source_line: CustomerOrderLine,
+    trailer: Trailer,
+    vin_row: VinRegistry,
+) -> str | None:
     if source_line.trailer_id and trailer and source_line.trailer_id != trailer.id:
-        return None, None, f'Позиция #{source_line.line_no}: прицеп в строке заказа не совпадает с прицепом VIN-реестра.'
-
-    if vin_row and vin_row.trailer_id and trailer and vin_row.trailer_id != trailer.id:
-        return None, None, f'Позиция #{source_line.line_no}: VIN связан с другим прицепом. Проверьте строку заказа и VIN-реестр.'
-
-    if trailer and vin_row and vin_row.vin_full and trailer.vin and trailer.vin != vin_row.vin_full:
-        return None, None, f'Позиция #{source_line.line_no}: VIN строки не совпадает с VIN прицепа.'
-
+        return f'Позиция #{source_line.line_no}: прицеп в строке заказа не совпадает с прицепом VIN-реестра.'
+    if vin_row.trailer_id and trailer and vin_row.trailer_id != trailer.id:
+        return f'Позиция #{source_line.line_no}: VIN связан с другим прицепом. Проверьте строку заказа и VIN-реестр.'
+    if trailer and vin_row.vin_full and trailer.vin and trailer.vin != vin_row.vin_full:
+        return f'Позиция #{source_line.line_no}: VIN строки не совпадает с VIN прицепа.'
     if not trailer:
-        return None, None, f'Позиция #{source_line.line_no}: нет однозначно привязанного прицепа/VIN для реализации. Откройте строку заказа и привяжите правильный VIN/прицеп перед созданием реализации.'
-
+        return (
+            f'Позиция #{source_line.line_no}: нет однозначно привязанного прицепа/VIN для реализации. '
+            'Откройте строку заказа и привяжите правильный VIN/прицеп перед созданием реализации.'
+        )
     if _posted_realization_for_trailer(trailer.id):
-        return None, None, f'Позиция #{source_line.line_no}: VIN {trailer.vin or trailer.id} уже есть в проведённой реализации.'
+        return f'Позиция #{source_line.line_no}: VIN {trailer.vin or trailer.id} уже есть в проведённой реализации.'
+    return None
 
-    return trailer, vin_row, None
+
+def _resolve_realization_trailer_units_for_line(
+    order: CustomerOrder,
+    source_line: CustomerOrderLine,
+    *,
+    only_unrealized: bool = True,
+) -> tuple[list[tuple[Trailer, VinRegistry]], str | None]:
+    if source_line.line_type != 'TRAILER':
+        return [], None
+
+    vin_rows = _active_vin_rows_for_order_line(source_line)
+    required = int(source_line.quantity or 1)
+    if len(vin_rows) < required:
+        return [], (
+            f'Позиция #{source_line.line_no}: не хватает VIN: {len(vin_rows)}/{required}. '
+            'Привяжите VIN к строке перед созданием реализации.'
+        )
+
+    units: list[tuple[Trailer, VinRegistry]] = []
+    seen_trailer_ids: set[int] = set()
+    for vin_row in vin_rows[:required]:
+        trailer = vin_row.trailer
+        if not trailer:
+            return [], (
+                f'Позиция #{source_line.line_no}: у VIN {vin_row.vin_full or vin_row.serial7} '
+                'нет физического прицепа.'
+            )
+        if trailer.id in seen_trailer_ids:
+            return [], f'Позиция #{source_line.line_no}: один и тот же прицеп привязан к нескольким VIN.'
+        if only_unrealized and _posted_realization_for_trailer(trailer.id):
+            continue
+        error = _validate_realization_trailer_unit(order, source_line, trailer, vin_row)
+        if error:
+            return [], error
+        seen_trailer_ids.add(trailer.id)
+        units.append((trailer, vin_row))
+
+    if only_unrealized:
+        if not units:
+            return [], f'Позиция #{source_line.line_no}: все VIN уже в проведённой реализации.'
+        return units, None
+
+    if len(units) < required:
+        return [], (
+            f'Позиция #{source_line.line_no}: не хватает непроведённых VIN: {len(units)}/{required}.'
+        )
+    return units, None
 
 
 def _build_sales_realization_from_order(order: CustomerOrder) -> SalesRealization:
@@ -8947,29 +9109,59 @@ def _build_sales_realization_from_order(order: CustomerOrder) -> SalesRealizatio
     source_lines = _order_unrealized_lines_source(order)
     if not source_lines:
         raise ValueError('По заказу нет строк, которые можно добавить в новую реализацию: все строки уже проведены.')
-    for idx, source_line in enumerate(source_lines, start=1):
+    line_no = 0
+    for source_line in source_lines:
         item = source_line.item
         line_type = 'component'
         inventory_effect = 'ship_from_stock'
-        trailer = None
-        vin_row = None
         if source_line.line_type == 'TRAILER':
             line_type = 'trailer'
             inventory_effect = 'trailer_unit'
-            trailer, vin_row, error = _resolve_realization_trailer_for_line(order, source_line)
+            units, error = _resolve_realization_trailer_units_for_line(order, source_line, only_unrealized=True)
             if error:
                 raise ValueError(error)
+            if item and item.is_internal_bom_item:
+                continue
+            unit_price = source_line.unit_price
+            if unit_price is None and source_line.total_price and source_line.quantity:
+                unit_price = Decimal(source_line.total_price) / Decimal(source_line.quantity or 1)
+            unit_price = Decimal(unit_price or 0)
+            for trailer, vin_row in units:
+                line_no += 1
+                line_total = unit_price
+                total += line_total
+                db.session.add(SalesRealizationLine(
+                    realization_id=realization.id,
+                    line_no=line_no,
+                    line_type=line_type,
+                    order_line_id=source_line.id,
+                    trailer_id=trailer.id,
+                    vin_registry_id=vin_row.id,
+                    item_id=source_line.item_id,
+                    warehouse_id=order.warehouse_id,
+                    quantity=1,
+                    unit=item.unit if item else 'шт',
+                    unit_price=unit_price,
+                    total_price=line_total,
+                    inventory_effect=inventory_effect,
+                    article_snapshot=source_line.article_snapshot or (item.article if item else None),
+                    product_name_snapshot=source_line.product_name_snapshot or (item.name if item else None),
+                    vin_full=vin_row.vin_full or trailer.vin,
+                ))
+            _sync_order_line_workflow_links(source_line)
+            continue
         if item and item.is_internal_bom_item:
             continue
         line_total = source_line.total_price or ((source_line.unit_price or 0) * Decimal(source_line.quantity or 1))
+        line_no += 1
         total += Decimal(line_total or 0)
         db.session.add(SalesRealizationLine(
             realization_id=realization.id,
-            line_no=idx,
+            line_no=line_no,
             line_type=line_type,
             order_line_id=source_line.id,
-            trailer_id=trailer.id if trailer else None,
-            vin_registry_id=vin_row.id if vin_row else None,
+            trailer_id=None,
+            vin_registry_id=None,
             item_id=source_line.item_id,
             warehouse_id=order.warehouse_id,
             quantity=source_line.quantity or 1,
@@ -8979,9 +9171,11 @@ def _build_sales_realization_from_order(order: CustomerOrder) -> SalesRealizatio
             inventory_effect=inventory_effect,
             article_snapshot=source_line.article_snapshot or (item.article if item else None),
             product_name_snapshot=source_line.product_name_snapshot or (item.name if item else None),
-            vin_full=(vin_row.vin_full if vin_row else (trailer.vin if trailer else None)),
+            vin_full=None,
         ))
         _sync_order_line_workflow_links(source_line)
+    if line_no == 0:
+        raise ValueError('Не удалось собрать строки реализации: проверьте VIN, номенклатуру и непроведённые позиции заказа.')
     realization.total_amount = total
     return realization
 
@@ -9100,6 +9294,10 @@ def order_realization_create(order_id):
     if order.status == 'cancelled' or order.is_shipped:
         flash('Реализацию нельзя создать по отменённому или уже отгруженному заказу.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
+    create_blockers = _realization_create_blockers(order)
+    if create_blockers:
+        flash('Нельзя создать реализацию: ' + '; '.join(create_blockers) + '.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
     existing_realization = (
         SalesRealization.query
         .filter(SalesRealization.order_id == order.id, SalesRealization.status == 'draft')
@@ -9165,14 +9363,33 @@ def sales_realization_post(realization_id):
     if realization.status != 'draft':
         flash('Провести можно только черновик реализации.', 'warning')
         return redirect(url_for('main.sales_realization_detail', realization_id=realization.id))
+    order = realization.order
+    post_blockers = _realization_post_blockers(order)
+    if post_blockers:
+        flash('Нельзя провести реализацию: ' + '; '.join(post_blockers) + '.', 'danger')
+        return redirect(url_for('main.sales_realization_detail', realization_id=realization.id))
     for line in realization.lines:
         if line.inventory_effect == 'trailer_unit' and _posted_realization_for_trailer(line.trailer_id):
             flash(f'VIN {line.vin_full or line.trailer_id} уже реализован.', 'danger')
             return redirect(url_for('main.sales_realization_detail', realization_id=realization.id))
+        if line.inventory_effect == 'trailer_unit' and line.order_line:
+            units, error = _resolve_realization_trailer_units_for_line(
+                order,
+                line.order_line,
+                only_unrealized=False,
+            )
+            if error:
+                flash(f'Нельзя провести реализацию: {error}', 'danger')
+                return redirect(url_for('main.sales_realization_detail', realization_id=realization.id))
+            if line.trailer_id and not any(trailer.id == line.trailer_id for trailer, _ in units):
+                flash(
+                    f'Строка реализации #{line.line_no}: прицеп/VIN не соответствует активным VIN позиции заказа.',
+                    'danger',
+                )
+                return redirect(url_for('main.sales_realization_detail', realization_id=realization.id))
     realization.status = 'posted'
     realization.posted_at = datetime.utcnow()
     realization.posted_by_user_id = current_user.id
-    order = realization.order
     _apply_realization_shipment_effect(realization)
     if order:
         _refresh_order_realization_status(order)
@@ -10185,6 +10402,9 @@ def vin_registry_assign(vin_id):
     row.assigned_at = datetime.utcnow()
     if row.customer_order and not row.customer_order.trailer_id:
         row.customer_order.trailer_id = trailer.id
+    if row.order_line:
+        row.order_line.trailer_id = trailer.id
+        _set_line_source_state(row.order_line, row.order_line.fulfillment_source or 'stock', 'vin_assigned')
     _add_vin_event(row, 'assigned', old_status, row.status, comment=(request.form.get('comment') or '').strip() or None)
     db.session.commit()
     flash('VIN привязан к прицепу.', 'success')
@@ -10209,6 +10429,10 @@ def vin_registry_confirm(vin_id):
     row.confirmed_by_user_id = current_user.id
     row.confirmed_at = datetime.utcnow()
     _add_vin_event(row, 'confirmed', old_status, row.status, comment=(request.form.get('comment') or '').strip() or None)
+    if row.order_line:
+        _set_line_source_state(row.order_line, row.order_line.fulfillment_source or 'stock', 'vin_confirmed')
+    elif order:
+        _refresh_order_status(order)
     db.session.commit()
     flash('Нанесение VIN подтверждено.', 'success')
     return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
@@ -10737,6 +10961,7 @@ def stock_movement_create():
         db.session.add(movement)
         _apply_sent_stock_movement(movement)
         _apply_arrived_stock_movement(movement)
+        _link_stock_movement_to_order_line(movement)
         db.session.flush()
         _finish_idempotency(idem_key, 'StockMovement', movement.id)
         db.session.commit()
@@ -10793,6 +11018,7 @@ def stock_movement_batch_create():
             db.session.add(movement)
             _apply_sent_stock_movement(movement)
             _apply_arrived_stock_movement(movement)
+            _link_stock_movement_to_order_line(movement)
             movements.append(movement)
             if movement.order:
                 add_order_event(movement.order, 'transfer_started', new_value=batch_key, comment=f'Партийное перемещение VIN {trailer.vin}')
@@ -11355,14 +11581,26 @@ def logistics_assign_vin(unit_id):
         vin_registry_row.status = 'assigned'
         vin_registry_row.assigned_by_user_id = current_user.id
         vin_registry_row.assigned_at = datetime.utcnow()
+        order_line = None
+        if unit.order_line_id:
+            order_line = CustomerOrderLine.query.get(unit.order_line_id)
+        elif line and line.order_line_id:
+            order_line = line.order_line
+            unit.order_line_id = line.order_line_id
+        elif line and line.order_line:
+            order_line = line.order_line
+            unit.order_line_id = line.order_line.id
+        elif order:
+            order_line = _primary_order_line(order)
         if order and not vin_registry_row.customer_order_id:
             vin_registry_row.customer_order_id = order.id
-        if order and not vin_registry_row.order_line_id:
-            order_line = _primary_order_line(order)
-            if order_line:
-                vin_registry_row.order_line_id = order_line.id
+        if order_line and not vin_registry_row.order_line_id:
+            vin_registry_row.order_line_id = order_line.id
         if line and line.supply_need and not vin_registry_row.supply_need_id:
             vin_registry_row.supply_need_id = line.supply_need.id
+        if order_line:
+            order_line.trailer_id = trailer.id
+            _set_line_source_state(order_line, order_line.fulfillment_source or 'production', 'vin_assigned')
         _add_vin_event(vin_registry_row, 'assigned', old_vin_status, vin_registry_row.status, comment='VIN привязан к выпущенному прицепу')
         db.session.commit()
         flash('VIN присвоен. Прицеп создан на производственном складе.', 'success')
