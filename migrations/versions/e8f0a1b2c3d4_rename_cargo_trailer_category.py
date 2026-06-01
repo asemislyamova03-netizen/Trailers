@@ -15,6 +15,13 @@ branch_labels = None
 depends_on = None
 
 
+def _workshop_columns() -> set[str]:
+    bind = op.get_bind()
+    if 'production_workshop' not in sa.inspect(bind).get_table_names():
+        return set()
+    return {column['name'] for column in sa.inspect(bind).get_columns('production_workshop')}
+
+
 def upgrade():
     op.execute(
         """
@@ -24,9 +31,20 @@ def upgrade():
         WHERE code = 'cargo_vehicle'
         """
     )
-    bind = op.get_bind()
-    insp = sa.inspect(bind)
-    if 'production_workshop' in insp.get_table_names():
+    columns = _workshop_columns()
+    if not columns:
+        return
+    if 'workshop_type' in columns:
+        op.execute(
+            """
+            UPDATE production_workshop
+            SET name = 'Цех грузовых прицепов',
+                workshop_type = 'cargo_trailer'
+            WHERE code = 'CARGO_VEHICLES'
+               OR workshop_type = 'cargo_vehicle'
+            """
+        )
+    elif 'product_category_scope' in columns:
         op.execute(
             """
             UPDATE production_workshop
@@ -34,6 +52,14 @@ def upgrade():
                 product_category_scope = 'cargo_trailer'
             WHERE product_category_scope = 'cargo_vehicle'
                OR code = 'CARGO_VEHICLES'
+            """
+        )
+    else:
+        op.execute(
+            """
+            UPDATE production_workshop
+            SET name = 'Цех грузовых прицепов'
+            WHERE code = 'CARGO_VEHICLES'
             """
         )
 
@@ -47,9 +73,20 @@ def downgrade():
         WHERE code = 'cargo_trailer'
         """
     )
-    bind = op.get_bind()
-    insp = sa.inspect(bind)
-    if 'production_workshop' in insp.get_table_names():
+    columns = _workshop_columns()
+    if not columns:
+        return
+    if 'workshop_type' in columns:
+        op.execute(
+            """
+            UPDATE production_workshop
+            SET name = 'Цех грузовых автомобилей',
+                workshop_type = 'cargo_vehicle'
+            WHERE code = 'CARGO_VEHICLES'
+               OR workshop_type = 'cargo_trailer'
+            """
+        )
+    elif 'product_category_scope' in columns:
         op.execute(
             """
             UPDATE production_workshop
