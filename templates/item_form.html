@@ -36,7 +36,7 @@
         {% endfor %}
     </div>
 
-    <div class="row">
+    <div class="row" id="trailerFlagsSection">
         <div class="col-md-4 mb-3">
             {{ form.product_category_id.label(class="form-label") }}
             {{ form.product_category_id(class="form-select") }}
@@ -55,7 +55,7 @@
         </div>
     </div>
 
-    <div class="row">
+    <div class="row" id="trailerDimensionsSection">
     <div class="col-md-3 mb-3">
         {{ form.axle_count.label(class="form-label") }}
         {{ form.axle_count(class="form-control") }}
@@ -80,7 +80,7 @@
     </div>
 </div>
 
-<div class="row">
+<div class="row" id="trailerJockeySection">
     <div class="col-md-3 mb-3">
         {{ form.has_jockey_wheel.label(class="form-label") }}
         {{ form.has_jockey_wheel(class="form-select") }}
@@ -90,12 +90,12 @@
     </div>
 </div>
 
-    <div class="mb-3">
+    <div class="mb-3" id="trailerExternalSizeSection">
         {{ form.size_external.label(class="form-label") }}
         {{ form.size_external(class="form-control") }}
     </div>
 
-    <div class="mb-3">
+    <div class="mb-3" id="trailerBodySizeSection">
         {{ form.size_body.label(class="form-label") }}
         {{ form.size_body(class="form-control") }}
     </div>
@@ -141,4 +141,34 @@
         Отмена
     </a>
 </form>
+
+<script>
+(function () {
+  const typeSelect = document.getElementById('item_type');
+  const trailerSections = [
+    'trailerFlagsSection',
+    'trailerDimensionsSection',
+    'trailerJockeySection',
+    'trailerExternalSizeSection',
+    'trailerBodySizeSection'
+  ];
+
+  function setVisible(el, visible) {
+    if (!el) return;
+    el.style.display = visible ? '' : 'none';
+  }
+
+  function syncByType() {
+    const isTrailer = typeSelect && typeSelect.value === 'TRAILER';
+    trailerSections.forEach(function (id) {
+      setVisible(document.getElementById(id), isTrailer);
+    });
+  }
+
+  if (typeSelect) {
+    typeSelect.addEventListener('change', syncByType);
+    syncByType();
+  }
+})();
+</script>
 {% endblock %}
