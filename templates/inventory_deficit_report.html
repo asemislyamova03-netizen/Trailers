@@ -8,7 +8,7 @@
   </div>
   <div class="d-flex gap-2">
     <a href="{{ url_for('main.inventory_balances_list', warehouse_id=warehouse_id) }}" class="btn btn-soft btn-sm">Остатки</a>
-    {% if current_user.is_admin or current_user.is_director %}
+    {% if current_user.is_admin or current_user.is_director or current_user.is_warehouse %}
     <a href="{{ url_for('main.inventory_receipt_create', warehouse_id=warehouse_id) }}" class="btn btn-orange btn-sm">Приход</a>
     {% endif %}
   </div>
@@ -18,11 +18,16 @@
   <div class="row g-2 align-items-end">
     <div class="col-md-5">
       <label class="form-label">Производственный склад</label>
+      {% if inventory_warehouse_locked %}
+        <input type="hidden" name="warehouse_id" value="{{ warehouse_id }}">
+        <div class="form-control bg-light">{{ production_warehouses[0].name if production_warehouses else '—' }}</div>
+      {% else %}
       <select name="warehouse_id" class="form-select" onchange="this.form.submit()">
         {% for w in production_warehouses %}
           <option value="{{ w.id }}" {% if warehouse_id == w.id %}selected{% endif %}>{{ w.name }}</option>
         {% endfor %}
       </select>
+      {% endif %}
     </div>
     <div class="col-md-4">
       <div class="form-check mt-4">

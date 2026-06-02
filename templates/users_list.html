@@ -22,7 +22,16 @@
       <td>{{ u.id }}</td>
       <td>{{ u.username }}</td>
       <td>{{ u.full_name }}</td>
-      <td>{{ 'Админ' if u.role == 'admin' else 'Менеджер' }}</td>
+      <td>
+        {% if u.role == 'admin' %}Админ
+        {% elif u.role == 'director' %}Директор
+        {% elif u.role == 'manager' %}Менеджер
+        {% elif u.role == 'production' %}Производство
+        {% elif u.role == 'logistics' %}Логистика
+        {% elif u.role == 'warehouse' %}Кладовщик
+        {% elif u.role == 'viewer' %}Просмотр
+        {% else %}{{ u.role }}{% endif %}
+      </td>
       <td>{{ u.warehouse.name if u.warehouse else '—' }}</td>
       <td>
         <a href="{{ url_for('main.user_edit', user_id=u.id) }}" class="btn btn-sm btn-outline-primary">Изменить</a>

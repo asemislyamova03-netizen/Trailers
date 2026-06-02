@@ -130,6 +130,10 @@ class User(UserMixin, db.Model):
         return self.role == 'logistics'
 
     @property
+    def is_warehouse(self) -> bool:
+        return self.role == 'warehouse'
+
+    @property
     def is_viewer(self) -> bool:
         return self.role == 'viewer'
 

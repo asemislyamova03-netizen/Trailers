@@ -76,6 +76,12 @@
                     {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', section='production') }}
                     {{ nav_item('Остатки ТМЦ', 'bi-boxes', 'main.inventory_balances_list', match='/inventory/balances') }}
                     {{ nav_item('Дефицит ТМЦ', 'bi-exclamation-circle', 'main.inventory_deficit_report', match='/inventory/deficit') }}
+                {% elif current_user.is_warehouse %}
+                    {{ nav_item('Остатки ТМЦ', 'bi-boxes', 'main.inventory_balances_list', match='/inventory/balances') }}
+                    {{ nav_item('Дефицит ТМЦ', 'bi-exclamation-circle', 'main.inventory_deficit_report', match='/inventory/deficit') }}
+                    {{ nav_item('Приход ТМЦ', 'bi-box-arrow-in-down', 'main.inventory_receipt_create', match='/inventory/receipts/new') }}
+                    {{ nav_item('Перемещение ТМЦ', 'bi-arrow-left-right', 'main.inventory_transfer_create', match='/inventory/transfers') }}
+                    {{ nav_item('Операции ТМЦ', 'bi-journal-text', 'main.inventory_receipts_list', match='/inventory/receipts', active=(path.startswith('/inventory/receipts') and not path.startswith('/inventory/receipts/new'))) }}
                 {% elif current_user.is_logistics %}
                     {{ nav_item('VIN-реестр', 'bi-upc', 'main.vin_registry_list', active=(endpoint == 'main.vin_registry_list' and not request.args.get('status') and not request.args.get('upload'))) }}
                     {{ nav_item('Свободные VIN', 'bi-upc-scan', href=url_for('main.vin_registry_list', status='free'), active=(endpoint == 'main.vin_registry_list' and request.args.get('status') == 'free')) }}

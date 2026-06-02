@@ -47,6 +47,7 @@ class UserForm(IdempotentFlaskForm):
             ('manager', 'Менеджер'),
             ('production', 'Производство'),
             ('logistics', 'Логистика'),
+            ('warehouse', 'Кладовщик (ТМЦ)'),
             ('viewer', 'Просмотр'),
         ],
         validators=[DataRequired()]

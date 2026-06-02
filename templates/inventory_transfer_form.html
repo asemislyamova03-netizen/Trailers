@@ -16,7 +16,10 @@
       <div class="col-md-6">
         <h2 class="h6">Откуда</h2>
         {{ form.from_warehouse_id.label(class="form-label") }}
-        {{ form.from_warehouse_id(class="form-select", id="fromWarehouse") }}
+        {{ form.from_warehouse_id(class="form-select", id="fromWarehouse", **({'disabled': true} if inventory_from_warehouse_locked else {})) }}
+        {% if inventory_from_warehouse_locked and form.from_warehouse_id.data %}
+        <input type="hidden" name="from_warehouse_id" value="{{ form.from_warehouse_id.data }}">
+        {% endif %}
         {{ form.from_storage_area_id.label(class="form-label") }}
         {{ form.from_storage_area_id(class="form-select", id="fromStorageArea") }}
         <div class="form-text">Пустая зона — списание с любых зон склада по FIFO.</div>
@@ -111,7 +114,9 @@
 
   const fromWh = document.getElementById('fromWarehouse');
   const toWh = document.getElementById('toWarehouse');
+  {% if not inventory_from_warehouse_locked %}
   if (fromWh) fromWh.addEventListener('change', reloadWarehouses);
+  {% endif %}
   if (toWh) toWh.addEventListener('change', reloadWarehouses);
 
   const tableBody = document.querySelector('#transferLinesTable tbody');

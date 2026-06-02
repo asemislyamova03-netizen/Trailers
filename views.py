@@ -1184,6 +1184,8 @@ def role_home():
         return redirect(url_for('main.vin_registry_list'))
     if current_user.is_director:
         return redirect(url_for('main.director_dashboard'))
+    if current_user.is_warehouse:
+        return redirect(url_for('main.inventory_balances_list'))
     if current_user.is_manager:
         return redirect(url_for('main.manager_workspace'))
     return redirect(url_for('main.trailers_list'))
@@ -1689,6 +1691,10 @@ def user_create():
     ]
 
     if form.validate_on_submit():
+        if form.role.data == 'warehouse' and not (form.warehouse_id.data or 0):
+            flash('Для кладовщика укажите производственный склад.', 'danger')
+            return render_template('user_form.html', form=form, title='Новый пользователь')
+
         user = User(
             username=form.username.data.strip(),
             full_name=form.full_name.data.strip(),
@@ -1728,6 +1734,10 @@ def user_edit(user_id):
         form.warehouse_id.data = user.warehouse_id or 0
 
     if form.validate_on_submit():
+        if form.role.data == 'warehouse' and not (form.warehouse_id.data or 0):
+            flash('Для кладовщика укажите производственный склад.', 'danger')
+            return render_template('user_form.html', form=form, title='Редактирование пользователя')
+
         user.username = form.username.data.strip()
         user.full_name = form.full_name.data.strip()
         user.role = form.role.data
@@ -11866,12 +11876,49 @@ def _refresh_production_request_status(production_request: ProductionRequest) ->
         production_request.status = 'in_progress'
 
 
+def _keeper_warehouse_id() -> int | None:
+    if current_user.is_authenticated and current_user.is_warehouse:
+        return current_user.warehouse_id
+    return None
+
+
+def _clamp_inventory_warehouse_id(warehouse_id: int | None) -> int | None:
+    bound = _keeper_warehouse_id()
+    if bound:
+        return bound
+    return warehouse_id
+
+
 def _inventory_warehouse_choices() -> list[tuple[int, str]]:
+    bound = _keeper_warehouse_id()
+    if bound:
+        warehouse = Warehouse.query.filter_by(id=bound, is_active=True).first()
+        return [(warehouse.id, warehouse.name)] if warehouse else []
     warehouses = Warehouse.query.filter_by(is_active=True).order_by(
         Warehouse.is_production.desc(),
         Warehouse.name.asc(),
     ).all()
     return [(w.id, w.name) for w in warehouses]
+
+
+def _keeper_can_view_inventory_operation(operation: InventoryOperation) -> bool:
+    bound = _keeper_warehouse_id()
+    if not bound:
+        return True
+    return operation.target_warehouse_id == bound or operation.source_warehouse_id == bound
+
+
+def _inventory_destination_warehouse_choices() -> list[tuple[int, str]]:
+    prod_ids = production_warehouse_ids()
+    if prod_ids:
+        warehouses = (
+            Warehouse.query.filter(Warehouse.id.in_(prod_ids), Warehouse.is_active == True)
+            .order_by(Warehouse.name.asc())
+            .all()
+        )
+        if warehouses:
+            return [(w.id, w.name) for w in warehouses]
+    return _inventory_warehouse_choices()
 
 
 def _inventory_storage_area_choices(warehouse_id: int | None) -> list[tuple[int, str]]:
@@ -11932,17 +11979,20 @@ def _parse_inventory_receipt_lines() -> list[tuple[int, float, str | None, str |
 
 
 @main_bp.route('/inventory/balances')
-@role_required('director', 'manager', 'production')
+@role_required('director', 'manager', 'production', 'warehouse')
 def inventory_balances_list():
-    warehouse_id = request.args.get('warehouse_id', type=int)
+    warehouse_id = _clamp_inventory_warehouse_id(request.args.get('warehouse_id', type=int))
     storage_area_id = request.args.get('storage_area_id', type=int)
     item_type = (request.args.get('item_type') or '').strip() or None
     only_positive = request.args.get('only_positive', '1') == '1'
+    inventory_warehouse_locked = bool(_keeper_warehouse_id())
     warehouses = Warehouse.query.filter_by(is_active=True).order_by(Warehouse.name.asc()).all()
-    if not warehouse_id and warehouses:
+    if not warehouse_id and warehouses and not inventory_warehouse_locked:
         production_ids = production_warehouse_ids()
         if production_ids:
             warehouse_id = production_ids[0]
+    if inventory_warehouse_locked and not warehouse_id:
+        flash('У кладовщика не указан склад. Обратитесь к администратору.', 'warning')
     if warehouse_id:
         ensure_storage_areas_for_warehouse(warehouse_id)
     balances = inventory_balances_query(
@@ -11960,6 +12010,10 @@ def inventory_balances_list():
         if warehouse_id
         else []
     )
+    warehouse_display_name = None
+    if warehouse_id:
+        bound_wh = next((w for w in warehouses if w.id == warehouse_id), None)
+        warehouse_display_name = bound_wh.name if bound_wh else None
     return render_template(
         'inventory_balances_list.html',
         balances=balances,
@@ -11967,17 +12021,20 @@ def inventory_balances_list():
         warehouses=warehouses,
         storage_areas=storage_areas,
         warehouse_id=warehouse_id,
+        warehouse_display_name=warehouse_display_name,
         storage_area_id=storage_area_id,
         item_type=item_type,
         only_positive=only_positive,
+        inventory_warehouse_locked=inventory_warehouse_locked,
     )
 
 
 @main_bp.route('/inventory/deficit')
-@role_required('director', 'manager', 'production')
+@role_required('director', 'manager', 'production', 'warehouse')
 def inventory_deficit_report():
-    warehouse_id = request.args.get('warehouse_id', type=int)
+    warehouse_id = _clamp_inventory_warehouse_id(request.args.get('warehouse_id', type=int))
     only_shortage = request.args.get('only_shortage', '1') == '1'
+    inventory_warehouse_locked = bool(_keeper_warehouse_id())
     production_warehouses = (
         Warehouse.query.filter(
             Warehouse.is_active == True,
@@ -11986,7 +12043,9 @@ def inventory_deficit_report():
         .order_by(Warehouse.name.asc())
         .all()
     )
-    if not warehouse_id and production_warehouses:
+    if inventory_warehouse_locked:
+        production_warehouses = [w for w in production_warehouses if w.id == warehouse_id]
+    elif not warehouse_id and production_warehouses:
         warehouse_id = production_warehouses[0].id
     deficit_rows, lines_without_bom = compute_bom_deficit_report(
         material_warehouse_id=warehouse_id,
@@ -11999,17 +12058,27 @@ def inventory_deficit_report():
         production_warehouses=production_warehouses,
         warehouse_id=warehouse_id,
         only_shortage=only_shortage,
+        inventory_warehouse_locked=inventory_warehouse_locked,
     )
 
 
 @main_bp.route('/inventory/receipts')
-@role_required('director')
+@role_required('director', 'warehouse')
 def inventory_receipts_list():
-    operations = (
-        InventoryOperation.query.filter(
-            InventoryOperation.operation_type.in_(('receipt', 'transfer')),
-            InventoryOperation.status == 'posted',
+    operations_query = InventoryOperation.query.filter(
+        InventoryOperation.operation_type.in_(('receipt', 'transfer')),
+        InventoryOperation.status == 'posted',
+    )
+    bound = _keeper_warehouse_id()
+    if bound:
+        operations_query = operations_query.filter(
+            or_(
+                InventoryOperation.source_warehouse_id == bound,
+                InventoryOperation.target_warehouse_id == bound,
+            )
         )
+    operations = (
+        operations_query
         .order_by(InventoryOperation.posted_at.desc(), InventoryOperation.id.desc())
         .limit(80)
         .all()
@@ -12018,19 +12087,24 @@ def inventory_receipts_list():
 
 
 @main_bp.route('/inventory/transfers/new', methods=['GET', 'POST'])
-@role_required('director')
+@role_required('director', 'warehouse')
 def inventory_transfer_create():
     form = InventoryTransferForm()
+    inventory_from_warehouse_locked = bool(_keeper_warehouse_id())
     form.from_warehouse_id.choices = _inventory_warehouse_choices()
-    form.to_warehouse_id.choices = _inventory_warehouse_choices()
+    form.to_warehouse_id.choices = _inventory_destination_warehouse_choices()
 
-    from_wh = form.from_warehouse_id.data or request.args.get('from_warehouse_id', type=int)
+    from_wh = _clamp_inventory_warehouse_id(
+        form.from_warehouse_id.data or request.args.get('from_warehouse_id', type=int)
+    )
     to_wh = form.to_warehouse_id.data or request.args.get('to_warehouse_id', type=int)
-    if request.method == 'GET' and not from_wh:
+    if request.method == 'GET' and not from_wh and not inventory_from_warehouse_locked:
         prod_ids = production_warehouse_ids()
         if prod_ids:
             from_wh = prod_ids[0]
             form.from_warehouse_id.data = from_wh
+    elif inventory_from_warehouse_locked and from_wh:
+        form.from_warehouse_id.data = from_wh
     if request.method == 'POST':
         from_wh = request.form.get('from_warehouse_id', type=int) or from_wh
         to_wh = request.form.get('to_warehouse_id', type=int) or to_wh
@@ -12040,7 +12114,7 @@ def inventory_transfer_create():
     receipt_items = _inventory_receipt_items()
 
     if form.validate_on_submit():
-        from_warehouse_id = form.from_warehouse_id.data
+        from_warehouse_id = _clamp_inventory_warehouse_id(form.from_warehouse_id.data)
         to_warehouse_id = form.to_warehouse_id.data
         from_area_id = form.from_storage_area_id.data or None
         to_area_id = form.to_storage_area_id.data or None
@@ -12048,8 +12122,14 @@ def inventory_transfer_create():
             from_area_id = None
         if to_area_id == 0:
             to_area_id = None
+        if not from_warehouse_id:
+            flash('Укажите склад отправителя.', 'danger')
+        elif inventory_from_warehouse_locked and form.from_warehouse_id.data != from_warehouse_id:
+            flash('Кладовщик может списывать ТМЦ только со своего склада.', 'danger')
         transfer_lines = _parse_inventory_receipt_lines()
-        if not transfer_lines:
+        if not from_warehouse_id:
+            pass
+        elif not transfer_lines:
             flash('Добавьте хотя бы одну позицию с количеством больше нуля.', 'danger')
         else:
             idem_key, duplicate = _reserve_idempotency_key()
@@ -12071,7 +12151,8 @@ def inventory_transfer_create():
                 _finish_idempotency(idem_key, 'InventoryOperation', operation.id)
                 db.session.commit()
                 flash(f'Перемещение ТМЦ проведено (#{operation.id}), позиций: {len(transfer_lines)}.', 'success')
-                return redirect(url_for('main.inventory_balances_list', warehouse_id=to_warehouse_id))
+                balances_wh = _keeper_warehouse_id() or to_warehouse_id
+                return redirect(url_for('main.inventory_balances_list', warehouse_id=balances_wh))
             except ValueError as exc:
                 db.session.rollback()
                 flash(str(exc), 'danger')
@@ -12084,32 +12165,44 @@ def inventory_transfer_create():
         form=form,
         receipt_items=receipt_items,
         title='Перемещение ТМЦ',
+        inventory_from_warehouse_locked=inventory_from_warehouse_locked,
     )
 
 
 @main_bp.route('/inventory/receipts/new', methods=['GET', 'POST'])
-@role_required('director')
+@role_required('director', 'warehouse')
 def inventory_receipt_create():
     form = InventoryReceiptForm()
+    inventory_warehouse_locked = bool(_keeper_warehouse_id())
     form.warehouse_id.choices = _inventory_warehouse_choices()
-    selected_warehouse_id = form.warehouse_id.data or request.args.get('warehouse_id', type=int)
-    if request.method == 'GET' and not selected_warehouse_id:
+    selected_warehouse_id = _clamp_inventory_warehouse_id(
+        form.warehouse_id.data or request.args.get('warehouse_id', type=int)
+    )
+    if request.method == 'GET' and not selected_warehouse_id and not inventory_warehouse_locked:
         production_ids = production_warehouse_ids()
         if production_ids:
             selected_warehouse_id = production_ids[0]
             form.warehouse_id.data = selected_warehouse_id
+    elif inventory_warehouse_locked and selected_warehouse_id:
+        form.warehouse_id.data = selected_warehouse_id
     if request.method == 'POST':
-        selected_warehouse_id = request.form.get('warehouse_id', type=int) or selected_warehouse_id
+        selected_warehouse_id = _clamp_inventory_warehouse_id(
+            request.form.get('warehouse_id', type=int) or selected_warehouse_id
+        )
     form.storage_area_id.choices = _inventory_storage_area_choices(selected_warehouse_id)
     receipt_items = _inventory_receipt_items()
 
     if form.validate_on_submit():
-        warehouse_id = form.warehouse_id.data
+        warehouse_id = _clamp_inventory_warehouse_id(form.warehouse_id.data)
         storage_area_id = form.storage_area_id.data or None
         if storage_area_id == 0:
             storage_area_id = None
         receipt_lines = _parse_inventory_receipt_lines()
-        if not receipt_lines:
+        if not warehouse_id:
+            flash('Укажите склад для прихода.', 'danger')
+        elif inventory_warehouse_locked and form.warehouse_id.data != warehouse_id:
+            flash('Кладовщик может проводить приход только на свой склад.', 'danger')
+        elif not receipt_lines:
             flash('Добавьте хотя бы одну позицию с количеством больше нуля.', 'danger')
         else:
             idem_key, duplicate = _reserve_idempotency_key()
@@ -12140,16 +12233,20 @@ def inventory_receipt_create():
         form=form,
         receipt_items=receipt_items,
         title='Приход ТМЦ',
+        inventory_warehouse_locked=inventory_warehouse_locked,
     )
 
 
 @main_bp.route('/inventory/receipts/<int:operation_id>')
-@role_required('director', 'manager', 'production')
+@role_required('director', 'manager', 'production', 'warehouse')
 def inventory_receipt_detail(operation_id):
     operation = InventoryOperation.query.filter(
         InventoryOperation.id == operation_id,
         InventoryOperation.operation_type.in_(('receipt', 'transfer')),
     ).first_or_404()
+    if not _keeper_can_view_inventory_operation(operation):
+        flash('Нет доступа к операции другого склада.', 'danger')
+        return redirect(url_for('main.inventory_receipts_list'))
     lines = operation.lines.order_by(InventoryOperationLine.id.asc()).all()
     return render_template(
         'inventory_receipt_detail.html',
