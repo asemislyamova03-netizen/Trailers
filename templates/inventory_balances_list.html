@@ -7,7 +7,10 @@
     <div class="text-muted small">Комплектующие, металл и заготовки. Готовые прицепы — в разделе «Прицепы», не здесь.</div>
   </div>
   {% if current_user.is_admin or current_user.is_director %}
-  <a href="{{ url_for('main.inventory_receipt_create', warehouse_id=warehouse_id) }}" class="btn btn-orange btn-sm"><i class="bi bi-box-arrow-in-down me-1"></i>Приход</a>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('main.inventory_transfer_create', from_warehouse_id=warehouse_id) }}" class="btn btn-soft btn-sm"><i class="bi bi-arrow-left-right me-1"></i>Перемещение</a>
+    <a href="{{ url_for('main.inventory_receipt_create', warehouse_id=warehouse_id) }}" class="btn btn-orange btn-sm"><i class="bi bi-box-arrow-in-down me-1"></i>Приход</a>
+  </div>
   {% endif %}
 </div>
 

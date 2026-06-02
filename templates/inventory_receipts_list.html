@@ -1,12 +1,15 @@
 {% extends 'base.html' %}
-{% block title %}Приходы ТМЦ{% endblock %}
+{% block title %}Операции ТМЦ{% endblock %}
 {% block content %}
 <div class="compact-page-header">
   <div>
-    <h1>Приходы ТМЦ</h1>
-    <div class="text-muted small">Последние проведённые приходы в CRM.</div>
+    <h1>Операции ТМЦ</h1>
+    <div class="text-muted small">Приходы и перемещения материалов.</div>
   </div>
-  <a href="{{ url_for('main.inventory_receipt_create') }}" class="btn btn-orange btn-sm">Новый приход</a>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('main.inventory_transfer_create') }}" class="btn btn-soft btn-sm">Перемещение</a>
+    <a href="{{ url_for('main.inventory_receipt_create') }}" class="btn btn-orange btn-sm">Приход</a>
+  </div>
 </div>
 
 <div class="app-card">
@@ -15,10 +18,11 @@
       <thead>
         <tr>
           <th>#</th>
+          <th>Тип</th>
           <th>Дата</th>
-          <th>Склад</th>
-          <th>Зона</th>
-          <th>Позиций</th>
+          <th>Откуда</th>
+          <th>Куда</th>
+          <th>Поз.</th>
           <th>Комментарий</th>
           <th></th>
         </tr>
@@ -27,15 +31,20 @@
       {% for op in operations %}
         <tr>
           <td>{{ op.id }}</td>
+          <td>{% if op.operation_type == 'transfer' %}<span class="badge text-bg-info">Перемещение</span>{% else %}<span class="badge text-bg-success">Приход</span>{% endif %}</td>
           <td>{{ (op.posted_at or op.created_at)|date_format }}</td>
-          <td>{{ op.target_warehouse.name if op.target_warehouse else '—' }}</td>
-          <td>{{ op.target_area.name if op.target_area else '—' }}</td>
+          <td>
+            {% if op.source_warehouse %}{{ op.source_warehouse.name }}{% if op.source_area %} / {{ op.source_area.name }}{% endif %}{% else %}—{% endif %}
+          </td>
+          <td>
+            {{ op.target_warehouse.name if op.target_warehouse else '—' }}{% if op.target_area %} / {{ op.target_area.name }}{% endif %}
+          </td>
           <td>{{ op.lines.count() }}</td>
           <td class="small text-muted">{{ op.comment or '' }}</td>
           <td><a href="{{ url_for('main.inventory_receipt_detail', operation_id=op.id) }}" class="btn btn-sm btn-soft">Открыть</a></td>
         </tr>
       {% else %}
-        <tr><td colspan="7" class="text-muted p-3">Приходов пока нет</td></tr>
+        <tr><td colspan="8" class="text-muted p-3">Операций пока нет</td></tr>
       {% endfor %}
       </tbody>
     </table>

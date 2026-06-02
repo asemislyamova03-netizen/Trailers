@@ -1,13 +1,17 @@
 {% extends 'base.html' %}
-{% block title %}Приход #{{ operation.id }}{% endblock %}
+{% block title %}{% if operation.operation_type == 'transfer' %}Перемещение{% else %}Приход{% endif %} #{{ operation.id }}{% endblock %}
 {% block content %}
 <div class="compact-page-header">
   <div>
-    <h1>Приход ТМЦ #{{ operation.id }}</h1>
+    <h1>{% if operation.operation_type == 'transfer' %}Перемещение{% else %}Приход{% endif %} ТМЦ #{{ operation.id }}</h1>
     <div class="text-muted small">
       {{ (operation.posted_at or operation.created_at)|date_format }}
-      · {{ operation.target_warehouse.name if operation.target_warehouse else '—' }}
-      {% if operation.target_area %}· {{ operation.target_area.name }}{% endif %}
+      {% if operation.source_warehouse %}
+        · {{ operation.source_warehouse.name }}{% if operation.source_area %} / {{ operation.source_area.name }}{% endif %}
+        →
+      {% endif %}
+      {{ operation.target_warehouse.name if operation.target_warehouse else '—' }}
+      {% if operation.target_area %} / {{ operation.target_area.name }}{% endif %}
     </div>
   </div>
   <a href="{{ url_for('main.inventory_receipts_list') }}" class="btn btn-soft btn-sm">К списку</a>
@@ -24,6 +28,7 @@
         <tr>
           <th>Артикул</th>
           <th>Наименование</th>
+          <th>Направление</th>
           <th class="text-end">Количество</th>
           <th>Комментарий</th>
         </tr>
@@ -33,6 +38,7 @@
         <tr>
           <td class="fw-semibold">{{ line.item.article if line.item else '' }}</td>
           <td>{{ line.item.name if line.item else '' }}</td>
+          <td>{% if line.direction == 'out' %}<span class="text-danger">расход</span>{% else %}<span class="text-success">приход</span>{% endif %}</td>
           <td class="text-end fw-semibold">{{ line.quantity|inventory_qty(line.unit) }}</td>
           <td class="small text-muted">{{ line.comment or '' }}</td>
         </tr>

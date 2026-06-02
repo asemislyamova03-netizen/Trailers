@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime
 from decimal import Decimal
 
@@ -15,6 +16,7 @@ from models import (
     Item,
     ItemBillOfMaterials,
     ItemBillOfMaterialsLine,
+    ProductionRequest,
     ProductionRequestLine,
     Warehouse,
     WarehouseStorageArea,
@@ -294,14 +296,14 @@ def _allocate_issue_from_balances(
     warehouse_id: int,
     item_id: int,
     qty_needed: Decimal,
+    storage_area_id: int | None = None,
 ) -> list[tuple[InventoryBalance, Decimal]]:
     if qty_needed <= 0:
         return []
-    balances = (
-        InventoryBalance.query.filter_by(warehouse_id=warehouse_id, item_id=item_id)
-        .order_by(InventoryBalance.storage_area_id.asc(), InventoryBalance.id.asc())
-        .all()
-    )
+    query = InventoryBalance.query.filter_by(warehouse_id=warehouse_id, item_id=item_id)
+    if storage_area_id:
+        query = query.filter_by(storage_area_id=storage_area_id)
+    balances = query.order_by(InventoryBalance.storage_area_id.asc(), InventoryBalance.id.asc()).all()
     allocations: list[tuple[InventoryBalance, Decimal]] = []
     left = qty_needed
     for balance in balances:
@@ -510,6 +512,235 @@ def reverse_production_consumption(
 
     db.session.flush()
     return reversal
+
+
+def _open_production_lines():
+    return (
+        ProductionRequestLine.query.join(
+            ProductionRequest,
+            ProductionRequest.id == ProductionRequestLine.production_request_id,
+        )
+        .filter(
+            ~ProductionRequestLine.status.in_(['ready', 'closed', 'cancelled', 'CANCELLED', 'canceled']),
+        )
+        .all()
+    )
+
+
+def compute_bom_deficit_report(
+    *,
+    material_warehouse_id: int | None = None,
+    only_shortage: bool = True,
+) -> list[dict]:
+    """
+    Сводный дефицит ТМЦ по активным заданиям производства и спецификациям.
+    Группировка: производственный склад филиала + комплектующее.
+    """
+    aggregated: dict[tuple[int, int], dict] = defaultdict(
+        lambda: {'required': Decimal('0'), 'sources': []}
+    )
+    lines_without_bom = 0
+
+    for line in _open_production_lines():
+        remaining = max((line.quantity or 0) - (line.produced_qty or 0), 0)
+        if remaining <= 0 or not line.item_id:
+            continue
+        bom = get_active_bom(line.item_id)
+        if not bom:
+            lines_without_bom += 1
+            continue
+        finished_wh_id = line.production_request.target_warehouse_id if line.production_request else None
+        material_wh_id = resolve_material_warehouse_id(finished_wh_id)
+        if not material_wh_id:
+            continue
+        if material_warehouse_id and material_wh_id != material_warehouse_id:
+            continue
+
+        product_label = line.article_snapshot or (line.item.article if line.item else '') or f'#{line.item_id}'
+        request_number = line.production_request.request_number if line.production_request else ''
+
+        for bom_line in bom.lines.filter_by(is_active=True).order_by(ItemBillOfMaterialsLine.sort_order.asc()).all():
+            if not bom_line.is_required:
+                continue
+            component = bom_line.component_item
+            if not component or component.item_type == 'TRAILER':
+                continue
+            per_unit = Decimal(str(bom_line.quantity_per_unit or 0))
+            if per_unit <= 0:
+                continue
+            need_qty = per_unit * Decimal(remaining)
+            unit = normalize_unit(bom_line.unit or component.unit)
+            key = (material_wh_id, component.id)
+            bucket = aggregated[key]
+            bucket['required'] += need_qty
+            bucket['unit'] = unit
+            bucket['component'] = component
+            bucket['material_warehouse_id'] = material_wh_id
+            bucket['sources'].append({
+                'request_number': request_number,
+                'line_id': line.id,
+                'product_label': product_label,
+                'remaining': remaining,
+                'need_qty': need_qty,
+                'is_paid': bool(
+                    line.supply_need
+                    and line.supply_need.need_type == 'CUSTOMER_ORDER'
+                    and line.supply_need.order
+                    and line.supply_need.order.remaining_amount <= 0
+                    and line.supply_need.order.total_amount > 0
+                ),
+            })
+
+    rows: list[dict] = []
+    if aggregated:
+        warehouse_names = {
+            w.id: w.name
+            for w in Warehouse.query.filter(Warehouse.id.in_({k[0] for k in aggregated})).all()
+        }
+    else:
+        warehouse_names = {}
+
+    for (wh_id, component_id), bucket in aggregated.items():
+        component = bucket['component']
+        unit = bucket.get('unit') or normalize_unit(component.unit)
+        required = bucket['required']
+        available = _available_on_warehouse(wh_id, component_id)
+        shortage = required - available
+        if only_shortage and shortage <= 0:
+            continue
+        rows.append({
+            'material_warehouse_id': wh_id,
+            'material_warehouse_name': warehouse_names.get(wh_id, f'Склад #{wh_id}'),
+            'component_item_id': component_id,
+            'article': component.article or '',
+            'name': component.name,
+            'unit': unit,
+            'required': required,
+            'available': available,
+            'shortage': shortage if shortage > 0 else Decimal('0'),
+            'sources': bucket['sources'],
+        })
+
+    rows.sort(key=lambda row: (row['shortage'], row['required']), reverse=True)
+    for row in rows:
+        row['required_display'] = format_inventory_quantity(row['required'], row['unit'])
+        row['available_display'] = format_inventory_quantity(row['available'], row['unit'])
+        row['shortage_display'] = format_inventory_quantity(row['shortage'], row['unit'])
+    return rows, lines_without_bom
+
+
+def apply_inventory_transfer(
+    *,
+    from_warehouse_id: int,
+    from_storage_area_id: int | None,
+    to_warehouse_id: int,
+    to_storage_area_id: int | None,
+    lines: list[ReceiptLine],
+    created_by_user_id: int | None,
+    comment: str | None = None,
+) -> InventoryOperation:
+    """Перемещение ТМЦ между складами или зонами (в пределах CRM, не прицепы)."""
+    if from_warehouse_id == to_warehouse_id and (from_storage_area_id or 0) == (to_storage_area_id or 0):
+        raise ValueError('Укажите разные склады или разные зоны на одном складе.')
+
+    ensure_storage_areas_for_warehouse(from_warehouse_id)
+    ensure_storage_areas_for_warehouse(to_warehouse_id)
+
+    if from_storage_area_id == 0:
+        from_storage_area_id = None
+    if to_storage_area_id == 0:
+        to_storage_area_id = None
+
+    operation = InventoryOperation(
+        operation_type='transfer',
+        status='posted',
+        source_warehouse_id=from_warehouse_id,
+        source_area_id=from_storage_area_id,
+        target_warehouse_id=to_warehouse_id,
+        target_area_id=to_storage_area_id,
+        created_by_user_id=created_by_user_id,
+        posted_at=datetime.utcnow(),
+        comment=comment,
+    )
+    db.session.add(operation)
+    db.session.flush()
+
+    posted = 0
+    for item_id, quantity, line_comment, line_unit in lines:
+        qty = Decimal(str(quantity))
+        if qty <= 0:
+            continue
+        item = Item.query.get(item_id)
+        if not item:
+            raise ValueError(f'Номенклатура #{item_id} не найдена.')
+        if item.item_type == 'TRAILER':
+            raise ValueError(f'«{item.name}»: прицепы перемещаются через раздел «Перемещения» (VIN), не ТМЦ.')
+        unit = normalize_unit(line_unit or item.unit)
+        available = _available_on_warehouse(from_warehouse_id, item_id)
+        if from_storage_area_id:
+            balance = _existing_balance(from_warehouse_id, item_id, from_storage_area_id)
+            available = _available_quantity(balance) if balance else Decimal('0')
+        if available < qty:
+            raise ValueError(
+                f'«{item.name}»: недостаточно на складе отправителя '
+                f'(нужно {format_inventory_quantity(qty, unit)}, есть {format_inventory_quantity(available, unit)}).'
+            )
+
+        allocations = _allocate_issue_from_balances(
+            from_warehouse_id,
+            item_id,
+            qty,
+            from_storage_area_id,
+        )
+        if not allocations:
+            raise ValueError(f'«{item.name}»: не удалось списать с склада отправителя.')
+
+        for balance, take in allocations:
+            db.session.add(
+                InventoryOperationLine(
+                    operation_id=operation.id,
+                    item_id=item_id,
+                    quantity=take,
+                    unit=unit,
+                    direction='out',
+                    comment=line_comment,
+                )
+            )
+            balance.quantity = Decimal(balance.quantity or 0) - take
+            balance.updated_at = datetime.utcnow()
+
+        target_balance = _existing_balance(to_warehouse_id, item_id, to_storage_area_id)
+        if target_balance and Decimal(target_balance.quantity or 0) > 0 and not units_match(target_balance.unit, unit):
+            raise ValueError(
+                f'«{item.name}»: на складе получателя учёт в {normalize_unit(target_balance.unit)}, '
+                f'перемещение в {unit} невозможно.'
+            )
+        if not target_balance:
+            target_balance = get_or_create_balance(
+                to_warehouse_id,
+                item_id,
+                to_storage_area_id,
+                unit=unit,
+            )
+        target_balance.quantity = Decimal(target_balance.quantity or 0) + qty
+        target_balance.unit = unit
+        target_balance.updated_at = datetime.utcnow()
+        db.session.add(
+            InventoryOperationLine(
+                operation_id=operation.id,
+                item_id=item_id,
+                quantity=qty,
+                unit=unit,
+                direction='in',
+                comment=line_comment,
+            )
+        )
+        posted += 1
+
+    if posted == 0:
+        raise ValueError('Добавьте хотя бы одну позицию с количеством больше нуля.')
+    db.session.flush()
+    return operation
 
 
 def production_warehouse_ids() -> list[int]:

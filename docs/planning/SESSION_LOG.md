@@ -4,6 +4,15 @@
 
 Дата: 2026-06-01
 Проект: trailers
+Модуль: учёт ТМЦ — перемещение и дефицит
+Что сделано: отчёт дефицита `/inventory/deficit`; перемещение ТМЦ `apply_inventory_transfer`, форма `/inventory/transfers/new`, список операций (приход + перемещение), карточка с направлением in/out; пункты меню у админа/директора; кнопки с остатков.
+Какие файлы: `inventory_service.py`, `forms.py`, `views.py`, `templates/inventory_*.html`, `templates/base.html`, `templates/inventory_balances_list.html`, `docs/planning/*`.
+Следующий шаг: commit + deploy; тестовое перемещение между двумя производственными складами.
+
+---
+
+Дата: 2026-06-01
+Проект: trailers
 Модуль: учёт ТМЦ / производство
 Что сделано: приход и остатки ТМЦ (`inventory_service.py`, `/inventory/balances`, `/inventory/receipts/new`); зоны METAL/COMPONENTS/SEMI_FINISHED и др.; производство — приоритет оплаченных заказов, вкладка «Материалы» = остатки; меню: приход/остатки (админ/директор), пополнение склада у менеджера.
 Какие файлы: `inventory_service.py`, `views.py`, `forms.py`, `templates/inventory_*.html`, `templates/production_workspace.html`, `templates/base.html`, `docs/planning/*`.

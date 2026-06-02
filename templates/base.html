@@ -45,7 +45,10 @@
                     {{ nav_item('Реестр VIN', 'bi-upc', 'main.vin_registry_list', active=path.startswith('/logistics/vin-registry')) }}
                     {{ nav_item('Пополнение складов', 'bi-box-arrow-in-down', 'main.stock_replenishment_list', section='stock_replenishment') }}
                     {{ nav_item('Остатки ТМЦ', 'bi-boxes', 'main.inventory_balances_list', match='/inventory/balances') }}
-                    {{ nav_item('Приход ТМЦ', 'bi-box-arrow-in-down', 'main.inventory_receipt_create', match='/inventory/receipts') }}
+                    {{ nav_item('Дефицит ТМЦ', 'bi-exclamation-circle', 'main.inventory_deficit_report', match='/inventory/deficit') }}
+                    {{ nav_item('Приход ТМЦ', 'bi-box-arrow-in-down', 'main.inventory_receipt_create', match='/inventory/receipts/new') }}
+                    {{ nav_item('Перемещение ТМЦ', 'bi-arrow-left-right', 'main.inventory_transfer_create', match='/inventory/transfers') }}
+                    {{ nav_item('Операции ТМЦ', 'bi-journal-text', 'main.inventory_receipts_list', match='/inventory/receipts', active=(path.startswith('/inventory/receipts') and not path.startswith('/inventory/receipts/new'))) }}
                     {{ nav_item('Перемещения', 'bi-truck', 'main.stock_movements_list', match='/stock-movements') }}
                     {{ nav_item('Реализации', 'bi-journal-check', 'main.sales_realizations_list', section='realizations') }}
                     {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', section='reports') }}
@@ -65,12 +68,14 @@
                     {{ nav_item('Наличие', 'bi-box-seam', href=url_for('main.trailers_list', status='IN_STOCK'), section='availability') }}
                     {{ nav_item('Перемещения', 'bi-truck', 'main.stock_movements_list', section='movements') }}
                     {{ nav_item('Остатки ТМЦ', 'bi-boxes', 'main.inventory_balances_list', match='/inventory/balances') }}
+                    {{ nav_item('Дефицит ТМЦ', 'bi-exclamation-circle', 'main.inventory_deficit_report', match='/inventory/deficit') }}
                     {{ nav_item('Реализации', 'bi-journal-check', 'main.sales_realizations_list', section='realizations') }}
                     {{ nav_item('Клиенты', 'bi-person-lines-fill', 'main.customers_list', section='clients') }}
                     {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', section='reports') }}
                 {% elif current_user.is_production %}
                     {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', section='production') }}
                     {{ nav_item('Остатки ТМЦ', 'bi-boxes', 'main.inventory_balances_list', match='/inventory/balances') }}
+                    {{ nav_item('Дефицит ТМЦ', 'bi-exclamation-circle', 'main.inventory_deficit_report', match='/inventory/deficit') }}
                 {% elif current_user.is_logistics %}
                     {{ nav_item('VIN-реестр', 'bi-upc', 'main.vin_registry_list', active=(endpoint == 'main.vin_registry_list' and not request.args.get('status') and not request.args.get('upload'))) }}
                     {{ nav_item('Свободные VIN', 'bi-upc-scan', href=url_for('main.vin_registry_list', status='free'), active=(endpoint == 'main.vin_registry_list' and request.args.get('status') == 'free')) }}
@@ -89,7 +94,10 @@
                     {{ nav_item('Реестр VIN', 'bi-upc', 'main.vin_registry_list', active=path.startswith('/logistics/vin-registry')) }}
                     {{ nav_item('Пополнение складов', 'bi-box-arrow-in-down', 'main.stock_replenishment_list', section='stock_replenishment') }}
                     {{ nav_item('Остатки ТМЦ', 'bi-boxes', 'main.inventory_balances_list', match='/inventory/balances') }}
-                    {{ nav_item('Приход ТМЦ', 'bi-box-arrow-in-down', 'main.inventory_receipt_create', match='/inventory/receipts') }}
+                    {{ nav_item('Дефицит ТМЦ', 'bi-exclamation-circle', 'main.inventory_deficit_report', match='/inventory/deficit') }}
+                    {{ nav_item('Приход ТМЦ', 'bi-box-arrow-in-down', 'main.inventory_receipt_create', match='/inventory/receipts/new') }}
+                    {{ nav_item('Перемещение ТМЦ', 'bi-arrow-left-right', 'main.inventory_transfer_create', match='/inventory/transfers') }}
+                    {{ nav_item('Операции ТМЦ', 'bi-journal-text', 'main.inventory_receipts_list', match='/inventory/receipts', active=(path.startswith('/inventory/receipts') and not path.startswith('/inventory/receipts/new'))) }}
                     {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', section='reports') }}
                     <div class="sidebar-section-title">Справочники</div>
                     {{ nav_item('Номенклатура', 'bi-tags', 'main.items_list', match='/items') }}

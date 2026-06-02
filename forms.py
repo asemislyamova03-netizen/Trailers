@@ -834,3 +834,12 @@ class InventoryReceiptForm(IdempotentFlaskForm):
     document_ref = StringField('Накладная / документ', validators=[Optional(), Length(max=120)])
     comment = TextAreaField('Комментарий', validators=[Optional()])
     submit = SubmitField('Провести приход')
+
+
+class InventoryTransferForm(IdempotentFlaskForm):
+    from_warehouse_id = SelectField('Со склада', coerce=int, validators=[DataRequired()])
+    from_storage_area_id = SelectField('Зона (откуда)', coerce=int, validators=[Optional()])
+    to_warehouse_id = SelectField('На склад', coerce=int, validators=[DataRequired()])
+    to_storage_area_id = SelectField('Зона (куда)', coerce=int, validators=[Optional()])
+    comment = TextAreaField('Комментарий', validators=[Optional()])
+    submit = SubmitField('Провести перемещение')

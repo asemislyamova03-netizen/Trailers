@@ -27,13 +27,15 @@ from forms import (
     CustomerForm, SalesContractForm, LoginForm, UserForm, OTTSForm, LeadForm, CustomerOrderForm, OrderPaymentForm,
     SupplyNeedForm, ProductionRequestForm, ProductionRequestLineForm, StockMovementForm, StockMovementBatchForm,
     AssignVinForm, SendTrailerForm, StockReplenishmentForm, TrailerItemChangeForm, ContractTemplateForm,
-    KaspiOrderImportForm, KaspiOrderListImportForm, InventoryReceiptForm,
+    KaspiOrderImportForm, KaspiOrderListImportForm, InventoryReceiptForm, InventoryTransferForm,
 )
 from inventory_service import (
     InsufficientInventoryError,
     apply_inventory_receipt,
+    apply_inventory_transfer,
     apply_production_consumption,
     check_bom_shortages,
+    compute_bom_deficit_report,
     ensure_storage_areas_for_warehouse,
     get_active_bom,
     group_inventory_balances,
@@ -11971,16 +11973,118 @@ def inventory_balances_list():
     )
 
 
+@main_bp.route('/inventory/deficit')
+@role_required('director', 'manager', 'production')
+def inventory_deficit_report():
+    warehouse_id = request.args.get('warehouse_id', type=int)
+    only_shortage = request.args.get('only_shortage', '1') == '1'
+    production_warehouses = (
+        Warehouse.query.filter(
+            Warehouse.is_active == True,
+            or_(Warehouse.is_production == True, Warehouse.warehouse_kind.in_(('production', 'assembly', 'raw_materials'))),
+        )
+        .order_by(Warehouse.name.asc())
+        .all()
+    )
+    if not warehouse_id and production_warehouses:
+        warehouse_id = production_warehouses[0].id
+    deficit_rows, lines_without_bom = compute_bom_deficit_report(
+        material_warehouse_id=warehouse_id,
+        only_shortage=only_shortage,
+    )
+    return render_template(
+        'inventory_deficit_report.html',
+        deficit_rows=deficit_rows,
+        lines_without_bom=lines_without_bom,
+        production_warehouses=production_warehouses,
+        warehouse_id=warehouse_id,
+        only_shortage=only_shortage,
+    )
+
+
 @main_bp.route('/inventory/receipts')
 @role_required('director')
 def inventory_receipts_list():
     operations = (
-        InventoryOperation.query.filter_by(operation_type='receipt', status='posted')
+        InventoryOperation.query.filter(
+            InventoryOperation.operation_type.in_(('receipt', 'transfer')),
+            InventoryOperation.status == 'posted',
+        )
         .order_by(InventoryOperation.posted_at.desc(), InventoryOperation.id.desc())
         .limit(80)
         .all()
     )
     return render_template('inventory_receipts_list.html', operations=operations)
+
+
+@main_bp.route('/inventory/transfers/new', methods=['GET', 'POST'])
+@role_required('director')
+def inventory_transfer_create():
+    form = InventoryTransferForm()
+    form.from_warehouse_id.choices = _inventory_warehouse_choices()
+    form.to_warehouse_id.choices = _inventory_warehouse_choices()
+
+    from_wh = form.from_warehouse_id.data or request.args.get('from_warehouse_id', type=int)
+    to_wh = form.to_warehouse_id.data or request.args.get('to_warehouse_id', type=int)
+    if request.method == 'GET' and not from_wh:
+        prod_ids = production_warehouse_ids()
+        if prod_ids:
+            from_wh = prod_ids[0]
+            form.from_warehouse_id.data = from_wh
+    if request.method == 'POST':
+        from_wh = request.form.get('from_warehouse_id', type=int) or from_wh
+        to_wh = request.form.get('to_warehouse_id', type=int) or to_wh
+
+    form.from_storage_area_id.choices = _inventory_storage_area_choices(from_wh)
+    form.to_storage_area_id.choices = _inventory_storage_area_choices(to_wh)
+    receipt_items = _inventory_receipt_items()
+
+    if form.validate_on_submit():
+        from_warehouse_id = form.from_warehouse_id.data
+        to_warehouse_id = form.to_warehouse_id.data
+        from_area_id = form.from_storage_area_id.data or None
+        to_area_id = form.to_storage_area_id.data or None
+        if from_area_id == 0:
+            from_area_id = None
+        if to_area_id == 0:
+            to_area_id = None
+        transfer_lines = _parse_inventory_receipt_lines()
+        if not transfer_lines:
+            flash('Добавьте хотя бы одну позицию с количеством больше нуля.', 'danger')
+        else:
+            idem_key, duplicate = _reserve_idempotency_key()
+            if duplicate:
+                return _duplicate_redirect(
+                    idem_key,
+                    url_for('main.inventory_balances_list', warehouse_id=to_warehouse_id),
+                )
+            try:
+                operation = apply_inventory_transfer(
+                    from_warehouse_id=from_warehouse_id,
+                    from_storage_area_id=from_area_id,
+                    to_warehouse_id=to_warehouse_id,
+                    to_storage_area_id=to_area_id,
+                    lines=transfer_lines,
+                    created_by_user_id=current_user.id,
+                    comment=(form.comment.data or '').strip() or None,
+                )
+                _finish_idempotency(idem_key, 'InventoryOperation', operation.id)
+                db.session.commit()
+                flash(f'Перемещение ТМЦ проведено (#{operation.id}), позиций: {len(transfer_lines)}.', 'success')
+                return redirect(url_for('main.inventory_balances_list', warehouse_id=to_warehouse_id))
+            except ValueError as exc:
+                db.session.rollback()
+                flash(str(exc), 'danger')
+            except Exception:
+                db.session.rollback()
+                flash('Не удалось провести перемещение. Проверьте данные и повторите.', 'danger')
+
+    return render_template(
+        'inventory_transfer_form.html',
+        form=form,
+        receipt_items=receipt_items,
+        title='Перемещение ТМЦ',
+    )
 
 
 @main_bp.route('/inventory/receipts/new', methods=['GET', 'POST'])
@@ -12042,9 +12146,9 @@ def inventory_receipt_create():
 @main_bp.route('/inventory/receipts/<int:operation_id>')
 @role_required('director', 'manager', 'production')
 def inventory_receipt_detail(operation_id):
-    operation = InventoryOperation.query.filter_by(
-        id=operation_id,
-        operation_type='receipt',
+    operation = InventoryOperation.query.filter(
+        InventoryOperation.id == operation_id,
+        InventoryOperation.operation_type.in_(('receipt', 'transfer')),
     ).first_or_404()
     lines = operation.lines.order_by(InventoryOperationLine.id.asc()).all()
     return render_template(

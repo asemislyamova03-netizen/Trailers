@@ -1,0 +1,135 @@
+{% extends 'base.html' %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<div class="app-card p-4">
+  <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+    <div>
+      <h1 class="h4 mb-1">{{ title }}</h1>
+      <p class="text-muted mb-0">Между производственными складами и филиалами. Только комплектующие и материалы (не прицепы).</p>
+    </div>
+    <a class="btn btn-soft" href="{{ url_for('main.inventory_balances_list') }}">Остатки</a>
+  </div>
+
+  <form method="post" id="inventoryTransferForm">
+    {{ form.hidden_tag() }}
+    <div class="row g-3 mb-3">
+      <div class="col-md-6">
+        <h2 class="h6">Откуда</h2>
+        {{ form.from_warehouse_id.label(class="form-label") }}
+        {{ form.from_warehouse_id(class="form-select", id="fromWarehouse") }}
+        {{ form.from_storage_area_id.label(class="form-label") }}
+        {{ form.from_storage_area_id(class="form-select", id="fromStorageArea") }}
+        <div class="form-text">Пустая зона — списание с любых зон склада по FIFO.</div>
+      </div>
+      <div class="col-md-6">
+        <h2 class="h6">Куда</h2>
+        {{ form.to_warehouse_id.label(class="form-label") }}
+        {{ form.to_warehouse_id(class="form-select", id="toWarehouse") }}
+        {{ form.to_storage_area_id.label(class="form-label") }}
+        {{ form.to_storage_area_id(class="form-select", id="toStorageArea") }}
+      </div>
+      <div class="col-12">
+        {{ form.comment.label(class="form-label") }}
+        {{ form.comment(class="form-control", rows=2) }}
+      </div>
+    </div>
+
+    <h2 class="h6">Позиции</h2>
+    <div class="table-responsive mb-3">
+      <table class="table table-sm align-middle" id="transferLinesTable">
+        <thead>
+          <tr>
+            <th style="min-width:280px">Номенклатура</th>
+            <th style="width:110px">Ед.</th>
+            <th style="width:130px">Количество</th>
+            <th>Комментарий</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for i in range(5) %}
+          <tr class="receipt-line-row">
+            <td>
+              <select name="line_item_id" class="form-select form-select-sm receipt-item-select">
+                <option value="" data-unit="шт">— не выбрано —</option>
+                {% for item in receipt_items %}
+                  <option value="{{ item.id }}" data-unit="{{ item.unit|default('шт') }}">{{ item.article or '—' }} — {{ item.name }}</option>
+                {% endfor %}
+              </select>
+            </td>
+            <td>
+              <input type="hidden" name="line_unit" class="receipt-unit-input" value="">
+              <span class="badge text-bg-light receipt-unit-label">—</span>
+            </td>
+            <td><input type="number" name="line_quantity" class="form-control form-control-sm receipt-qty-input" min="0" step="0.001" placeholder="0"></td>
+            <td><input type="text" name="line_comment" class="form-control form-control-sm" placeholder="Необязательно"></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <button type="button" class="btn btn-soft btn-sm mb-3" id="addTransferLine">+ строка</button>
+    {{ form.submit(class="btn btn-orange") }}
+  </form>
+</div>
+
+<script>
+(function () {
+  const unitSteps = { 'шт': '1', 'компл': '1', 'упак': '1', 'кг': '0.001', 'т': '0.001', 'м': '0.001', 'м²': '0.001', 'м³': '0.001', 'л': '0.001' };
+
+  function applyRowUnit(row) {
+    const select = row.querySelector('.receipt-item-select');
+    const unitInput = row.querySelector('.receipt-unit-input');
+    const unitLabel = row.querySelector('.receipt-unit-label');
+    const qtyInput = row.querySelector('.receipt-qty-input');
+    if (!select || !unitInput || !unitLabel || !qtyInput) return;
+    const option = select.options[select.selectedIndex];
+    const unit = option ? (option.getAttribute('data-unit') || 'шт') : 'шт';
+    unitInput.value = unit;
+    unitLabel.textContent = unit;
+    qtyInput.step = unitSteps[unit] || '0.001';
+  }
+
+  function bindRow(row) {
+    const select = row.querySelector('.receipt-item-select');
+    if (!select) return;
+    select.addEventListener('change', function () { applyRowUnit(row); });
+    applyRowUnit(row);
+  }
+
+  document.querySelectorAll('.receipt-line-row').forEach(bindRow);
+
+  function reloadWarehouses() {
+    const fromId = document.getElementById('fromWarehouse').value;
+    const toId = document.getElementById('toWarehouse').value;
+    if (fromId && toId) {
+      const url = new URL('{{ url_for("main.inventory_transfer_create") }}', window.location.origin);
+      url.searchParams.set('from_warehouse_id', fromId);
+      url.searchParams.set('to_warehouse_id', toId);
+      window.location.href = url.toString();
+    }
+  }
+
+  const fromWh = document.getElementById('fromWarehouse');
+  const toWh = document.getElementById('toWarehouse');
+  if (fromWh) fromWh.addEventListener('change', reloadWarehouses);
+  if (toWh) toWh.addEventListener('change', reloadWarehouses);
+
+  const tableBody = document.querySelector('#transferLinesTable tbody');
+  const addBtn = document.getElementById('addTransferLine');
+  if (addBtn && tableBody) {
+    addBtn.addEventListener('click', function () {
+      const template = tableBody.querySelector('.receipt-line-row');
+      if (!template) return;
+      const clone = template.cloneNode(true);
+      clone.querySelectorAll('select, input').forEach(function (el) {
+        if (el.type !== 'hidden') el.value = '';
+        else el.value = '';
+      });
+      clone.querySelector('.receipt-unit-label').textContent = '—';
+      tableBody.appendChild(clone);
+      bindRow(clone);
+    });
+  }
+})();
+</script>
+{% endblock %}

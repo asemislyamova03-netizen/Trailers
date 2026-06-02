@@ -1,0 +1,84 @@
+{% extends 'base.html' %}
+{% block title %}Дефицит ТМЦ{% endblock %}
+{% block content %}
+<div class="compact-page-header">
+  <div>
+    <h1>Дефицит ТМЦ</h1>
+    <div class="text-muted small">Сколько материалов не хватает на открытые задания производства (по BOM × остаток выпуска). Для закупки и прихода.</div>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('main.inventory_balances_list', warehouse_id=warehouse_id) }}" class="btn btn-soft btn-sm">Остатки</a>
+    {% if current_user.is_admin or current_user.is_director %}
+    <a href="{{ url_for('main.inventory_receipt_create', warehouse_id=warehouse_id) }}" class="btn btn-orange btn-sm">Приход</a>
+    {% endif %}
+  </div>
+</div>
+
+<form method="get" class="app-card p-3 mb-3">
+  <div class="row g-2 align-items-end">
+    <div class="col-md-5">
+      <label class="form-label">Производственный склад</label>
+      <select name="warehouse_id" class="form-select" onchange="this.form.submit()">
+        {% for w in production_warehouses %}
+          <option value="{{ w.id }}" {% if warehouse_id == w.id %}selected{% endif %}>{{ w.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-4">
+      <div class="form-check mt-4">
+        <input class="form-check-input" type="checkbox" name="only_shortage" value="1" id="onlyShortage" {% if only_shortage %}checked{% endif %} onchange="this.form.submit()">
+        <label class="form-check-label" for="onlyShortage">Только с дефицитом</label>
+      </div>
+    </div>
+  </div>
+</form>
+
+{% if lines_without_bom %}
+<div class="alert alert-warning py-2 small">{{ lines_without_bom }} открытых заданий без спецификации (BOM) — в расчёт не попали. Заполните BOM у моделей прицепов.</div>
+{% endif %}
+
+<div class="app-card">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Артикул</th>
+          <th>Материал</th>
+          <th class="text-end">Нужно</th>
+          <th class="text-end">На складе</th>
+          <th class="text-end">Дефицит</th>
+          <th>Задания</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for row in deficit_rows %}
+        <tr class="{% if row.shortage > 0 %}table-warning{% endif %}">
+          <td class="fw-semibold">{{ row.article or '—' }}</td>
+          <td>{{ row.name }}</td>
+          <td class="text-end">{{ row.required_display }}</td>
+          <td class="text-end">{{ row.available_display }}</td>
+          <td class="text-end fw-semibold text-danger">{{ row.shortage_display }}</td>
+          <td class="small">
+            {% for src in row.sources[:4] %}
+              <div>
+                {% if src.is_paid %}<span class="badge text-bg-danger me-1">оплачен</span>{% endif %}
+                {{ src.request_number }} · {{ src.product_label }} ×{{ src.remaining }}
+              </div>
+            {% endfor %}
+            {% if row.sources|length > 4 %}
+              <div class="text-muted">ещё {{ row.sources|length - 4 }} заданий</div>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr>
+          <td colspan="6" class="text-muted p-3">
+            {% if only_shortage %}Дефицита нет — материалов хватает на текущие задания (или нет открытых заданий с BOM).{% else %}Нет потребности по BOM на открытые задания.{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

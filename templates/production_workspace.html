@@ -74,7 +74,10 @@
 </div>
 {% elif active_tab == 'materials' %}
 <div class="app-card">
-  <div class="px-3 pt-3 text-muted small">Только ТМЦ (не прицепы). При выпуске (+1) материалы списываются по спецификации (BOM) с производственного склада филиала.</div>
+  <div class="px-3 pt-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span class="text-muted small">Только ТМЦ (не прицепы). При выпуске (+1) списание по BOM с производственного склада.</span>
+    <a href="{{ url_for('main.inventory_deficit_report') }}" class="btn btn-sm btn-soft">Дефицит для закупки</a>
+  </div>
   {% for group in material_balance_groups %}
   <div class="px-3 pt-2 fw-semibold small text-uppercase text-muted">{{ group.label }}</div>
   <div class="table-responsive">
