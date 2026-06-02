@@ -29,6 +29,14 @@
         {{ form.storage_area_id(class="form-select", id="receiptStorageArea") }}
       </div>
       <div class="col-md-5">
+        {{ form.supplier_id.label(class="form-label") }}
+        {{ form.supplier_id(class="form-select") }}
+      </div>
+      <div class="col-md-5">
+        {{ form.receipt_plan_id.label(class="form-label") }}
+        {{ form.receipt_plan_id(class="form-select") }}
+      </div>
+      <div class="col-md-5">
         {{ form.document_ref.label(class="form-label") }}
         {{ form.document_ref(class="form-control") }}
       </div>
@@ -38,7 +46,10 @@
       </div>
     </div>
 
-    <h2 class="h6">Позиции</h2>
+    <div class="d-flex justify-content-between align-items-center mb-2">
+      <h2 class="h6 mb-0">Позиции</h2>
+      <a href="{{ url_for('main.item_create', return_to=url_for('main.inventory_receipt_create', warehouse_id=form.warehouse_id.data or 0, storage_area_id=form.storage_area_id.data or 0)) }}" class="btn btn-soft btn-sm">+ Добавить номенклатуру</a>
+    </div>
     <div class="table-responsive mb-3">
       <table class="table table-sm align-middle" id="receiptLinesTable">
         <thead>

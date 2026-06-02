@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Планы поступлений{% endblock %}
+{% block content %}
+<div class="compact-page-header">
+  <div>
+    <h1>Планы поступлений</h1>
+    <div class="text-muted small">Плановые поступления ТМЦ от поставщиков.</div>
+  </div>
+  <a href="{{ url_for('main.receipt_plan_create') }}" class="btn btn-orange btn-sm">Новый план</a>
+</div>
+
+<div class="app-card">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Номер</th>
+          <th>Дата</th>
+          <th>Поставщик</th>
+          <th>Склад / зона</th>
+          <th>Статус</th>
+          <th class="text-end">Позиций</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in plans %}
+        <tr>
+          <td class="fw-semibold">{{ row.plan_number }}</td>
+          <td>{{ row.planned_date|date_format if row.planned_date else '—' }}</td>
+          <td>{{ row.supplier.name if row.supplier else '—' }}</td>
+          <td>{{ row.warehouse.name if row.warehouse else '—' }}{% if row.storage_area %} / {{ row.storage_area.name }}{% endif %}</td>
+          <td><span class="badge text-bg-light">{{ row.status }}</span></td>
+          <td class="text-end">{{ row.lines.count() }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="text-muted p-3">Планов пока нет.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

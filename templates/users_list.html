@@ -28,7 +28,9 @@
         {% elif u.role == 'manager' %}Менеджер
         {% elif u.role == 'production' %}Производство
         {% elif u.role == 'logistics' %}Логистика
-        {% elif u.role == 'warehouse' %}Кладовщик
+        {% elif u.role == 'warehouse' %}Кладовщик + закупщик
+        {% elif u.role == 'laser_operator' %}Лазерщик
+        {% elif u.role == 'bending_operator' %}Гибщик
         {% elif u.role == 'viewer' %}Просмотр
         {% else %}{{ u.role }}{% endif %}
       </td>

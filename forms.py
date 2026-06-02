@@ -47,7 +47,9 @@ class UserForm(IdempotentFlaskForm):
             ('manager', 'Менеджер'),
             ('production', 'Производство'),
             ('logistics', 'Логистика'),
-            ('warehouse', 'Кладовщик (ТМЦ)'),
+            ('warehouse', 'Кладовщик + закупщик'),
+            ('laser_operator', 'Лазерщик'),
+            ('bending_operator', 'Гибщик'),
             ('viewer', 'Просмотр'),
         ],
         validators=[DataRequired()]
@@ -112,6 +114,17 @@ class ItemForm(IdempotentFlaskForm):
     is_sellable = BooleanField('Можно продавать отдельно', default=True)
     requires_vin = BooleanField('Требует VIN', default=False)
     is_internal_bom_item = BooleanField('Полуфабрикат / заготовка (учёт ТМЦ)', default=False)
+    component_category = SelectField(
+        'Категория ТМЦ',
+        choices=[
+            ('', '— не указано —'),
+            ('metal_raw', 'Металл / сырьё'),
+            ('semi_finished', 'Полуфабрикат'),
+            ('component', 'Комплектующее'),
+        ],
+        validators=[Optional()],
+    )
+    is_controlled = BooleanField('Контролируемая деталь (участвует в плане)', default=False)
     article = StringField(
         'Артикул',
         validators=[Optional(), Length(max=64)]
@@ -832,6 +845,8 @@ class StockMovementBatchForm(IdempotentFlaskForm):
 class InventoryReceiptForm(IdempotentFlaskForm):
     warehouse_id = SelectField('Склад', coerce=int, validators=[DataRequired()])
     storage_area_id = SelectField('Зона хранения', coerce=int, validators=[Optional()])
+    supplier_id = SelectField('Поставщик', coerce=int, validators=[Optional()])
+    receipt_plan_id = SelectField('План поступления', coerce=int, validators=[Optional()])
     document_ref = StringField('Накладная / документ', validators=[Optional(), Length(max=120)])
     comment = TextAreaField('Комментарий', validators=[Optional()])
     submit = SubmitField('Провести приход')
@@ -844,3 +859,33 @@ class InventoryTransferForm(IdempotentFlaskForm):
     to_storage_area_id = SelectField('Зона (куда)', coerce=int, validators=[Optional()])
     comment = TextAreaField('Комментарий', validators=[Optional()])
     submit = SubmitField('Провести перемещение')
+
+
+class SupplierForm(IdempotentFlaskForm):
+    name = StringField('Наименование поставщика', validators=[DataRequired(), Length(max=160)])
+    contact_name = StringField('Контактное лицо', validators=[Optional(), Length(max=120)])
+    phone = StringField('Телефон', validators=[Optional(), Length(max=64)])
+    email = StringField('Email', validators=[Optional(), Email(), Length(max=120)])
+    comment = TextAreaField('Комментарий', validators=[Optional()])
+    is_active = BooleanField('Активен', default=True)
+    submit = SubmitField('Сохранить')
+
+
+class InventoryReceiptPlanForm(IdempotentFlaskForm):
+    supplier_id = SelectField('Поставщик', coerce=int, validators=[Optional()])
+    warehouse_id = SelectField('Склад', coerce=int, validators=[DataRequired()])
+    storage_area_id = SelectField('Зона хранения', coerce=int, validators=[Optional()])
+    planned_date = DateField('Плановая дата', format='%Y-%m-%d', validators=[Optional()])
+    status = SelectField(
+        'Статус',
+        choices=[
+            ('planned', 'Запланировано'),
+            ('partial', 'Частично принято'),
+            ('done', 'Закрыто'),
+            ('cancelled', 'Отменено'),
+        ],
+        validators=[DataRequired()],
+        default='planned',
+    )
+    comment = TextAreaField('Комментарий', validators=[Optional()])
+    submit = SubmitField('Сохранить план')

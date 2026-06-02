@@ -125,6 +125,8 @@ def apply_inventory_receipt(
     storage_area_id: int | None,
     lines: list[ReceiptLine],
     created_by_user_id: int | None,
+    supplier_id: int | None = None,
+    receipt_plan_id: int | None = None,
     document_ref: str | None = None,
     comment: str | None = None,
 ) -> InventoryOperation:
@@ -135,6 +137,8 @@ def apply_inventory_receipt(
         status='posted',
         target_warehouse_id=warehouse_id,
         target_area_id=storage_area_id,
+        supplier_id=supplier_id,
+        receipt_plan_id=receipt_plan_id,
         created_by_user_id=created_by_user_id,
         posted_at=datetime.utcnow(),
         comment=' '.join(part for part in [document_ref, comment] if part) or None,

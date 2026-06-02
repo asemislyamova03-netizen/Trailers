@@ -90,6 +90,59 @@ class WarehouseStorageArea(db.Model):
     )
 
 
+class Supplier(db.Model):
+    __tablename__ = 'supplier'
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(160), nullable=False, unique=True, index=True)
+    contact_name = db.Column(db.String(120), nullable=True)
+    phone = db.Column(db.String(64), nullable=True)
+    email = db.Column(db.String(120), nullable=True)
+    comment = db.Column(db.Text, nullable=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f'<Supplier id={self.id} name={self.name!r}>'
+
+
+class InventoryReceiptPlan(db.Model):
+    __tablename__ = 'inventory_receipt_plan'
+
+    id = db.Column(db.Integer, primary_key=True)
+    plan_number = db.Column(db.String(40), nullable=False, unique=True, index=True)
+    supplier_id = db.Column(db.Integer, db.ForeignKey('supplier.id'), nullable=True, index=True)
+    warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=True, index=True)
+    storage_area_id = db.Column(db.Integer, db.ForeignKey('warehouse_storage_area.id'), nullable=True, index=True)
+    planned_date = db.Column(db.Date, nullable=True, index=True)
+    status = db.Column(db.String(30), nullable=False, default='planned', index=True)
+    comment = db.Column(db.Text, nullable=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    supplier = db.relationship('Supplier', backref='receipt_plans')
+    warehouse = db.relationship('Warehouse', backref='receipt_plans')
+    storage_area = db.relationship('WarehouseStorageArea', backref='receipt_plans')
+    created_by_user = db.relationship('User', foreign_keys=[created_by_user_id])
+
+
+class InventoryReceiptPlanLine(db.Model):
+    __tablename__ = 'inventory_receipt_plan_line'
+
+    id = db.Column(db.Integer, primary_key=True)
+    plan_id = db.Column(db.Integer, db.ForeignKey('inventory_receipt_plan.id'), nullable=False, index=True)
+    item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=False, index=True)
+    quantity = db.Column(db.Numeric(14, 3), nullable=False)
+    unit = db.Column(db.String(20), nullable=False, default='шт')
+    comment = db.Column(db.Text, nullable=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+
+    plan = db.relationship('InventoryReceiptPlan', backref=db.backref('lines', lazy='dynamic', cascade='all, delete-orphan'))
+    item = db.relationship('Item', backref='receipt_plan_lines')
+
+
 class User(UserMixin, db.Model):
     __tablename__ = 'user'
 
@@ -132,6 +185,18 @@ class User(UserMixin, db.Model):
     @property
     def is_warehouse(self) -> bool:
         return self.role == 'warehouse'
+
+    @property
+    def is_purchaser(self) -> bool:
+        return self.role == 'purchaser'
+
+    @property
+    def is_laser_operator(self) -> bool:
+        return self.role == 'laser_operator'
+
+    @property
+    def is_bending_operator(self) -> bool:
+        return self.role == 'bending_operator'
 
     @property
     def is_viewer(self) -> bool:
@@ -216,6 +281,9 @@ class Item(db.Model):
     requires_vin = db.Column(db.Boolean, nullable=False, default=False, index=True)
     is_realization_line = db.Column(db.Boolean, nullable=False, default=False, index=True)
     is_internal_bom_item = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    component_category = db.Column(db.String(40), nullable=True, index=True)
+    is_controlled = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    production_stage_default = db.Column(db.String(40), nullable=True, index=True)
 
     # Артикул:
     #   для прицепов обязателен
@@ -352,6 +420,8 @@ class InventoryOperation(db.Model):
     customer_order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=True, index=True)
     customer_order_line_id = db.Column(db.Integer, db.ForeignKey('customer_order_line.id'), nullable=True, index=True)
     workshop_id = db.Column(db.Integer, db.ForeignKey('production_workshop.id'), nullable=True, index=True)
+    supplier_id = db.Column(db.Integer, db.ForeignKey('supplier.id'), nullable=True, index=True)
+    receipt_plan_id = db.Column(db.Integer, db.ForeignKey('inventory_receipt_plan.id'), nullable=True, index=True)
     created_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
     posted_at = db.Column(db.DateTime, nullable=True)
@@ -367,6 +437,8 @@ class InventoryOperation(db.Model):
     customer_order = db.relationship('CustomerOrder', backref='inventory_operations')
     customer_order_line = db.relationship('CustomerOrderLine', backref='inventory_operations')
     workshop = db.relationship('ProductionWorkshop', backref='inventory_operations')
+    supplier = db.relationship('Supplier', backref='inventory_operations')
+    receipt_plan = db.relationship('InventoryReceiptPlan', backref='inventory_operations')
     created_by_user = db.relationship('User', foreign_keys=[created_by_user_id])
 
 

@@ -49,6 +49,8 @@
                     {{ nav_item('Приход ТМЦ', 'bi-box-arrow-in-down', 'main.inventory_receipt_create', match='/inventory/receipts/new') }}
                     {{ nav_item('Перемещение ТМЦ', 'bi-arrow-left-right', 'main.inventory_transfer_create', match='/inventory/transfers') }}
                     {{ nav_item('Операции ТМЦ', 'bi-journal-text', 'main.inventory_receipts_list', match='/inventory/receipts', active=(path.startswith('/inventory/receipts') and not path.startswith('/inventory/receipts/new'))) }}
+                    {{ nav_item('Поставщики', 'bi-building', 'main.suppliers_list', match='/suppliers') }}
+                    {{ nav_item('Планы поступлений', 'bi-calendar2-week', 'main.receipt_plans_list', match='/inventory/receipt-plans') }}
                     {{ nav_item('Перемещения', 'bi-truck', 'main.stock_movements_list', match='/stock-movements') }}
                     {{ nav_item('Реализации', 'bi-journal-check', 'main.sales_realizations_list', section='realizations') }}
                     {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', section='reports') }}
@@ -77,6 +79,9 @@
                     {{ nav_item('Остатки ТМЦ', 'bi-boxes', 'main.inventory_balances_list', match='/inventory/balances') }}
                     {{ nav_item('Дефицит ТМЦ', 'bi-exclamation-circle', 'main.inventory_deficit_report', match='/inventory/deficit') }}
                 {% elif current_user.is_warehouse %}
+                    {{ nav_item('Кабинет снабжения', 'bi-clipboard-data', 'main.purchaser_dashboard', match='/purchaser') }}
+                    {{ nav_item('Поставщики', 'bi-building', 'main.suppliers_list', match='/suppliers') }}
+                    {{ nav_item('Планы поступлений', 'bi-calendar2-week', 'main.receipt_plans_list', match='/inventory/receipt-plans') }}
                     {{ nav_item('Остатки ТМЦ', 'bi-boxes', 'main.inventory_balances_list', match='/inventory/balances') }}
                     {{ nav_item('Дефицит ТМЦ', 'bi-exclamation-circle', 'main.inventory_deficit_report', match='/inventory/deficit') }}
                     {{ nav_item('Приход ТМЦ', 'bi-box-arrow-in-down', 'main.inventory_receipt_create', match='/inventory/receipts/new') }}
@@ -104,6 +109,8 @@
                     {{ nav_item('Приход ТМЦ', 'bi-box-arrow-in-down', 'main.inventory_receipt_create', match='/inventory/receipts/new') }}
                     {{ nav_item('Перемещение ТМЦ', 'bi-arrow-left-right', 'main.inventory_transfer_create', match='/inventory/transfers') }}
                     {{ nav_item('Операции ТМЦ', 'bi-journal-text', 'main.inventory_receipts_list', match='/inventory/receipts', active=(path.startswith('/inventory/receipts') and not path.startswith('/inventory/receipts/new'))) }}
+                    {{ nav_item('Поставщики', 'bi-building', 'main.suppliers_list', match='/suppliers') }}
+                    {{ nav_item('Планы поступлений', 'bi-calendar2-week', 'main.receipt_plans_list', match='/inventory/receipt-plans') }}
                     {{ nav_item('Отчеты', 'bi-bar-chart', 'main.director_report', section='reports') }}
                     <div class="sidebar-section-title">Справочники</div>
                     {{ nav_item('Номенклатура', 'bi-tags', 'main.items_list', match='/items') }}

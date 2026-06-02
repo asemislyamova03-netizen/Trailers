@@ -4,6 +4,15 @@
 
 Дата: 2026-06-02
 Проект: trailers
+Модуль: закупка / плановые поступления (итерация 1)
+Что сделано: добавлены сущности `Supplier`, `InventoryReceiptPlan`, `InventoryReceiptPlanLine`; расширены `Item` (`component_category`, `is_controlled`) и `InventoryOperation` (`supplier_id`, `receipt_plan_id`); добавлены роли `laser_operator`, `bending_operator`; объединён профиль кладовщика и закупщика в одну роль `warehouse` с единым кабинетом (`/purchaser/dashboard`); добавлены маршруты `/suppliers`, `/inventory/receipt-plans`; в приходе ТМЦ добавлены выбор поставщика/плана, фильтр номенклатуры по участку и быстрый переход к созданию номенклатуры.
+Какие файлы: `models.py`, `forms.py`, `views.py`, `inventory_service.py`, `templates/base.html`, `templates/inventory_receipt_form.html`, `templates/item_form.html`, `templates/users_list.html`, `templates/supplier_*.html`, `templates/receipt_plan_*.html`, `templates/purchaser_dashboard.html`, `migrations/versions/f1a2b3c4d5e6_add_purchasing_and_receipt_plans.py`, `docs/planning/*`.
+Следующий шаг: применить миграцию, проверить UI под ролями director/purchaser/warehouse, затем перейти к модулю смен лазера.
+
+---
+
+Дата: 2026-06-02
+Проект: trailers
 Модуль: роль кладовщик (ТМЦ)
 Что сделано: роль `warehouse` — отдельное меню (остатки, дефицит, приход, перемещение, журнал операций); доступ только к своему складу; создание пользователя в админке с обязательной привязкой склада.
 Какие файлы: `models.py`, `forms.py`, `views.py`, `templates/base.html`, `templates/inventory_*.html`, `templates/users_list.html`, `docs/planning/*`.

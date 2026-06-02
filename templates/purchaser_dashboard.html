@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Кабинет закупщика{% endblock %}
+{% block content %}
+<div class="compact-page-header">
+  <div>
+    <h1>Кабинет закупщика</h1>
+    <div class="text-muted small">Остатки, дефицит и активные потребности производства.</div>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('main.suppliers_list') }}" class="btn btn-soft btn-sm">Поставщики</a>
+    <a href="{{ url_for('main.receipt_plans_list') }}" class="btn btn-orange btn-sm">Планы поступлений</a>
+  </div>
+</div>
+
+<div class="app-card mb-3 p-3">
+  <div class="fw-semibold mb-2">Заявки в производстве</div>
+  <div>{{ active_need_lines|length }} строк в работе.</div>
+</div>
+
+<div class="app-card mb-3">
+  <div class="px-3 pt-3 pb-2 fw-semibold">Дефицит по BOM (кратко)</div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead>
+        <tr><th>Материал</th><th>Склад</th><th class="text-end">Нужно</th><th class="text-end">Есть</th><th class="text-end">Дефицит</th></tr>
+      </thead>
+      <tbody>
+        {% for row in deficit_rows[:20] %}
+        <tr>
+          <td>{{ row.article }} {{ row.name }}</td>
+          <td>{{ row.material_warehouse_name }}</td>
+          <td class="text-end">{{ row.required_display }}</td>
+          <td class="text-end">{{ row.available_display }}</td>
+          <td class="text-end text-danger fw-semibold">{{ row.shortage_display }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="text-muted p-3">Дефицита нет.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="app-card">
+  <div class="px-3 pt-3 pb-2 fw-semibold">Остатки ТМЦ</div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead>
+        <tr><th>Склад</th><th>Категория</th><th>Номенклатура</th><th class="text-end">Остаток</th></tr>
+      </thead>
+      <tbody>
+        {% for row in component_rows[:50] %}
+        <tr>
+          <td>{{ row.warehouse.name if row.warehouse else '—' }}</td>
+          <td>{{ row.item.component_category or '—' if row.item else '—' }}</td>
+          <td>{{ row.item.article if row.item else '' }} {{ row.item.name if row.item else '' }}</td>
+          <td class="text-end">{{ row.quantity|inventory_qty(row.unit or 'шт') }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="text-muted p-3">Остатков нет.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

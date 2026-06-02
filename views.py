@@ -14,7 +14,7 @@ from flask_login import (
 )
 
 from extensions import db
-from models import Trailer, Item, ProductCategory, Warehouse, Customer, SalesContract, SalesContractLine, SalesRealization, SalesRealizationLine, ContractTemplate, User, OTTS, Lead, LeadMessage, CustomerOrder, CustomerOrderLine, OrderPayment, OrderEvent, Reservation, SupplyNeed, ProductionRequest, ProductionRequestLine, ProducedUnit, StockMovement, IdempotencyKey, VinRegistry, VinRegistryEvent, InventoryTransaction, InventoryBalance, InventoryOperation, InventoryOperationLine, WarehouseStorageArea, ItemBillOfMaterials, ItemBillOfMaterialsLine
+from models import Trailer, Item, ProductCategory, Warehouse, Customer, SalesContract, SalesContractLine, SalesRealization, SalesRealizationLine, ContractTemplate, User, OTTS, Lead, LeadMessage, CustomerOrder, CustomerOrderLine, OrderPayment, OrderEvent, Reservation, SupplyNeed, ProductionRequest, ProductionRequestLine, ProducedUnit, StockMovement, IdempotencyKey, VinRegistry, VinRegistryEvent, InventoryTransaction, InventoryBalance, InventoryOperation, InventoryOperationLine, WarehouseStorageArea, ItemBillOfMaterials, ItemBillOfMaterialsLine, Supplier, InventoryReceiptPlan, InventoryReceiptPlanLine
 from models import (
     TrailerAllowedOption, TrailerBoardHeight, TrailerBoardPriceMatrix, TrailerBodyExecution, TrailerBodySize,
     TrailerDimensionMatrix, TrailerHubOption, TrailerHubPriceMatrix, TrailerOtssModificationMatrix,
@@ -27,7 +27,7 @@ from forms import (
     CustomerForm, SalesContractForm, LoginForm, UserForm, OTTSForm, LeadForm, CustomerOrderForm, OrderPaymentForm,
     SupplyNeedForm, ProductionRequestForm, ProductionRequestLineForm, StockMovementForm, StockMovementBatchForm,
     AssignVinForm, SendTrailerForm, StockReplenishmentForm, TrailerItemChangeForm, ContractTemplateForm,
-    KaspiOrderImportForm, KaspiOrderListImportForm, InventoryReceiptForm, InventoryTransferForm,
+    KaspiOrderImportForm, KaspiOrderListImportForm, InventoryReceiptForm, InventoryTransferForm, SupplierForm, InventoryReceiptPlanForm,
 )
 from inventory_service import (
     InsufficientInventoryError,
@@ -1184,8 +1184,10 @@ def role_home():
         return redirect(url_for('main.vin_registry_list'))
     if current_user.is_director:
         return redirect(url_for('main.director_dashboard'))
+    if current_user.is_laser_operator or current_user.is_bending_operator:
+        return redirect(url_for('main.production_workspace'))
     if current_user.is_warehouse:
-        return redirect(url_for('main.inventory_balances_list'))
+        return redirect(url_for('main.purchaser_dashboard'))
     if current_user.is_manager:
         return redirect(url_for('main.manager_workspace'))
     return redirect(url_for('main.trailers_list'))
@@ -2284,6 +2286,8 @@ def item_create():
     if request.method == 'GET':
         form.requires_vin.data = True
 
+    return_to = (request.args.get('return_to') or request.form.get('return_to') or '').strip()
+
     if form.validate_on_submit():
         item_type = form.item_type.data
         article = form.article.data.strip() if form.article.data else None
@@ -2336,15 +2340,20 @@ def item_create():
             is_sellable=bool(form.is_sellable.data),
             requires_vin=bool(form.requires_vin.data if form.requires_vin.data is not None else item_type == 'TRAILER'),
             is_internal_bom_item=bool(form.is_internal_bom_item.data) if item_type == 'COMPONENT' else False,
+            component_category=(form.component_category.data or None) if item_type == 'COMPONENT' else None,
+            is_controlled=bool(form.is_controlled.data) if item_type == 'COMPONENT' else False,
             is_active=form.is_active.data,
         )
         db.session.add(item)
         db.session.commit()
 
         flash('Позиция номенклатуры успешно добавлена', 'success')
+        if return_to:
+            sep = '&' if ('?' in return_to) else '?'
+            return redirect(f'{return_to}{sep}created_item_id={item.id}')
         return redirect(url_for('main.items_list'))
 
-    return render_template('item_form.html', form=form)
+    return render_template('item_form.html', form=form, return_to=return_to)
 
 
 
@@ -2386,6 +2395,8 @@ def item_edit(item_id):
         form.base_price.data = item.base_price
         form.unit.data = normalize_unit(item.unit)
         form.is_internal_bom_item.data = item.is_internal_bom_item
+        form.component_category.data = item.component_category or ''
+        form.is_controlled.data = bool(item.is_controlled)
         form.is_active.data = item.is_active
 
     if form.validate_on_submit():
@@ -2445,6 +2456,8 @@ def item_edit(item_id):
         item.base_price = form.base_price.data
         item.unit = new_unit
         item.is_internal_bom_item = bool(form.is_internal_bom_item.data) if item_type == 'COMPONENT' else False
+        item.component_category = (form.component_category.data or None) if item_type == 'COMPONENT' else None
+        item.is_controlled = bool(form.is_controlled.data) if item_type == 'COMPONENT' else False
         item.is_active = form.is_active.data
 
         db.session.commit()
@@ -11933,12 +11946,38 @@ def _inventory_storage_area_choices(warehouse_id: int | None) -> list[tuple[int,
     return [(0, '— без зоны —')] + [(area.id, f'{area.name} ({area.code})') for area in areas]
 
 
+def _inventory_area_item_category(area: WarehouseStorageArea | None) -> str | None:
+    if not area:
+        return None
+    area_type = (area.area_type or '').lower()
+    mapping = {
+        'metal': 'metal_raw',
+        'raw': 'metal_raw',
+        'raw_materials': 'metal_raw',
+        'semi': 'semi_finished',
+        'semi_finished': 'semi_finished',
+        'assembly': 'component',
+        'components': 'component',
+    }
+    return mapping.get(area_type)
+
+
 def _inventory_receipt_items() -> list[Item]:
-    items = (
-        Item.query.filter(Item.is_active == True, Item.item_type == 'COMPONENT')
-        .order_by(Item.name.asc())
-        .all()
-    )
+    storage_area_id = request.args.get('storage_area_id', type=int)
+    if request.method == 'POST':
+        storage_area_id = request.form.get('storage_area_id', type=int) or storage_area_id
+    area = WarehouseStorageArea.query.get(storage_area_id) if storage_area_id else None
+    required_category = _inventory_area_item_category(area)
+
+    query = Item.query.filter(Item.is_active == True, Item.item_type == 'COMPONENT')
+    if required_category:
+        query = query.filter(
+            or_(
+                Item.component_category == required_category,
+                Item.component_category.is_(None),
+            )
+        )
+    items = query.order_by(Item.name.asc()).all()
     if not items:
         items = (
             Item.query.filter(Item.is_active == True, Item.item_type != 'TRAILER')
@@ -11976,6 +12015,171 @@ def _parse_inventory_receipt_lines() -> list[tuple[int, float, str | None, str |
             line_comment = line_comment.strip() or None
         parsed.append((item_id, quantity, line_comment, line_unit))
     return parsed
+
+
+def _supplier_choices(include_empty: bool = True) -> list[tuple[int, str]]:
+    rows = Supplier.query.filter_by(is_active=True).order_by(Supplier.name.asc()).all()
+    choices = [(row.id, row.name) for row in rows]
+    return ([(0, '— не выбран —')] + choices) if include_empty else choices
+
+
+def _receipt_plan_choices(warehouse_id: int | None = None) -> list[tuple[int, str]]:
+    query = InventoryReceiptPlan.query.filter(InventoryReceiptPlan.status.in_(('planned', 'partial')))
+    if warehouse_id:
+        query = query.filter(
+            or_(
+                InventoryReceiptPlan.warehouse_id == warehouse_id,
+                InventoryReceiptPlan.warehouse_id.is_(None),
+            )
+        )
+    plans = query.order_by(InventoryReceiptPlan.planned_date.asc().nullsfirst(), InventoryReceiptPlan.id.desc()).limit(200).all()
+    return [(0, '— без плана —')] + [
+        (plan.id, f'{plan.plan_number} · {plan.supplier.name if plan.supplier else "без поставщика"}')
+        for plan in plans
+    ]
+
+
+@main_bp.route('/suppliers')
+@role_required('director', 'warehouse')
+def suppliers_list():
+    suppliers = Supplier.query.order_by(Supplier.is_active.desc(), Supplier.name.asc()).all()
+    return render_template('suppliers_list.html', suppliers=suppliers)
+
+
+@main_bp.route('/suppliers/new', methods=['GET', 'POST'])
+@role_required('director', 'warehouse')
+def supplier_create():
+    form = SupplierForm()
+    if form.validate_on_submit():
+        supplier = Supplier(
+            name=(form.name.data or '').strip(),
+            contact_name=(form.contact_name.data or '').strip() or None,
+            phone=(form.phone.data or '').strip() or None,
+            email=(form.email.data or '').strip() or None,
+            comment=(form.comment.data or '').strip() or None,
+            is_active=bool(form.is_active.data),
+        )
+        db.session.add(supplier)
+        db.session.commit()
+        flash('Поставщик сохранён.', 'success')
+        return redirect(url_for('main.suppliers_list'))
+    return render_template('supplier_form.html', form=form, title='Новый поставщик')
+
+
+@main_bp.route('/inventory/receipt-plans')
+@role_required('director', 'warehouse')
+def receipt_plans_list():
+    plans = (
+        InventoryReceiptPlan.query
+        .order_by(InventoryReceiptPlan.created_at.desc(), InventoryReceiptPlan.id.desc())
+        .limit(200)
+        .all()
+    )
+    return render_template('receipt_plans_list.html', plans=plans)
+
+
+@main_bp.route('/inventory/receipt-plans/new', methods=['GET', 'POST'])
+@role_required('director', 'warehouse')
+def receipt_plan_create():
+    form = InventoryReceiptPlanForm()
+    form.supplier_id.choices = _supplier_choices()
+    form.warehouse_id.choices = _inventory_warehouse_choices()
+    selected_warehouse_id = form.warehouse_id.data or request.args.get('warehouse_id', type=int)
+    if request.method == 'POST':
+        selected_warehouse_id = request.form.get('warehouse_id', type=int) or selected_warehouse_id
+    form.storage_area_id.choices = _inventory_storage_area_choices(selected_warehouse_id)
+    if request.method == 'GET' and selected_warehouse_id:
+        form.warehouse_id.data = selected_warehouse_id
+
+    if form.validate_on_submit():
+        plan = InventoryReceiptPlan(
+            plan_number=f'RP-{datetime.utcnow().strftime("%Y%m%d")}-{uuid4().hex[:6].upper()}',
+            supplier_id=form.supplier_id.data or None,
+            warehouse_id=form.warehouse_id.data or None,
+            storage_area_id=form.storage_area_id.data or None,
+            planned_date=form.planned_date.data,
+            status=form.status.data,
+            comment=(form.comment.data or '').strip() or None,
+            created_by_user_id=current_user.id,
+        )
+        db.session.add(plan)
+        db.session.flush()
+
+        item_ids = request.form.getlist('line_item_id')
+        quantities = request.form.getlist('line_quantity')
+        units = request.form.getlist('line_unit')
+        comments = request.form.getlist('line_comment')
+        saved = 0
+        for idx, raw_item_id in enumerate(item_ids):
+            try:
+                item_id = int(raw_item_id or 0)
+            except (TypeError, ValueError):
+                continue
+            if item_id <= 0:
+                continue
+            try:
+                qty = Decimal(str(quantities[idx] if idx < len(quantities) else 0))
+            except Exception:
+                continue
+            if qty <= 0:
+                continue
+            unit = normalize_unit((units[idx] if idx < len(units) else '') or 'шт')
+            comment = (comments[idx] if idx < len(comments) else '') or None
+            db.session.add(
+                InventoryReceiptPlanLine(
+                    plan_id=plan.id,
+                    item_id=item_id,
+                    quantity=qty,
+                    unit=unit,
+                    comment=(comment or '').strip() or None,
+                    sort_order=(idx + 1) * 10,
+                )
+            )
+            saved += 1
+        if saved == 0:
+            db.session.rollback()
+            flash('Добавьте хотя бы одну позицию в план поступления.', 'danger')
+            return render_template(
+                'receipt_plan_form.html',
+                form=form,
+                title='Новый план поступления',
+                items=_inventory_receipt_items(),
+            )
+
+        db.session.commit()
+        flash(f'План поступления {plan.plan_number} сохранён.', 'success')
+        return redirect(url_for('main.receipt_plans_list'))
+
+    return render_template(
+        'receipt_plan_form.html',
+        form=form,
+        title='Новый план поступления',
+        items=_inventory_receipt_items(),
+    )
+
+
+@main_bp.route('/purchaser/dashboard')
+@role_required('director', 'warehouse')
+def purchaser_dashboard():
+    active_need_lines = (
+        ProductionRequestLine.query
+        .join(ProductionRequest, ProductionRequest.id == ProductionRequestLine.production_request_id)
+        .filter(~ProductionRequestLine.status.in_(['ready', 'closed', 'cancelled', 'CANCELLED']))
+        .all()
+    )
+    component_rows = (
+        inventory_balances_query(only_positive=False, tmz_only=True)
+        .order_by(InventoryBalance.quantity.asc())
+        .limit(300)
+        .all()
+    )
+    deficit_rows, _ = compute_bom_deficit_report(only_shortage=True)
+    return render_template(
+        'purchaser_dashboard.html',
+        component_rows=component_rows,
+        deficit_rows=deficit_rows,
+        active_need_lines=active_need_lines,
+    )
 
 
 @main_bp.route('/inventory/balances')
@@ -12189,12 +12393,18 @@ def inventory_receipt_create():
         selected_warehouse_id = _clamp_inventory_warehouse_id(
             request.form.get('warehouse_id', type=int) or selected_warehouse_id
         )
+    form.supplier_id.choices = _supplier_choices()
+    form.receipt_plan_id.choices = _receipt_plan_choices(selected_warehouse_id)
+    if request.method == 'GET' and request.args.get('created_item_id', type=int):
+        flash('Новая номенклатура добавлена. Заполните строки прихода.', 'success')
     form.storage_area_id.choices = _inventory_storage_area_choices(selected_warehouse_id)
     receipt_items = _inventory_receipt_items()
 
     if form.validate_on_submit():
         warehouse_id = _clamp_inventory_warehouse_id(form.warehouse_id.data)
         storage_area_id = form.storage_area_id.data or None
+        supplier_id = form.supplier_id.data or None
+        receipt_plan_id = form.receipt_plan_id.data or None
         if storage_area_id == 0:
             storage_area_id = None
         receipt_lines = _parse_inventory_receipt_lines()
@@ -12214,6 +12424,8 @@ def inventory_receipt_create():
                     storage_area_id=storage_area_id,
                     lines=receipt_lines,
                     created_by_user_id=current_user.id,
+                    supplier_id=supplier_id,
+                    receipt_plan_id=receipt_plan_id,
                     document_ref=(form.document_ref.data or '').strip() or None,
                     comment=(form.comment.data or '').strip() or None,
                 )

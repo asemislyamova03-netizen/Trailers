@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Поставщики{% endblock %}
+{% block content %}
+<div class="compact-page-header">
+  <div>
+    <h1>Поставщики</h1>
+    <div class="text-muted small">Справочник для плановых и фактических поступлений.</div>
+  </div>
+  <a href="{{ url_for('main.supplier_create') }}" class="btn btn-orange btn-sm">Новый поставщик</a>
+</div>
+
+<div class="app-card">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Название</th>
+          <th>Контакт</th>
+          <th>Телефон</th>
+          <th>Email</th>
+          <th>Статус</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in suppliers %}
+        <tr>
+          <td class="fw-semibold">{{ row.name }}</td>
+          <td>{{ row.contact_name or '—' }}</td>
+          <td>{{ row.phone or '—' }}</td>
+          <td>{{ row.email or '—' }}</td>
+          <td>{% if row.is_active %}<span class="badge text-bg-success">Активен</span>{% else %}<span class="badge text-bg-secondary">Архив</span>{% endif %}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="text-muted p-3">Поставщиков пока нет.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

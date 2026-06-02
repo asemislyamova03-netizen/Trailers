@@ -7,6 +7,9 @@
 
 <form method="post">
     {{ form.hidden_tag() }}
+    {% if return_to %}
+    <input type="hidden" name="return_to" value="{{ return_to }}">
+    {% endif %}
 
     <div class="mb-3">
         {{ form.item_type.label(class="form-label") }}
@@ -111,6 +114,16 @@
             <div class="form-check mt-4">
                 {{ form.is_internal_bom_item(class="form-check-input") }}
                 {{ form.is_internal_bom_item.label(class="form-check-label") }}
+            </div>
+        </div>
+        <div class="col-md-4 mb-3">
+            {{ form.component_category.label(class="form-label") }}
+            {{ form.component_category(class="form-select") }}
+        </div>
+        <div class="col-md-4 mb-3 d-flex align-items-center">
+            <div class="form-check mt-4">
+                {{ form.is_controlled(class="form-check-input") }}
+                {{ form.is_controlled.label(class="form-check-label") }}
             </div>
         </div>
         <div class="col-md-4 mb-3 d-flex align-items-center">

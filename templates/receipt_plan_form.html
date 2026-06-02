@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<div class="app-card p-4">
+  <h1 class="h4 mb-3">{{ title }}</h1>
+  <form method="post">
+    {{ form.hidden_tag() }}
+    <div class="row g-3 mb-3">
+      <div class="col-md-4">
+        {{ form.supplier_id.label(class="form-label") }}
+        {{ form.supplier_id(class="form-select") }}
+      </div>
+      <div class="col-md-4">
+        {{ form.warehouse_id.label(class="form-label") }}
+        {{ form.warehouse_id(class="form-select", onchange="this.form.submit()") }}
+      </div>
+      <div class="col-md-4">
+        {{ form.storage_area_id.label(class="form-label") }}
+        {{ form.storage_area_id(class="form-select") }}
+      </div>
+      <div class="col-md-4">
+        {{ form.planned_date.label(class="form-label") }}
+        {{ form.planned_date(class="form-control") }}
+      </div>
+      <div class="col-md-4">
+        {{ form.status.label(class="form-label") }}
+        {{ form.status(class="form-select") }}
+      </div>
+      <div class="col-12">
+        {{ form.comment.label(class="form-label") }}
+        {{ form.comment(class="form-control", rows=2) }}
+      </div>
+    </div>
+
+    <h2 class="h6">Позиции плана</h2>
+    <table class="table table-sm align-middle">
+      <thead>
+        <tr>
+          <th>Номенклатура</th>
+          <th>Ед.</th>
+          <th>Количество</th>
+          <th>Комментарий</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for i in range(6) %}
+        <tr>
+          <td>
+            <select name="line_item_id" class="form-select form-select-sm">
+              <option value="">— не выбрано —</option>
+              {% for item in items %}
+              <option value="{{ item.id }}">{{ item.article or '—' }} — {{ item.name }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td><input name="line_unit" class="form-control form-control-sm" placeholder="шт"></td>
+          <td><input name="line_quantity" type="number" step="0.001" min="0" class="form-control form-control-sm"></td>
+          <td><input name="line_comment" class="form-control form-control-sm"></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="d-flex gap-2">
+      {{ form.submit(class="btn btn-orange") }}
+      <a href="{{ url_for('main.receipt_plans_list') }}" class="btn btn-soft">Отмена</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
