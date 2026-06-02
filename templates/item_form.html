@@ -37,9 +37,10 @@
     </div>
 
     <div class="row" id="trailerFlagsSection">
-        <div class="col-md-4 mb-3">
+        <div class="col-md-4 mb-3" id="productCategorySection">
             {{ form.product_category_id.label(class="form-label") }}
             {{ form.product_category_id(class="form-select") }}
+            <div class="form-text">Используется для товарной категории модели прицепа.</div>
         </div>
         <div class="col-md-4 mb-3 d-flex align-items-center">
             <div class="form-check mt-4">
@@ -116,9 +117,10 @@
                 {{ form.is_internal_bom_item.label(class="form-check-label") }}
             </div>
         </div>
-        <div class="col-md-4 mb-3">
+        <div class="col-md-4 mb-3" id="componentCategorySection">
             {{ form.component_category.label(class="form-label") }}
             {{ form.component_category(class="form-select") }}
+            <div class="form-text">Используется для сырья/металла/полуфабрикатов и фильтров по участкам.</div>
         </div>
         <div class="col-md-4 mb-3 d-flex align-items-center">
             <div class="form-check mt-4">
@@ -152,6 +154,8 @@
     'trailerExternalSizeSection',
     'trailerBodySizeSection'
   ];
+  const productCategorySection = document.getElementById('productCategorySection');
+  const componentCategorySection = document.getElementById('componentCategorySection');
 
   function setVisible(el, visible) {
     if (!el) return;
@@ -160,9 +164,12 @@
 
   function syncByType() {
     const isTrailer = typeSelect && typeSelect.value === 'TRAILER';
+    const isComponent = typeSelect && typeSelect.value === 'COMPONENT';
     trailerSections.forEach(function (id) {
       setVisible(document.getElementById(id), isTrailer);
     });
+    setVisible(productCategorySection, isTrailer);
+    setVisible(componentCategorySection, isComponent);
   }
 
   if (typeSelect) {
