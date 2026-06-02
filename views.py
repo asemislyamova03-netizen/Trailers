@@ -7270,7 +7270,7 @@ def _set_stock_movement_trailer_search_label(form: StockMovementForm) -> None:
 
 def _fill_stock_movement_form_choices(form: StockMovementForm, current_movement_id: int | None = None, include_customer_shipment: bool = False) -> None:
     source_warehouses = _trailer_source_warehouses()
-    target_warehouses = _sales_warehouses()
+    target_warehouses = _trailer_source_warehouses()
     form.from_warehouse_id.choices = [(0, '— нет —')] + [(w.id, w.name) for w in source_warehouses]
     form.to_warehouse_id.choices = [(0, '— нет —')] + [(w.id, w.name) for w in target_warehouses]
     form.movement_type.choices = STOCK_MOVEMENT_FILTER_TYPE_CHOICES if include_customer_shipment else STOCK_MOVEMENT_ACTIVE_TYPE_CHOICES
@@ -7294,7 +7294,7 @@ def _fill_stock_movement_form_choices(form: StockMovementForm, current_movement_
 
 def _fill_stock_movement_batch_form_choices(form: StockMovementBatchForm) -> None:
     form.from_warehouse_id.choices = [(w.id, w.name) for w in _trailer_source_warehouses()]
-    form.to_warehouse_id.choices = [(w.id, w.name) for w in _sales_warehouses()]
+    form.to_warehouse_id.choices = [(w.id, w.name) for w in _trailer_source_warehouses()]
 
 
 def _selected_trailers_from_request() -> list[Trailer]:
@@ -11882,8 +11882,8 @@ def _validate_stock_movement_selection(form: StockMovementForm, current_movement
     if from_warehouse and not (getattr(from_warehouse, 'can_sell', True) or getattr(from_warehouse, 'is_production', False)):
         flash('Со склада можно выбрать склад продаж или производственный склад.', 'danger')
         return False
-    if to_warehouse and not getattr(to_warehouse, 'can_sell', True):
-        flash('На склад можно выбрать только склад продаж.', 'danger')
+    if to_warehouse and not (getattr(to_warehouse, 'can_sell', True) or getattr(to_warehouse, 'is_production', False)):
+        flash('В склад назначения можно выбрать склад продаж или производственный склад.', 'danger')
         return False
     trailer_id = form.trailer_id.data or None
     if not trailer_id:
@@ -11912,8 +11912,8 @@ def _validate_batch_movement_selection(form: StockMovementBatchForm, trailers: l
     if from_warehouse and not (getattr(from_warehouse, 'can_sell', True) or getattr(from_warehouse, 'is_production', False)):
         flash('Со склада можно выбрать склад продаж или производственный склад.', 'danger')
         return False
-    if to_warehouse and not getattr(to_warehouse, 'can_sell', True):
-        flash('На склад можно выбрать только склад продаж.', 'danger')
+    if to_warehouse and not (getattr(to_warehouse, 'can_sell', True) or getattr(to_warehouse, 'is_production', False)):
+        flash('В склад назначения можно выбрать склад продаж или производственный склад.', 'danger')
         return False
     invalid = [
         trailer.vin for trailer in trailers
