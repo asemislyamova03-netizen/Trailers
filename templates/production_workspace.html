@@ -17,6 +17,8 @@
   <a class="nav-link {% if active_tab == 'done_today' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='done_today') }}">Выпуск</a>
   <a class="nav-link {% if active_tab == 'history' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='history') }}">История</a>
   <a class="nav-link {% if active_tab == 'materials' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='materials') }}">Материалы</a>
+  <a class="nav-link {% if active_tab == 'shifts' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='shifts') }}">Смены</a>
+  <a class="nav-link {% if active_tab == 'performance' %}active{% endif %}" href="{{ url_for('main.production_workspace', tab='performance') }}">Производительность</a>
 </div>
 
 {% if active_tab == 'warehouses' %}
@@ -99,6 +101,127 @@
   {% else %}
   <div class="p-3 text-muted">Остатков нет — проведите приход ТМЦ</div>
   {% endfor %}
+</div>
+{% elif active_tab == 'shifts' %}
+<div class="row g-3">
+  <div class="col-lg-4">
+    <div class="app-card p-3 h-100">
+      <div class="fw-semibold mb-2">Текущая смена</div>
+      {% if my_open_shift %}
+      <div class="small text-muted mb-2">
+        Смена #{{ my_open_shift.id }} · {{ my_open_shift.workshop.name if my_open_shift.workshop else my_open_shift.work_area }}<br>
+        Открыта: {{ my_open_shift.started_at|date_format }}
+      </div>
+      <form method="post" action="{{ url_for('main.production_shift_close', shift_id=my_open_shift.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <textarea name="close_note" class="form-control form-control-sm mb-2" rows="2" placeholder="Комментарий при закрытии"></textarea>
+        <button class="btn btn-sm btn-danger">Закрыть смену</button>
+      </form>
+      {% else %}
+      <form method="post" action="{{ url_for('main.production_shift_open') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label class="form-label">Цех / участок</label>
+        <select name="workshop_id" class="form-select form-select-sm mb-2">
+          <option value="">— выбрать —</option>
+          {% for w in workshops %}
+          <option value="{{ w.id }}">{{ w.name }}</option>
+          {% endfor %}
+        </select>
+        <input name="work_area" class="form-control form-control-sm mb-2" placeholder="Код участка (опционально)">
+        <textarea name="note" class="form-control form-control-sm mb-2" rows="2" placeholder="Комментарий"></textarea>
+        <button class="btn btn-sm btn-primary-app">Открыть смену</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+  <div class="col-lg-8">
+    <div class="app-card p-3 mb-3">
+      <div class="fw-semibold mb-2">Выпуск по открытой смене</div>
+      {% if my_open_shift %}
+      <form method="post" action="{{ url_for('main.production_shift_add_output', shift_id=my_open_shift.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="row g-2 align-items-end">
+          <div class="col-md-4">
+            <label class="form-label">Номенклатура</label>
+            <select name="item_id" class="form-select form-select-sm">
+              <option value="">— без привязки —</option>
+              {% for item in shift_output_items %}
+              <option value="{{ item.id }}">{{ item.article or '—' }} — {{ item.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-2"><label class="form-label">Годные</label><input type="number" name="quantity" step="0.001" min="0" class="form-control form-control-sm"></div>
+          <div class="col-md-2"><label class="form-label">Брак</label><input type="number" name="defect_quantity" step="0.001" min="0" class="form-control form-control-sm"></div>
+          <div class="col-md-2"><label class="form-label">Ед.</label><input name="unit" value="шт" class="form-control form-control-sm"></div>
+          <div class="col-md-2"><label class="form-label">Тип</label><input name="output_type" value="other" class="form-control form-control-sm"></div>
+          <div class="col-12"><input name="note" class="form-control form-control-sm" placeholder="Комментарий"></div>
+          <div class="col-12"><button class="btn btn-sm btn-success">Добавить выпуск</button></div>
+        </div>
+      </form>
+      {% else %}
+      <div class="text-muted small">Сначала откройте смену, затем фиксируйте выпуск и брак.</div>
+      {% endif %}
+    </div>
+    <div class="app-card">
+      <div class="px-3 pt-3 fw-semibold">Последние смены</div>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead><tr><th>#</th><th>Цех</th><th>Старт</th><th>Финиш</th><th>Статус</th></tr></thead>
+          <tbody>
+            {% for s in my_recent_shifts %}
+            <tr>
+              <td>{{ s.id }}</td>
+              <td>{{ s.workshop.name if s.workshop else s.work_area }}</td>
+              <td>{{ s.started_at|date_format }}</td>
+              <td>{{ s.ended_at|date_format if s.ended_at else '—' }}</td>
+              <td><span class="badge text-bg-{{ 'success' if s.status == 'closed' else 'warning' }}">{{ s.status }}</span></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" class="text-muted p-3">Смен пока нет.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% elif active_tab == 'performance' %}
+<div class="app-card p-3 mb-3">
+  <form method="get" class="row g-2 align-items-end">
+    <input type="hidden" name="tab" value="performance">
+    <div class="col-md-3">
+      <label class="form-label">Месяц</label>
+      <input type="month" name="month" class="form-control" value="{{ selected_month }}">
+    </div>
+    <div class="col-md-3">
+      <button class="btn btn-primary-app">Показать</button>
+    </div>
+    <div class="col-md-6 text-md-end small text-muted">
+      Выпуск: {{ performance_totals.qty_sum or 0 }} · Брак: {{ performance_totals.defect_sum or 0 }} · Сотрудников: {{ performance_totals.employees or 0 }}
+    </div>
+  </form>
+</div>
+<div class="app-card">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead>
+        <tr><th>Сотрудник</th><th>Цех</th><th>Продукт</th><th class="text-end">Выпуск</th><th class="text-end">Брак</th></tr>
+      </thead>
+      <tbody>
+        {% for row in performance_rows %}
+        <tr>
+          <td>{{ row.employee_name }}</td>
+          <td>{{ row.workshop_name or '—' }}</td>
+          <td>{{ row.item_article or '—' }} {{ row.item_name or '' }}</td>
+          <td class="text-end fw-semibold">{{ row.qty_sum }}</td>
+          <td class="text-end text-danger">{{ row.defect_sum }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="text-muted p-3">Нет данных за выбранный месяц.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
 {% else %}
 <div class="app-card">

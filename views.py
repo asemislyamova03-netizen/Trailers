@@ -14,7 +14,7 @@ from flask_login import (
 )
 
 from extensions import db
-from models import Trailer, Item, ProductCategory, Warehouse, Customer, SalesContract, SalesContractLine, SalesRealization, SalesRealizationLine, ContractTemplate, User, OTTS, Lead, LeadMessage, CustomerOrder, CustomerOrderLine, OrderPayment, OrderEvent, Reservation, SupplyNeed, ProductionRequest, ProductionRequestLine, ProducedUnit, StockMovement, IdempotencyKey, VinRegistry, VinRegistryEvent, InventoryTransaction, InventoryBalance, InventoryOperation, InventoryOperationLine, WarehouseStorageArea, ItemBillOfMaterials, ItemBillOfMaterialsLine, Supplier, InventoryReceiptPlan, InventoryReceiptPlanLine
+from models import Trailer, Item, ProductCategory, Warehouse, Customer, SalesContract, SalesContractLine, SalesRealization, SalesRealizationLine, ContractTemplate, User, OTTS, Lead, LeadMessage, CustomerOrder, CustomerOrderLine, OrderPayment, OrderEvent, Reservation, SupplyNeed, ProductionRequest, ProductionRequestLine, ProducedUnit, StockMovement, IdempotencyKey, VinRegistry, VinRegistryEvent, InventoryTransaction, InventoryBalance, InventoryOperation, InventoryOperationLine, WarehouseStorageArea, ItemBillOfMaterials, ItemBillOfMaterialsLine, Supplier, InventoryReceiptPlan, InventoryReceiptPlanLine, ProductionEmployee, ProductionShift, ProductionShiftOutput, ProductionWorkshop
 from models import (
     TrailerAllowedOption, TrailerBoardHeight, TrailerBoardPriceMatrix, TrailerBodyExecution, TrailerBodySize,
     TrailerDimensionMatrix, TrailerHubOption, TrailerHubPriceMatrix, TrailerOtssModificationMatrix,
@@ -176,6 +176,23 @@ def _category_code(obj) -> str:
     item = getattr(obj, 'item', obj)
     category = getattr(item, 'product_category', None)
     return category.code if category else ''
+
+
+def _get_or_create_production_employee(user: User, *, commit: bool = False) -> ProductionEmployee:
+    employee = ProductionEmployee.query.filter_by(user_id=user.id).first()
+    if employee:
+        return employee
+    employee = ProductionEmployee(
+        user_id=user.id,
+        full_name=(user.full_name or user.username or f'User {user.id}').strip(),
+        employee_code=f'U{user.id}',
+        is_active=True,
+    )
+    db.session.add(employee)
+    db.session.flush()
+    if commit:
+        db.session.commit()
+    return employee
 
 
 def _default_production_warehouse():
@@ -12471,7 +12488,7 @@ def inventory_receipt_detail(operation_id):
 @role_required('production', 'director', 'manager')
 def production_workspace():
     active_tab = request.args.get('tab', 'todo')
-    production_tabs = {'warehouses', 'frames', 'todo', 'in_work', 'done_today', 'history', 'materials', 'overdue'}
+    production_tabs = {'warehouses', 'frames', 'todo', 'in_work', 'done_today', 'history', 'materials', 'overdue', 'shifts', 'performance'}
     if active_tab not in production_tabs:
         active_tab = 'todo'
     today_start = datetime.combine(date.today(), time.min)
@@ -12506,6 +12523,15 @@ def production_workspace():
     lines = []
     material_balances = []
     material_balance_groups = []
+    my_open_shift = None
+    my_recent_shifts = []
+    workshops = []
+    shift_output_items = []
+    performance_rows = []
+    performance_totals = {}
+    selected_month = (request.args.get('month') or '').strip()
+    if not selected_month:
+        selected_month = date.today().strftime('%Y-%m')
     if active_tab == 'materials':
         prod_wh_ids = production_warehouse_ids()
         if prod_wh_ids:
@@ -12522,6 +12548,79 @@ def production_workspace():
             ProductionRequestLine.status.in_(['in_production', 'partial_ready'])
         ).all()
         lines = sorted(lines, key=_production_line_sort_key)
+    elif active_tab == 'shifts':
+        employee = _get_or_create_production_employee(current_user, commit=True)
+        my_open_shift = (
+            ProductionShift.query.filter_by(employee_id=employee.id, status='open')
+            .order_by(ProductionShift.started_at.desc())
+            .first()
+        )
+        my_recent_shifts = (
+            ProductionShift.query.filter_by(employee_id=employee.id)
+            .order_by(ProductionShift.started_at.desc())
+            .limit(30)
+            .all()
+        )
+        workshops = (
+            ProductionWorkshop.query.filter_by(is_active=True)
+            .order_by(ProductionWorkshop.sort_order.asc(), ProductionWorkshop.name.asc())
+            .all()
+        )
+        shift_output_items = (
+            Item.query.filter(Item.is_active == True, Item.item_type.in_(('TRAILER', 'COMPONENT')))
+            .order_by(Item.name.asc())
+            .limit(300)
+            .all()
+        )
+    elif active_tab == 'performance':
+        employee = _get_or_create_production_employee(current_user, commit=True)
+        try:
+            month_start = datetime.strptime(selected_month + '-01', '%Y-%m-%d').date()
+        except ValueError:
+            month_start = date.today().replace(day=1)
+            selected_month = month_start.strftime('%Y-%m')
+        if month_start.month == 12:
+            month_end = date(month_start.year + 1, 1, 1)
+        else:
+            month_end = date(month_start.year, month_start.month + 1, 1)
+
+        outputs_query = (
+            db.session.query(
+                ProductionEmployee.id.label('employee_id'),
+                ProductionEmployee.full_name.label('employee_name'),
+                ProductionWorkshop.name.label('workshop_name'),
+                Item.article.label('item_article'),
+                Item.name.label('item_name'),
+                sa.func.coalesce(sa.func.sum(ProductionShiftOutput.quantity), 0).label('qty_sum'),
+                sa.func.coalesce(sa.func.sum(ProductionShiftOutput.defect_quantity), 0).label('defect_sum'),
+            )
+            .join(ProductionEmployee, ProductionEmployee.id == ProductionShiftOutput.employee_id)
+            .outerjoin(ProductionWorkshop, ProductionWorkshop.id == ProductionShiftOutput.workshop_id)
+            .outerjoin(Item, Item.id == ProductionShiftOutput.item_id)
+            .filter(
+                ProductionShiftOutput.created_at >= datetime.combine(month_start, time.min),
+                ProductionShiftOutput.created_at < datetime.combine(month_end, time.min),
+            )
+        )
+        if current_user.is_production:
+            outputs_query = outputs_query.filter(ProductionShiftOutput.employee_id == employee.id)
+        performance_rows = (
+            outputs_query
+            .group_by(
+                ProductionEmployee.id,
+                ProductionEmployee.full_name,
+                ProductionWorkshop.name,
+                Item.article,
+                Item.name,
+            )
+            .order_by(ProductionEmployee.full_name.asc(), ProductionWorkshop.name.asc().nullsfirst())
+            .all()
+        )
+        performance_totals = {
+            'qty_sum': sum(Decimal(row.qty_sum or 0) for row in performance_rows),
+            'defect_sum': sum(Decimal(row.defect_sum or 0) for row in performance_rows),
+            'employees': len({row.employee_id for row in performance_rows}),
+        }
     elif active_tab == 'overdue':
         lines = base_query.filter(
             ~ProductionRequestLine.status.in_(['ready', 'closed', 'cancelled', 'CANCELLED']),
@@ -12561,6 +12660,13 @@ def production_workspace():
         material_balances=material_balances,
         material_balance_groups=material_balance_groups,
         line_material_shortages=line_material_shortages,
+        my_open_shift=my_open_shift,
+        my_recent_shifts=my_recent_shifts,
+        workshops=workshops,
+        shift_output_items=shift_output_items,
+        performance_rows=performance_rows,
+        performance_totals=performance_totals,
+        selected_month=selected_month,
     )
 
 
@@ -12749,6 +12855,108 @@ def production_line_comment(line_id):
     db.session.commit()
     flash('Комментарий сохранён', 'success')
     return redirect(url_for('main.production_workspace', tab=request.args.get('tab', 'in_work')))
+
+
+@main_bp.route('/production/shifts/open', methods=['POST'])
+@role_required('production', 'director', 'manager')
+def production_shift_open():
+    employee = _get_or_create_production_employee(current_user, commit=True)
+    open_shift = (
+        ProductionShift.query.filter_by(employee_id=employee.id, status='open')
+        .order_by(ProductionShift.started_at.desc())
+        .first()
+    )
+    if open_shift:
+        flash(f'У вас уже открыта смена #{open_shift.id}. Сначала закройте её.', 'warning')
+        return redirect(url_for('main.production_workspace', tab='shifts'))
+
+    workshop_id = request.form.get('workshop_id', type=int) or None
+    workshop = ProductionWorkshop.query.get(workshop_id) if workshop_id else None
+    if workshop_id and not workshop:
+        flash('Выбранный цех не найден.', 'danger')
+        return redirect(url_for('main.production_workspace', tab='shifts'))
+
+    work_area = (request.form.get('work_area') or '').strip() or (workshop.code.lower() if workshop else 'production')
+    note = (request.form.get('note') or '').strip() or None
+    shift = ProductionShift(
+        employee_id=employee.id,
+        user_id=current_user.id,
+        workshop_id=workshop_id,
+        work_area=work_area[:60],
+        planned_date=date.today(),
+        started_at=datetime.utcnow(),
+        status='open',
+        note=note,
+    )
+    db.session.add(shift)
+    db.session.commit()
+    flash(f'Смена #{shift.id} открыта ({workshop.name if workshop else work_area}).', 'success')
+    return redirect(url_for('main.production_workspace', tab='shifts'))
+
+
+@main_bp.route('/production/shifts/<int:shift_id>/close', methods=['POST'])
+@role_required('production', 'director', 'manager')
+def production_shift_close(shift_id):
+    shift = ProductionShift.query.get_or_404(shift_id)
+    employee = _get_or_create_production_employee(current_user, commit=True)
+    if shift.employee_id != employee.id and not (current_user.is_admin or current_user.is_director):
+        flash('Можно закрыть только свою смену.', 'danger')
+        return redirect(url_for('main.production_workspace', tab='shifts'))
+    if shift.status != 'open':
+        flash('Смена уже закрыта.', 'warning')
+        return redirect(url_for('main.production_workspace', tab='shifts'))
+
+    close_note = (request.form.get('close_note') or '').strip()
+    if close_note:
+        shift.note = f'{(shift.note or "").strip()}\n{close_note}'.strip()
+    shift.ended_at = datetime.utcnow()
+    shift.status = 'closed'
+    db.session.commit()
+    flash(f'Смена #{shift.id} закрыта.', 'success')
+    return redirect(url_for('main.production_workspace', tab='shifts'))
+
+
+@main_bp.route('/production/shifts/<int:shift_id>/output', methods=['POST'])
+@role_required('production', 'director', 'manager')
+def production_shift_add_output(shift_id):
+    shift = ProductionShift.query.get_or_404(shift_id)
+    employee = _get_or_create_production_employee(current_user, commit=True)
+    if shift.employee_id != employee.id and not (current_user.is_admin or current_user.is_director):
+        flash('Добавлять выпуск можно только в свою смену.', 'danger')
+        return redirect(url_for('main.production_workspace', tab='shifts'))
+    if shift.status != 'open':
+        flash('Смена закрыта, добавлять выпуск нельзя.', 'warning')
+        return redirect(url_for('main.production_workspace', tab='shifts'))
+
+    item_id = request.form.get('item_id', type=int) or None
+    quantity = Decimal(str(request.form.get('quantity') or '0'))
+    defect_quantity = Decimal(str(request.form.get('defect_quantity') or '0'))
+    unit = normalize_unit((request.form.get('unit') or 'шт').strip() or 'шт')
+    output_type = (request.form.get('output_type') or 'other').strip() or 'other'
+    note = (request.form.get('note') or '').strip() or None
+    if quantity < 0 or defect_quantity < 0:
+        flash('Количество не может быть отрицательным.', 'danger')
+        return redirect(url_for('main.production_workspace', tab='shifts'))
+    if quantity == 0 and defect_quantity == 0:
+        flash('Укажите выпуск или брак больше нуля.', 'danger')
+        return redirect(url_for('main.production_workspace', tab='shifts'))
+
+    row = ProductionShiftOutput(
+        shift_id=shift.id,
+        employee_id=shift.employee_id,
+        workshop_id=shift.workshop_id,
+        item_id=item_id,
+        output_type=output_type[:60],
+        quantity=quantity,
+        defect_quantity=defect_quantity,
+        unit=unit,
+        status='accepted',
+        note=note,
+    )
+    db.session.add(row)
+    db.session.commit()
+    flash('Выпуск по смене сохранён.', 'success')
+    return redirect(url_for('main.production_workspace', tab='shifts'))
 
 
 @main_bp.route('/logistics/workspace')
