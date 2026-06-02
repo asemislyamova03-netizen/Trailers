@@ -195,6 +195,32 @@ def _get_or_create_production_employee(user: User, *, commit: bool = False) -> P
     return employee
 
 
+def _workshop_quick_actions(workshops: list[ProductionWorkshop]) -> list[dict]:
+    presets = [
+        ('laser', 'Лазер'),
+        ('bend', 'Листогиб'),
+        ('weld', 'Сварка'),
+        ('assembly', 'Сборка'),
+        ('tent', 'Тенты/каркасы'),
+    ]
+    prepared: list[dict] = []
+    for code, label in presets:
+        match = next(
+            (
+                w for w in workshops
+                if code in (w.code or '').lower()
+                or code in (w.name or '').lower()
+            ),
+            None,
+        )
+        prepared.append({
+            'label': label,
+            'workshop_id': match.id if match else None,
+            'workshop_name': match.name if match else None,
+        })
+    return prepared
+
+
 def _default_production_warehouse():
     if current_user.is_authenticated and current_user.warehouse_id:
         warehouse = Warehouse.query.get(current_user.warehouse_id)
@@ -12526,6 +12552,7 @@ def production_workspace():
     my_open_shift = None
     my_recent_shifts = []
     workshops = []
+    workshop_quick_actions = []
     shift_output_items = []
     performance_rows = []
     performance_totals = {}
@@ -12566,6 +12593,7 @@ def production_workspace():
             .order_by(ProductionWorkshop.sort_order.asc(), ProductionWorkshop.name.asc())
             .all()
         )
+        workshop_quick_actions = _workshop_quick_actions(workshops)
         shift_output_items = (
             Item.query.filter(Item.is_active == True, Item.item_type.in_(('TRAILER', 'COMPONENT')))
             .order_by(Item.name.asc())
@@ -12588,6 +12616,7 @@ def production_workspace():
             db.session.query(
                 ProductionEmployee.id.label('employee_id'),
                 ProductionEmployee.full_name.label('employee_name'),
+                ProductionShiftOutput.workshop_id.label('workshop_id'),
                 ProductionWorkshop.name.label('workshop_name'),
                 Item.article.label('item_article'),
                 Item.name.label('item_name'),
@@ -12609,6 +12638,7 @@ def production_workspace():
             .group_by(
                 ProductionEmployee.id,
                 ProductionEmployee.full_name,
+                ProductionShiftOutput.workshop_id,
                 ProductionWorkshop.name,
                 Item.article,
                 Item.name,
@@ -12616,10 +12646,55 @@ def production_workspace():
             .order_by(ProductionEmployee.full_name.asc(), ProductionWorkshop.name.asc().nullsfirst())
             .all()
         )
+        shift_hours_query = (
+            db.session.query(
+                ProductionShift.employee_id.label('employee_id'),
+                ProductionShift.workshop_id.label('workshop_id'),
+                sa.func.coalesce(sa.func.sum(
+                    sa.func.max(
+                        0,
+                        sa.func.strftime('%s', ProductionShift.ended_at) - sa.func.strftime('%s', ProductionShift.started_at),
+                    )
+                ), 0).label('seconds_sum')
+            )
+            .filter(
+                ProductionShift.status == 'closed',
+                ProductionShift.started_at >= datetime.combine(month_start, time.min),
+                ProductionShift.started_at < datetime.combine(month_end, time.min),
+            )
+        )
+        if current_user.is_production:
+            shift_hours_query = shift_hours_query.filter(ProductionShift.employee_id == employee.id)
+        shift_hours_rows = (
+            shift_hours_query
+            .group_by(ProductionShift.employee_id, ProductionShift.workshop_id)
+            .all()
+        )
+        shift_hours_map = {
+            (row.employee_id, row.workshop_id): (Decimal(row.seconds_sum or 0) / Decimal('3600'))
+            for row in shift_hours_rows
+        }
+        prepared_rows = []
+        for row in performance_rows:
+            hours = shift_hours_map.get((row.employee_id, getattr(row, 'workshop_id', None)), Decimal('0'))
+            qty_sum = Decimal(row.qty_sum or 0)
+            prepared_rows.append({
+                'employee_id': row.employee_id,
+                'employee_name': row.employee_name,
+                'workshop_name': row.workshop_name,
+                'item_article': row.item_article,
+                'item_name': row.item_name,
+                'qty_sum': qty_sum,
+                'defect_sum': Decimal(row.defect_sum or 0),
+                'hours_sum': hours,
+                'qty_per_hour': (qty_sum / hours) if hours > 0 else None,
+            })
+        performance_rows = prepared_rows
         performance_totals = {
-            'qty_sum': sum(Decimal(row.qty_sum or 0) for row in performance_rows),
-            'defect_sum': sum(Decimal(row.defect_sum or 0) for row in performance_rows),
-            'employees': len({row.employee_id for row in performance_rows}),
+            'qty_sum': sum(Decimal(row['qty_sum'] or 0) for row in performance_rows),
+            'defect_sum': sum(Decimal(row['defect_sum'] or 0) for row in performance_rows),
+            'hours_sum': sum(Decimal(row['hours_sum'] or 0) for row in performance_rows),
+            'employees': len({row['employee_id'] for row in performance_rows}),
         }
     elif active_tab == 'overdue':
         lines = base_query.filter(
@@ -12663,6 +12738,7 @@ def production_workspace():
         my_open_shift=my_open_shift,
         my_recent_shifts=my_recent_shifts,
         workshops=workshops,
+        workshop_quick_actions=workshop_quick_actions,
         shift_output_items=shift_output_items,
         performance_rows=performance_rows,
         performance_totals=performance_totals,
