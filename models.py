@@ -184,7 +184,7 @@ class User(UserMixin, db.Model):
 
     @property
     def is_warehouse(self) -> bool:
-        return self.role == 'warehouse'
+        return self.role in ('warehouse', 'purchaser')
 
     @property
     def is_purchaser(self) -> bool:

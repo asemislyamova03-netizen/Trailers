@@ -93,7 +93,13 @@ def role_required(*roles):
         @wraps(f)
         @login_required
         def wrapped(*args, **kwargs):
-            if current_user.is_admin or current_user.role in roles:
+            if current_user.is_admin:
+                return f(*args, **kwargs)
+            if current_user.role in roles:
+                return f(*args, **kwargs)
+            if current_user.role == 'purchaser' and 'warehouse' in roles:
+                return f(*args, **kwargs)
+            if current_user.role == 'warehouse' and 'purchaser' in roles:
                 return f(*args, **kwargs)
             flash('Доступ запрещён для вашей роли', 'danger')
             return redirect(url_for('main.role_home'))
@@ -12511,7 +12517,7 @@ def inventory_receipt_detail(operation_id):
 
 
 @main_bp.route('/production/workspace')
-@role_required('production', 'director', 'manager')
+@role_required('production', 'director', 'manager', 'laser_operator', 'bending_operator')
 def production_workspace():
     active_tab = request.args.get('tab', 'todo')
     production_tabs = {'warehouses', 'frames', 'todo', 'in_work', 'done_today', 'history', 'materials', 'overdue', 'shifts', 'performance'}
@@ -12934,7 +12940,7 @@ def production_line_comment(line_id):
 
 
 @main_bp.route('/production/shifts/open', methods=['POST'])
-@role_required('production', 'director', 'manager')
+@role_required('production', 'director', 'manager', 'laser_operator', 'bending_operator')
 def production_shift_open():
     employee = _get_or_create_production_employee(current_user, commit=True)
     open_shift = (
@@ -12971,7 +12977,7 @@ def production_shift_open():
 
 
 @main_bp.route('/production/shifts/<int:shift_id>/close', methods=['POST'])
-@role_required('production', 'director', 'manager')
+@role_required('production', 'director', 'manager', 'laser_operator', 'bending_operator')
 def production_shift_close(shift_id):
     shift = ProductionShift.query.get_or_404(shift_id)
     employee = _get_or_create_production_employee(current_user, commit=True)
@@ -12993,7 +12999,7 @@ def production_shift_close(shift_id):
 
 
 @main_bp.route('/production/shifts/<int:shift_id>/output', methods=['POST'])
-@role_required('production', 'director', 'manager')
+@role_required('production', 'director', 'manager', 'laser_operator', 'bending_operator')
 def production_shift_add_output(shift_id):
     shift = ProductionShift.query.get_or_404(shift_id)
     employee = _get_or_create_production_employee(current_user, commit=True)

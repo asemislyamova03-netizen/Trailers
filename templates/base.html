@@ -187,6 +187,7 @@ document.querySelectorAll('[data-sidebar-close]').forEach((button) => {
   button.addEventListener('click', () => document.body.classList.remove('sidebar-open'));
 });
 document.querySelectorAll('form').forEach((form) => {
+  const submitText = form.getAttribute('data-submit-text') || 'Сохраняем...';
   const method = (form.getAttribute('method') || 'get').toLowerCase();
   if (method === 'post' && !form.querySelector('input[name="form_token"]')) {
     const input = document.createElement('input');
@@ -200,9 +201,9 @@ document.querySelectorAll('form').forEach((form) => {
       if (!button.disabled) {
         button.dataset.originalText = button.innerHTML || button.value || '';
         if (button.tagName === 'INPUT') {
-          button.value = 'Сохраняем...';
+          button.value = submitText;
         } else {
-          button.innerHTML = 'Сохраняем...';
+          button.innerHTML = submitText;
         }
         button.disabled = true;
       }
