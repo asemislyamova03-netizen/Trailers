@@ -15,7 +15,11 @@
     <div class="row g-3 mb-3">
       <div class="col-md-5">
         {{ form.warehouse_id.label(class="form-label") }}
-        {{ form.warehouse_id(class="form-select", id="receiptWarehouse", **({'disabled': true} if inventory_warehouse_locked else {})) }}
+        {% if inventory_warehouse_locked %}
+          {{ form.warehouse_id(class="form-select", id="receiptWarehouse", disabled="disabled") }}
+        {% else %}
+          {{ form.warehouse_id(class="form-select", id="receiptWarehouse") }}
+        {% endif %}
         {% if inventory_warehouse_locked and form.warehouse_id.data %}
         <input type="hidden" name="warehouse_id" value="{{ form.warehouse_id.data }}">
         {% endif %}

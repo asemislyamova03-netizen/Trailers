@@ -16,7 +16,11 @@
       <div class="col-md-6">
         <h2 class="h6">Откуда</h2>
         {{ form.from_warehouse_id.label(class="form-label") }}
-        {{ form.from_warehouse_id(class="form-select", id="fromWarehouse", **({'disabled': true} if inventory_from_warehouse_locked else {})) }}
+        {% if inventory_from_warehouse_locked %}
+          {{ form.from_warehouse_id(class="form-select", id="fromWarehouse", disabled="disabled") }}
+        {% else %}
+          {{ form.from_warehouse_id(class="form-select", id="fromWarehouse") }}
+        {% endif %}
         {% if inventory_from_warehouse_locked and form.from_warehouse_id.data %}
         <input type="hidden" name="from_warehouse_id" value="{{ form.from_warehouse_id.data }}">
         {% endif %}
