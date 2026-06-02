@@ -99,25 +99,33 @@ def upgrade():
         op.add_column('item', sa.Column('production_stage_default', sa.String(length=40), nullable=True))
         op.create_index('ix_item_production_stage_default', 'item', ['production_stage_default'], unique=False)
 
-    if not _column_exists('inventory_operation', 'supplier_id'):
-        op.add_column('inventory_operation', sa.Column('supplier_id', sa.Integer(), nullable=True))
-        op.create_foreign_key('fk_inventory_operation_supplier_id', 'inventory_operation', 'supplier', ['supplier_id'], ['id'])
-        op.create_index('ix_inventory_operation_supplier_id', 'inventory_operation', ['supplier_id'], unique=False)
-    if not _column_exists('inventory_operation', 'receipt_plan_id'):
-        op.add_column('inventory_operation', sa.Column('receipt_plan_id', sa.Integer(), nullable=True))
-        op.create_foreign_key('fk_inventory_operation_receipt_plan_id', 'inventory_operation', 'inventory_receipt_plan', ['receipt_plan_id'], ['id'])
-        op.create_index('ix_inventory_operation_receipt_plan_id', 'inventory_operation', ['receipt_plan_id'], unique=False)
+    need_supplier = not _column_exists('inventory_operation', 'supplier_id')
+    need_plan = not _column_exists('inventory_operation', 'receipt_plan_id')
+    if need_supplier or need_plan:
+        with op.batch_alter_table('inventory_operation', schema=None) as batch_op:
+            if need_supplier:
+                batch_op.add_column(sa.Column('supplier_id', sa.Integer(), nullable=True))
+                batch_op.create_foreign_key('fk_inventory_operation_supplier_id', 'supplier', ['supplier_id'], ['id'])
+                batch_op.create_index('ix_inventory_operation_supplier_id', ['supplier_id'], unique=False)
+            if need_plan:
+                batch_op.add_column(sa.Column('receipt_plan_id', sa.Integer(), nullable=True))
+                batch_op.create_foreign_key('fk_inventory_operation_receipt_plan_id', 'inventory_receipt_plan', ['receipt_plan_id'], ['id'])
+                batch_op.create_index('ix_inventory_operation_receipt_plan_id', ['receipt_plan_id'], unique=False)
 
 
 def downgrade():
-    if _column_exists('inventory_operation', 'receipt_plan_id'):
-        op.drop_index('ix_inventory_operation_receipt_plan_id', table_name='inventory_operation')
-        op.drop_constraint('fk_inventory_operation_receipt_plan_id', 'inventory_operation', type_='foreignkey')
-        op.drop_column('inventory_operation', 'receipt_plan_id')
-    if _column_exists('inventory_operation', 'supplier_id'):
-        op.drop_index('ix_inventory_operation_supplier_id', table_name='inventory_operation')
-        op.drop_constraint('fk_inventory_operation_supplier_id', 'inventory_operation', type_='foreignkey')
-        op.drop_column('inventory_operation', 'supplier_id')
+    drop_plan = _column_exists('inventory_operation', 'receipt_plan_id')
+    drop_supplier = _column_exists('inventory_operation', 'supplier_id')
+    if drop_plan or drop_supplier:
+        with op.batch_alter_table('inventory_operation', schema=None) as batch_op:
+            if drop_plan:
+                batch_op.drop_index('ix_inventory_operation_receipt_plan_id')
+                batch_op.drop_constraint('fk_inventory_operation_receipt_plan_id', type_='foreignkey')
+                batch_op.drop_column('receipt_plan_id')
+            if drop_supplier:
+                batch_op.drop_index('ix_inventory_operation_supplier_id')
+                batch_op.drop_constraint('fk_inventory_operation_supplier_id', type_='foreignkey')
+                batch_op.drop_column('supplier_id')
 
     if _column_exists('item', 'production_stage_default'):
         op.drop_index('ix_item_production_stage_default', table_name='item')
