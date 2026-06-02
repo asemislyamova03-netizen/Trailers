@@ -129,6 +129,13 @@
             <div class="fw-semibold">{{ line.article_snapshot or (line.item.article if line.item else '') or '—' }}</div>
             <div class="small text-muted">{{ line.product_name_snapshot or (line.item.name if line.item else '—') }}</div>
             {% if config_parts %}<div class="small">{% for part in config_parts[:3] %}<span class="badge text-bg-light me-1">{{ part }}</span>{% endfor %}</div>{% endif %}
+            {% if line_material_shortages.get(line.id) %}
+            <div class="small text-danger mt-1">Нет материалов для +1:
+              {% for shortage in line_material_shortages[line.id][:3] %}
+                {{ shortage.name }} (нужно {{ shortage.required }}, есть {{ shortage.available }}){% if not loop.last %};{% endif %}
+              {% endfor %}
+            </div>
+            {% endif %}
           </td>
           <td>{{ line.production_request.target_warehouse.name if line.production_request.target_warehouse else '' }}</td>
           <td>{{ line.supply_need.required_by|date_format if line.supply_need else '' }}</td>
@@ -146,7 +153,7 @@
                 {% endif %}
                 <form method="post" action="{{ url_for('main.production_line_produce_one', line_id=line.id) }}">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <button class="btn btn-sm btn-success" {% if not current_user.is_production %}disabled{% endif %}>+1</button>
+                  <button class="btn btn-sm btn-success" {% if not current_user.is_production or line_material_shortages.get(line.id) %}disabled{% endif %} title="{% if line_material_shortages.get(line.id) %}Сначала приход ТМЦ или поправьте BOM{% else %}Выпустить 1 шт.{% endif %}">+1</button>
                 </form>
               {% endif %}
               <button class="btn btn-sm btn-soft" type="button" data-bs-toggle="collapse" data-bs-target="#productionComment{{ line.id }}">Комментарий</button>

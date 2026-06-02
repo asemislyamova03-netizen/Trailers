@@ -133,7 +133,7 @@
           {% else %}
             <span class="text-muted small">Следующий шаг менеджера: присвоить VIN выпущенной единице.</span>
           {% endif %}
-          {% if current_user.is_admin %}
+          {% if current_user.is_admin or current_user.is_director %}
             <form method="post" action="{{ url_for('main.produced_unit_admin_delete', unit_id=st.needs_vin_units[0].id) }}" onsubmit="return confirm('Удалить ошибочный выпуск без VIN?');">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="reason" value="Очистка из пополнения склада">
@@ -153,7 +153,7 @@
             </form>
             <div class="small text-muted">{{ move_unit.trailer.vin }} -> {{ need.warehouse.name }}</div>
           {% endif %}
-          {% if current_user.is_admin %}
+          {% if current_user.is_admin or current_user.is_director %}
             <form method="post" action="{{ url_for('main.produced_unit_admin_delete', unit_id=move_unit.id) }}" onsubmit="return confirm('Удалить ошибочный выпуск? Если прицеп/VIN уже связан с продажей, будет удалена только производственная связь.');">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="reason" value="Очистка из пополнения склада">
@@ -168,14 +168,14 @@
             {% if problem_unit.trailer %} · {{ problem_unit.trailer.vin }} · {{ problem_unit.trailer.status|status_label }}{% endif %}
             {% if problem_unit.order_id or problem_unit.order_line_id %} · есть связь с заказом{% endif %}
           </div>
-          {% if current_user.is_admin %}
+          {% if current_user.is_admin or current_user.is_director %}
             <form method="post" action="{{ url_for('main.produced_unit_admin_delete', unit_id=problem_unit.id) }}" onsubmit="return confirm('Удалить ошибочный выпуск? Если прицеп/VIN уже связан с продажей, будет удалена только производственная связь.');">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="reason" value="Очистка проблемного выпуска из пополнения склада">
               <button class="btn btn-sm btn-outline-danger">Удалить выпуск</button>
             </form>
           {% else %}
-            <span class="text-muted small">Нужна админская очистка или проверка PR.</span>
+            <span class="text-muted small">Нужна очистка директором/админом или проверка PR.</span>
           {% endif %}
         {% elif need.status == 'NEW' and (current_user.is_admin or current_user.is_director or current_user.is_manager) %}
           <form method="post" action="{{ url_for('main.supply_need_create_production_request', need_id=need.id) }}">

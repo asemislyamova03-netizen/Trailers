@@ -41,6 +41,7 @@ from inventory_service import (
     item_has_positive_balance,
     production_warehouse_ids,
     resolve_material_warehouse_id,
+    reverse_production_consumption,
 )
 from inventory_units import format_inventory_quantity, normalize_unit, quantity_input_step
 from collections import defaultdict
@@ -360,6 +361,25 @@ def _is_paid_customer_need(need: SupplyNeed | None) -> bool:
     if not order:
         return False
     return order.remaining_amount <= 0 and order.total_amount > 0
+
+
+def _production_line_material_shortages(lines: list[ProductionRequestLine]) -> dict[int, list[dict]]:
+    shortages_by_line: dict[int, list[dict]] = {}
+    for line in lines:
+        if not line.item_id or not get_active_bom(line.item_id):
+            continue
+        finished_wh_id = line.production_request.target_warehouse_id if line.production_request else None
+        material_wh_id = resolve_material_warehouse_id(finished_wh_id)
+        if not material_wh_id:
+            continue
+        shortages = check_bom_shortages(
+            finished_item_id=line.item_id,
+            material_warehouse_id=material_wh_id,
+            units_count=1,
+        )
+        if shortages:
+            shortages_by_line[line.id] = shortages
+    return shortages_by_line
 
 
 def _production_line_sort_key(line: ProductionRequestLine):
@@ -8412,7 +8432,7 @@ def supply_need_release_order_reserve(need_id):
 
 
 @main_bp.route('/production/produced-units/<int:unit_id>/admin-delete', methods=['POST'])
-@admin_required
+@role_required('director')
 def produced_unit_admin_delete(unit_id):
     unit = ProducedUnit.query.get_or_404(unit_id)
     reason = (request.form.get('reason') or '').strip() or 'Административная очистка ошибочного выпуска'
@@ -8450,9 +8470,17 @@ def produced_unit_admin_delete(unit_id):
             _add_vin_event(row, 'admin_unassigned', old_status, row.status, comment=f'Удалён ошибочный выпуск ProducedUnit #{unit.id}: {reason}')
         db.session.delete(trailer)
 
+    reversal = reverse_production_consumption(
+        produced_unit_id=unit.id,
+        created_by_user_id=current_user.id,
+        reason=reason,
+    )
+
     _reopen_production_line_after_unit_delete(line)
     db.session.delete(unit)
     db.session.commit()
+    if reversal:
+        flash('Материалы по спецификации возвращены на производственный склад.', 'info')
     if trailer_preserved:
         flash('Ошибочная производственная запись удалена. Прицеп/VIN сохранены, потому что уже связаны с продажей или документами.', 'success')
     elif trailer:
@@ -12095,6 +12123,8 @@ def production_workspace():
         ).all()
         lines = sorted(lines, key=_production_line_sort_key)
 
+    line_material_shortages = _production_line_material_shortages(lines) if lines else {}
+
     today_units = (
         ProducedUnit.query
         .filter(or_(ProducedUnit.created_at >= today_start, ProducedUnit.produced_at >= today_start))
@@ -12117,6 +12147,7 @@ def production_workspace():
         active_tab=active_tab,
         material_balances=material_balances,
         material_balance_groups=material_balance_groups,
+        line_material_shortages=line_material_shortages,
     )
 
 

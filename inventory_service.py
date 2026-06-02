@@ -428,6 +428,90 @@ def apply_production_consumption(
     return operation
 
 
+def _return_quantity_to_warehouse(
+    warehouse_id: int,
+    item_id: int,
+    qty: Decimal,
+    unit: str,
+) -> None:
+    if qty <= 0:
+        return
+    balances = (
+        InventoryBalance.query.filter_by(warehouse_id=warehouse_id, item_id=item_id)
+        .order_by(InventoryBalance.id.asc())
+        .all()
+    )
+    for balance in balances:
+        if units_match(balance.unit, unit):
+            balance.quantity = Decimal(balance.quantity or 0) + qty
+            balance.updated_at = datetime.utcnow()
+            return
+    balance = get_or_create_balance(warehouse_id, item_id, storage_area_id=None, unit=unit)
+    balance.quantity = Decimal(balance.quantity or 0) + qty
+    balance.updated_at = datetime.utcnow()
+
+
+def reverse_production_consumption(
+    *,
+    produced_unit_id: int,
+    created_by_user_id: int | None,
+    reason: str | None = None,
+) -> InventoryOperation | None:
+    """Вернуть на склад материалы, списанные при выпуске этой единицы."""
+    if InventoryOperation.query.filter_by(
+        operation_type='production_issue_reversal',
+        produced_unit_id=produced_unit_id,
+        status='posted',
+    ).first():
+        return None
+
+    source_op = InventoryOperation.query.filter_by(
+        operation_type='production_issue',
+        produced_unit_id=produced_unit_id,
+        status='posted',
+    ).first()
+    if not source_op:
+        return None
+
+    warehouse_id = source_op.source_warehouse_id
+    if not warehouse_id:
+        return None
+
+    reversal = InventoryOperation(
+        operation_type='production_issue_reversal',
+        status='posted',
+        target_warehouse_id=warehouse_id,
+        production_request_line_id=source_op.production_request_line_id,
+        produced_unit_id=produced_unit_id,
+        workshop_id=source_op.workshop_id,
+        created_by_user_id=created_by_user_id,
+        posted_at=datetime.utcnow(),
+        comment=reason or f'Отмена списания по выпуску #{produced_unit_id}',
+    )
+    db.session.add(reversal)
+    db.session.flush()
+
+    for op_line in source_op.lines.filter_by(direction='out').all():
+        qty = Decimal(op_line.quantity or 0)
+        if qty <= 0:
+            continue
+        unit = normalize_unit(op_line.unit)
+        db.session.add(
+            InventoryOperationLine(
+                operation_id=reversal.id,
+                item_id=op_line.item_id,
+                quantity=qty,
+                unit=unit,
+                direction='in',
+                comment='Возврат при удалении выпуска',
+            )
+        )
+        _return_quantity_to_warehouse(warehouse_id, op_line.item_id, qty, unit)
+
+    db.session.flush()
+    return reversal
+
+
 def production_warehouse_ids() -> list[int]:
     return [
         row.id
