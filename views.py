@@ -3093,6 +3093,15 @@ def manager_trailer_picker():
                 return _duplicate_redirect(idem_key, duplicate_url)
             if target_order:
                 source_type = 'TRANSFER' if target_order.warehouse_id and trailer.warehouse_id != target_order.warehouse_id else 'STOCK'
+                if _order_can_configure_primary_line(target_order):
+                    order_line = _primary_order_line(target_order)
+                    _configure_order_line_from_stock(target_order, order_line, trailer, source_type)
+                    add_order_event(target_order, 'comment_added', new_value=trailer.vin, comment='Прицеп из наличия выбран через конфигуратор')
+                    add_order_event(target_order, 'trailer_reserved', new_value=trailer.vin, comment='Резерв из подбора прицепа')
+                    _finish_idempotency(idem_key, 'CustomerOrderLine', order_line.id)
+                    db.session.commit()
+                    flash('Прицеп из наличия закреплён за заказ.', 'success')
+                    return redirect(url_for('main.order_detail', order_id=target_order.id))
                 order_line = _create_order_line_from_trailer(target_order, trailer, source_type)
                 if not target_order.item_id:
                     target_order.item_id = trailer.item_id
@@ -3150,6 +3159,22 @@ def manager_trailer_picker():
                 duplicate_url = url_for('main.order_detail', order_id=target_order.id) if target_order else url_for('main.orders_list')
                 return _duplicate_redirect(idem_key, duplicate_url)
             if target_order:
+                if _order_can_configure_primary_line(target_order):
+                    line = _primary_order_line(target_order)
+                    line, need = _configure_order_line_from_production(
+                        target_order,
+                        line,
+                        item,
+                        snapshot,
+                        quantity=quantity,
+                        unit_price=snapshot.get('calculated_price'),
+                    )
+                    add_order_event(target_order, 'comment_added', new_value=item.article or item.name, comment='Конфигурация сохранена в заказ через подбор')
+                    add_order_event(target_order, 'production_need_created', new_value=need.quantity, comment=f'Потребность создана по позиции #{line.line_no}')
+                    _finish_idempotency(idem_key, 'CustomerOrderLine', line.id)
+                    db.session.commit()
+                    flash('Конфигурация сохранена в заказ.', 'success')
+                    return redirect(url_for('main.order_detail', order_id=target_order.id))
                 line, need = _create_order_line_from_item_for_production(
                     target_order,
                     item,
@@ -3221,9 +3246,11 @@ def manager_trailer_picker():
             flash('Заявка на пополнение склада создана.', 'success')
             return redirect(url_for('main.stock_replenishment_list'))
 
+    configure_primary_line = bool(target_order and _order_can_configure_primary_line(target_order))
     return render_template(
         'manager_trailer_picker.html',
         target_order=target_order,
+        configure_primary_line=configure_primary_line,
         config=config,
         result=result,
         inventory=inventory,
@@ -3501,9 +3528,22 @@ def _customer_back_url(return_to: str, order_id: int | None = None) -> str:
     return url_for('main.customers_list')
 
 
+def _attach_customer_to_order(order_id: int | None, customer: Customer | None) -> CustomerOrder | None:
+    if not order_id or not customer:
+        return None
+    order = CustomerOrder.query.get(order_id)
+    if not order:
+        return None
+    order.customer_id = customer.id
+    db.session.commit()
+    return order
+
+
 def _customer_return_redirect(customer: Customer, return_to: str, order_id: int | None = None):
     if return_to == 'order_edit' and order_id:
-        return redirect(url_for('main.order_edit', order_id=order_id, customer_id=customer.id))
+        _attach_customer_to_order(order_id, customer)
+        flash('Клиент сохранён в заказе.', 'success')
+        return redirect(url_for('main.order_edit', order_id=order_id))
     if return_to == 'order_create':
         return redirect(url_for('main.order_create', customer_id=customer.id))
     return redirect(url_for('main.customer_edit', customer_id=customer.id))
@@ -4610,10 +4650,46 @@ def _set_item_search_label(form, search_attr: str, item_attr: str) -> None:
             getattr(form, search_attr).data = _item_label(item)
 
 
+def _customer_options_for_order_form(form: CustomerOrderForm, limit: int = 50) -> list[dict]:
+    options = _customer_options(limit=limit)
+    seen_ids = {row['id'] for row in options}
+    extra_ids = []
+    if form.customer_id.data:
+        extra_ids.append(form.customer_id.data)
+    prefill_id = request.args.get('customer_id', type=int)
+    if prefill_id:
+        extra_ids.append(prefill_id)
+    for customer_id in extra_ids:
+        if customer_id and customer_id not in seen_ids:
+            customer = Customer.query.get(customer_id)
+            if customer:
+                options.insert(0, {
+                    'id': customer.id,
+                    'label': _customer_label(customer),
+                    'name': customer.name,
+                    'phone': customer.phone or '',
+                    'iin_bin': customer.iin_bin or '',
+                    'customer_type': customer.customer_type,
+                })
+                seen_ids.add(customer.id)
+    return options
+
+
 def _fill_order_form_choices(form: CustomerOrderForm, item_id_prefill: int | None = None, current_order_id: int | None = None) -> None:
     leads = Lead.query.order_by(Lead.created_at.desc(), Lead.id.desc()).all()
     form.lead_id.choices = [(0, '— без заявки —')] + [(l.id, f'#{l.id} {l.customer_name} / {l.channel or l.source_channel}') for l in leads]
-    form.customer_id.choices = [(0, '— выберите клиента —')] + [(c.id, _customer_label(c)) for c in Customer.query.filter_by(is_active=True).order_by(Customer.name).all()]
+    customer_choices = [(0, '— выберите клиента —')] + [
+        (c.id, _customer_label(c))
+        for c in Customer.query.filter_by(is_active=True).order_by(Customer.name).all()
+    ]
+    choice_ids = {choice_id for choice_id, _ in customer_choices}
+    for extra_id in (form.customer_id.data, request.args.get('customer_id', type=int)):
+        if extra_id and extra_id not in choice_ids:
+            customer = Customer.query.get(extra_id)
+            if customer:
+                customer_choices.append((customer.id, _customer_label(customer)))
+                choice_ids.add(customer.id)
+    form.customer_id.choices = customer_choices
     items = Item.query.filter(Item.item_type == 'TRAILER', Item.is_active == True).order_by(Item.article, Item.name).all()
     form.item_id.choices = [(0, '— выберите модель —')] + [(i.id, _item_label(i)) for i in items]
     form.warehouse_id.choices = [(0, '— не выбрано —')] + [(w.id, w.name) for w in _sales_warehouses()]
@@ -5120,6 +5196,36 @@ def _primary_order_line(order: CustomerOrder) -> CustomerOrderLine | None:
         .order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc())
         .first()
     )
+
+
+def _order_line_is_unconfigured(line: CustomerOrderLine | None) -> bool:
+    if not line:
+        return False
+    if line.trailer_id:
+        return False
+    if any((reservation.status or '').upper() == 'ACTIVE' for reservation in (line.reservations or [])):
+        return False
+    if _active_vin_rows_for_order_line(line):
+        return False
+    active_needs = [
+        need for need in (line.supply_needs or [])
+        if (need.status or '').upper() not in ('CANCELLED', 'CANCELED', 'DONE', 'CLOSED', 'VOID')
+    ]
+    if active_needs and line.item_id and (line.article_snapshot or '').strip():
+        return False
+    if (line.article_snapshot or '').strip() and line.item_id:
+        fulfillment = (line.fulfillment_source or '').lower()
+        if fulfillment not in ('later', '', 'none'):
+            return False
+    return True
+
+
+def _order_can_configure_primary_line(order: CustomerOrder) -> bool:
+    if not order or order.status == 'cancelled' or order.documents_issued or order.is_shipped:
+        return False
+    if order.lines.count() != 1:
+        return False
+    return _order_line_is_unconfigured(_primary_order_line(order))
 
 
 def _order_has_lines(order: CustomerOrder) -> bool:
@@ -5807,6 +5913,19 @@ ORDER_LIST_FILTERS = [
 ]
 
 
+def _order_has_produced_units_waiting_vin(order: CustomerOrder) -> bool:
+    if not order or not order.id:
+        return False
+    for line in order.lines:
+        for unit in line.produced_units or []:
+            if unit.status == 'produced_no_vin' and not unit.trailer_id:
+                return True
+    for unit in order.produced_units or []:
+        if unit.status == 'produced_no_vin' and not unit.trailer_id:
+            return True
+    return False
+
+
 def _order_primary_line_state(order: CustomerOrder) -> dict:
     lines = order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()).all()
     if not lines:
@@ -5866,12 +5985,20 @@ def _order_list_state(order: CustomerOrder) -> dict:
         code, label, blocker, next_action = 'shipped', 'Отгружена', '', 'закрыто'
     elif not order.lines.count():
         code, label, blocker, next_action = 'new', 'Новая', 'нет строк заказа', 'добавить позицию'
+    elif any((need.status or '').upper() in ('NEW', 'PLANNED', 'SENT_TO_PRODUCTION', 'IN_PRODUCTION', 'PARTIALLY_DONE') for need in line_state['active_needs']):
+        code, label, blocker, next_action = 'waiting_kit', 'Ждёт комплектацию', 'есть активная производственная потребность', 'завершить производство/комплектацию'
     elif line_state['assigned_unconfirmed']:
         code, label, blocker, next_action = 'waiting_vin_confirm', 'Ждёт подтверждения VIN', 'VIN назначен, но не подтверждён', 'подтвердить нанесение VIN'
     elif line_state['missing_vin']:
-        code, label, blocker, next_action = 'waiting_vin', 'Ждёт VIN', 'нет активного VIN по строке', 'назначить или привязать VIN'
-    elif any((need.status or '').upper() in ('NEW', 'PLANNED', 'SENT_TO_PRODUCTION', 'IN_PRODUCTION', 'PARTIALLY_DONE') for need in line_state['active_needs']):
-        code, label, blocker, next_action = 'waiting_kit', 'Ждёт комплектацию', 'есть активная производственная потребность', 'завершить производство/комплектацию'
+        fulfillment = (order.fulfillment_source or '').lower()
+        if fulfillment == 'later':
+            code, label, blocker, next_action = 'new', 'Подобрать позже', 'прицеп/VIN не выбран', 'выбрать источник и прицеп'
+        elif _order_has_produced_units_waiting_vin(order):
+            code, label, blocker, next_action = 'waiting_vin', 'Ждёт VIN', 'выпущено без VIN', 'назначить или привязать VIN'
+        elif fulfillment == 'production':
+            code, label, blocker, next_action = 'waiting_kit', 'Ожидает производства', 'прицеп ещё не выпущен', 'запустить или дождаться производства'
+        else:
+            code, label, blocker, next_action = 'new', 'Ждёт подбор', 'нет VIN по строке', 'выбрать прицеп или VIN'
     elif order.remaining_amount and order.remaining_amount > 0:
         code, label, blocker, next_action = 'waiting_payment', 'Ждёт оплату', 'есть остаток к оплате', 'получить оплату'
     elif not SalesContract.query.filter_by(order_id=order.id).first():
@@ -6128,6 +6255,125 @@ def _create_order_line_from_item_for_production(
     db.session.add(need)
     line.supply_need = need
     return line, need
+
+
+def _configure_order_line_from_production(
+    order: CustomerOrder,
+    line: CustomerOrderLine,
+    item: Item,
+    snapshot: dict | None,
+    quantity: int = 1,
+    unit_price=None,
+) -> tuple[CustomerOrderLine, SupplyNeed]:
+    quantity = max(int(quantity or 1), 1)
+    snapshot = snapshot or _line_snapshot_from_item(item)
+    if unit_price is None:
+        unit_price = snapshot.get('calculated_price') if snapshot.get('calculated_price') is not None else item.base_price
+    line.line_type = 'TRAILER' if str(item.item_type or '').upper() != 'COMPONENT' else 'COMPONENT'
+    line.fulfillment_source = 'production'
+    line.item_id = item.id
+    line.trailer_id = None
+    line.quantity = quantity
+    line.unit_price = unit_price
+    line.total_price = (unit_price * quantity) if unit_price is not None else None
+    line.status = 'waiting_production'
+    _apply_snapshot(line, snapshot)
+    active_needs = [
+        need for need in (line.supply_needs or [])
+        if (need.status or '').upper() in ('NEW', 'PLANNED')
+    ]
+    if active_needs:
+        need = active_needs[0]
+        need.item_id = item.id
+        need.quantity = quantity
+        need.warehouse_id = order.warehouse_id
+        need.required_by = order.expected_date
+        _apply_snapshot(need, snapshot)
+    else:
+        need = SupplyNeed(
+            order_id=order.id,
+            order_line_id=line.id,
+            item_id=item.id,
+            warehouse_id=order.warehouse_id,
+            quantity=quantity,
+            status='NEW',
+            priority=10,
+            need_type='CUSTOMER_ORDER',
+            required_by=order.expected_date,
+            note='Потребность создана из конфигуратора',
+        )
+        _apply_snapshot(need, snapshot)
+        db.session.add(need)
+    line.supply_need = need
+    order.item_id = item.id
+    order.trailer_id = None
+    order.fulfillment_source = 'production'
+    order.quantity = quantity
+    order.price = line.total_price
+    _apply_snapshot(order, snapshot)
+    _set_line_source_state(line, 'production', 'waiting_production')
+    _sync_order_line_workflow_links(line)
+    _sync_order_totals_from_lines(order)
+    _refresh_order_status(order)
+    return line, need
+
+
+def _configure_order_line_from_stock(
+    order: CustomerOrder,
+    line: CustomerOrderLine,
+    trailer: Trailer,
+    source_type: str = 'STOCK',
+) -> CustomerOrderLine:
+    line.line_type = 'TRAILER'
+    line.fulfillment_source = 'stock' if source_type == 'STOCK' else 'other_warehouse'
+    line.item_id = trailer.item_id
+    line.trailer_id = trailer.id
+    line.quantity = 1
+    unit_price = trailer.item.base_price if trailer.item else None
+    line.unit_price = unit_price
+    line.total_price = unit_price
+    line.status = 'reserved'
+    _apply_snapshot(line, _line_snapshot_from_item(trailer.item))
+    trailer.status = 'RESERVED'
+    trailer.lifecycle_status = 'reserved'
+    reservation = next((row for row in (line.reservations or []) if row.status == 'ACTIVE'), None)
+    if not reservation:
+        reservation = Reservation(
+            order_id=order.id,
+            order_line_id=line.id,
+            trailer_id=trailer.id,
+            item_id=trailer.item_id,
+            source_type=source_type,
+            status='ACTIVE',
+            priority=10,
+            note='Резерв по позиции заказа',
+        )
+        db.session.add(reservation)
+    else:
+        reservation.trailer_id = trailer.id
+        reservation.item_id = trailer.item_id
+        reservation.source_type = source_type
+    line.reservation = reservation
+    row = _ensure_vin_registry_for_trailer(trailer)
+    if row:
+        row.customer_order_id = order.id
+        row.order_line_id = line.id
+        line.vin_registry = row
+    order.item_id = trailer.item_id
+    order.trailer_id = trailer.id
+    order.source_warehouse_id = trailer.warehouse_id
+    order.fulfillment_source = line.fulfillment_source
+    order.quantity = 1
+    order.price = line.total_price
+    if order.warehouse_id and trailer.warehouse_id != order.warehouse_id:
+        order.status = 'waiting_transfer'
+        _set_line_source_state(line, line.fulfillment_source, 'waiting_transfer')
+    else:
+        _refresh_order_status(order)
+        _set_line_source_state(line, line.fulfillment_source, order.status)
+    _sync_order_line_workflow_links(line)
+    _sync_order_totals_from_lines(order)
+    return line
 
 
 def _order_delete_blockers(order: CustomerOrder) -> list[str]:
@@ -7092,7 +7338,7 @@ def _render_order_form(form: CustomerOrderForm, title: str):
         'order_form.html',
         form=form,
         title=title,
-        customer_options=_customer_options(limit=50),
+        customer_options=_customer_options_for_order_form(form, limit=50),
         item_options=_trailer_item_options(),
         trailer_options=_order_trailer_options(getattr(form, 'order_id', None)),
         availability=_order_future_availability(form.item_id.data or None, form.warehouse_id.data or None),
@@ -7100,15 +7346,23 @@ def _render_order_form(form: CustomerOrderForm, title: str):
     )
 
 
-def _render_order_header_form(form: CustomerOrderForm, order: CustomerOrder, title: str):
+def _render_order_header_form(
+    form: CustomerOrderForm,
+    order: CustomerOrder,
+    title: str,
+    can_configure_primary_line: bool | None = None,
+):
     order_lines = order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()).all()
+    if can_configure_primary_line is None:
+        can_configure_primary_line = _order_can_configure_primary_line(order)
     return render_template(
         'order_header_form.html',
         form=form,
         order=order,
         title=title,
-        customer_options=_customer_options(limit=50),
+        customer_options=_customer_options_for_order_form(form, limit=50),
         order_lines=order_lines,
+        can_configure_primary_line=can_configure_primary_line,
     )
 
 
@@ -9048,6 +9302,7 @@ def order_detail(order_id):
         future_inbound_movements=future_inbound_movements,
         can_manage=can_manage_order(order),
         has_order_lines=bool(order_lines),
+        can_configure_primary_line=_order_can_configure_primary_line(order),
     )
 
 
@@ -9095,12 +9350,12 @@ def order_edit(order_id):
         form.fulfillment_source.data = order.fulfillment_source or 'later'
 
     if form.validate_on_submit():
-        if order.lines.count() > 0:
+        if order.lines.count() > 0 and not _order_can_configure_primary_line(order):
             order.order_number = (form.order_number.data or '').strip() or order.order_number
             if form.order_date.data:
                 order.created_at = datetime.combine(form.order_date.data, time.min)
             order.lead_id = form.lead_id.data or None
-            order.customer_id = form.customer_id.data
+            order.customer_id = form.customer_id.data or None
             order.warehouse_id = form.warehouse_id.data or None
             order.assigned_user_id = form.assigned_user_id.data or None
             order.expected_date = form.expected_date.data
@@ -9109,10 +9364,21 @@ def order_edit(order_id):
             order.note = (form.note.data or '').strip() or None
             order.manager_comment = (form.manager_comment.data or '').strip() or None
             order.prepayment_percent = form.prepayment_percent.data
+            fulfillment_source = (form.fulfillment_source.data or '').strip() or None
+            if fulfillment_source:
+                order.fulfillment_source = fulfillment_source
+                if order.lines.count() == 1:
+                    line = _primary_order_line(order)
+                    if line:
+                        _set_line_source_state(line, order.fulfillment_source, None)
             _refresh_order_status(order)
+            if order.lines.count() == 1:
+                line = _primary_order_line(order)
+                if line:
+                    _set_line_source_state(line, line.fulfillment_source, order.status)
             add_order_event(order, 'comment_added', comment='Обновлена шапка заказа без изменения строк, VIN, резервов и потребностей')
             db.session.commit()
-            flash('Шапка заказа обновлена. Строки, VIN, резервы и потребности не изменялись.', 'success')
+            flash('Шапка заказа сохранена. Позиции, VIN и производство меняются в карточке заказа.', 'success')
             return redirect(url_for('main.order_detail', order_id=order.id))
 
         old_status = order.status
@@ -9164,7 +9430,7 @@ def order_edit(order_id):
         if form.order_date.data:
             order.created_at = datetime.combine(form.order_date.data, time.min)
         order.lead_id = form.lead_id.data or None
-        order.customer_id = form.customer_id.data
+        order.customer_id = form.customer_id.data or None
         order.item_id = form.item_id.data
         order.warehouse_id = form.warehouse_id.data or None
         order.assigned_user_id = form.assigned_user_id.data or None
@@ -9210,9 +9476,15 @@ def order_edit(order_id):
         flash('Заказ обновлен', 'success')
         return redirect(url_for('main.order_detail', order_id=order.id))
 
-    if order.lines.count() > 0:
-        return _render_order_header_form(form, order, 'Редактирование шапки заказа')
-    return _render_order_form(form, 'Редактирование заказа')
+    if order.lines.count() > 0 and not _order_can_configure_primary_line(order):
+        return _render_order_header_form(
+            form,
+            order,
+            'Редактирование шапки заказа',
+            can_configure_primary_line=False,
+        )
+    title = 'Настройка заказа и конфигурация' if _order_can_configure_primary_line(order) else 'Редактирование заказа'
+    return _render_order_form(form, title)
 
 
 @main_bp.route('/orders/<int:order_id>/lines/<int:line_id>/update', methods=['POST'])

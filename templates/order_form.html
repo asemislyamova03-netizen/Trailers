@@ -183,16 +183,26 @@
   const preview = document.querySelector('#configPreview');
   const submitButton = document.querySelector('#orderForm [type="submit"]');
 
+  const initialCustomerId = {{ form.customer_id.data or 0 }};
+
+  function setEditCustomerLink(customerId) {
+    if (!editCustomerLink || !customerId) return;
+    const params = new URLSearchParams();
+    params.set('return_to', {% if form.order_id %}'order_edit'{% else %}'order_create'{% endif %});
+    {% if form.order_id %}params.set('order_id', '{{ form.order_id }}');{% endif %}
+    editCustomerLink.href = `/customers/${customerId}/edit?${params.toString()}`;
+    editCustomerLink.classList.remove('disabled');
+  }
+
   function syncCustomerId() {
     const match = customerOptions.find((option) => option.value === customerInput.value);
-    customerSelect.value = match ? match.dataset.id : '0';
+    const resolvedId = match ? match.dataset.id : (initialCustomerId || '0');
+    customerSelect.value = match ? match.dataset.id : (customerInput.value.trim() ? '0' : String(initialCustomerId || '0'));
     if (editCustomerLink) {
       if (match) {
-        const params = new URLSearchParams();
-        params.set('return_to', {% if form.order_id %}'order_edit'{% else %}'order_create'{% endif %});
-        {% if form.order_id %}params.set('order_id', '{{ form.order_id }}');{% endif %}
-        editCustomerLink.href = `/customers/${match.dataset.id}/edit?${params.toString()}`;
-        editCustomerLink.classList.remove('disabled');
+        setEditCustomerLink(match.dataset.id);
+      } else if (!customerInput.value.trim() && initialCustomerId) {
+        setEditCustomerLink(initialCustomerId);
       } else {
         editCustomerLink.href = '#';
         editCustomerLink.classList.add('disabled');

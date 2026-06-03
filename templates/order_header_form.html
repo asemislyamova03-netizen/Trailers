@@ -101,7 +101,15 @@
           </tbody>
         </table>
       </div>
-      <div class="alert alert-info small mb-0">Источник обеспечения, VIN, прицеп и комплектация меняются только в карточке заказа через действия по строке.</div>
+      {% if can_configure_primary_line %}
+      <div class="alert alert-warning small mb-2">
+        Позиция ещё не выбрана. Для конфигуратора используйте
+        <a href="{{ url_for('main.manager_trailer_picker', order_id=form.order_id) }}">подбор прицепа</a>
+        или <a href="{{ url_for('main.order_edit', order_id=form.order_id) }}">полную форму заказа</a>.
+      </div>
+      {% else %}
+      <div class="alert alert-info small mb-0">Источник обеспечения, VIN, прицеп и комплектация меняются в карточке заказа через действия по строке.</div>
+      {% endif %}
     </div>
   </div>
 

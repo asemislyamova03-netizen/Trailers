@@ -380,9 +380,21 @@
 
       {% if can_manage and order.status != 'cancelled' and not order.documents_issued and not order.is_shipped %}
       <div class="row g-3 mt-2">
+        {% if can_configure_primary_line %}
+        <div class="col-12">
+          <div class="alert alert-warning mb-0">
+            Позиция ещё не выбрана (режим «подобрать позже»). Соберите прицеп через конфигуратор или выберите VIN из наличия — изменения попадут в этот заказ, а не в новую строку.
+          </div>
+          <div class="d-flex flex-wrap gap-2 mt-2">
+            <a class="btn btn-orange" href="{{ url_for('main.manager_trailer_picker', order_id=order.id) }}">Собрать через конфигуратор</a>
+            <a class="btn btn-soft" href="{{ url_for('main.order_edit', order_id=order.id) }}">Форма заказа с конфигуратором</a>
+          </div>
+        </div>
+        {% else %}
         <div class="col-12">
           <a class="btn btn-sm btn-primary" href="{{ url_for('main.manager_trailer_picker', order_id=order.id) }}">Добавить другую конфигурацию через подбор</a>
         </div>
+        {% endif %}
         <div class="col-lg-6">
           <form method="post" action="{{ url_for('main.order_line_add_stock', order_id=order.id) }}" class="border rounded p-3 h-100">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

@@ -39,7 +39,7 @@
               <input type="hidden" name="trailer_id" value="{{ row.id }}">
               <input type="hidden" name="customer_id" value="{{ target_order.customer_id if target_order else '' }}">
               <input type="hidden" name="warehouse_id" value="{{ target_order.warehouse_id if target_order else '' }}">
-              <button class="btn btn-sm btn-orange">{{ 'Добавить в заказ' if target_order else 'Оформить' }}</button>
+              <button class="btn btn-sm btn-orange">{% if target_order and configure_primary_line %}Взять из наличия{% elif target_order %}Добавить в заказ{% else %}Оформить{% endif %}</button>
             </form>
           </td>
         </tr>
@@ -57,7 +57,9 @@
   <div>
     <h1 class="h3 mb-1">Подбор прицепа</h1>
     <div class="text-muted">
-      {% if target_order %}
+      {% if target_order and configure_primary_line %}
+        Настройка позиции в заказе {{ target_order.order_number }} (подобрать позже).
+      {% elif target_order %}
         Добавление отдельной позиции в заказ {{ target_order.order_number }}.
       {% else %}
         Рабочее место менеджера: конфигурация, цена, наличие и заказ.
@@ -165,7 +167,7 @@
     <input type="hidden" name="warehouse_id" value="{{ target_order.warehouse_id if target_order else '' }}">
     <div class="input-group">
       <input class="form-control" style="max-width: 110px" type="number" name="quantity" min="1" value="1" aria-label="Количество">
-      <button class="btn btn-orange">{{ 'Добавить позицию в заказ' if target_order else 'Заказать в производство под клиента' }}</button>
+      <button class="btn btn-orange">{% if target_order and configure_primary_line %}Сохранить в заказ{% elif target_order %}Добавить позицию в заказ{% else %}Заказать в производство под клиента{% endif %}</button>
     </div>
   </form>
   <form method="post" class="picker-action-form">
