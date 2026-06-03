@@ -1,9 +1,9 @@
 {% extends 'base.html' %}
-{% block title %}Остатки ТМЦ{% endblock %}
+{% block title %}ТМЦ — остатки{% endblock %}
 {% block content %}
 <div class="compact-page-header">
   <div>
-    <h1>Остатки ТМЦ</h1>
+    <h1>ТМЦ</h1>
     <div class="text-muted small">Комплектующие, металл и заготовки. Готовые прицепы — в разделе «Прицепы», не здесь.</div>
   </div>
   {% if current_user.is_admin or current_user.is_director or current_user.is_warehouse %}
@@ -13,6 +13,8 @@
   </div>
   {% endif %}
 </div>
+
+{% include '_inventory_tmc_tabs.html' with active_tab='balances', warehouse_id=warehouse_id %}
 
 <form method="get" class="app-card p-3 mb-3">
   <div class="row g-2 align-items-end">

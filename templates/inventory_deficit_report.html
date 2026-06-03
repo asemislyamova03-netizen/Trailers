@@ -1,18 +1,19 @@
 {% extends 'base.html' %}
-{% block title %}Дефицит ТМЦ{% endblock %}
+{% block title %}ТМЦ — дефицит{% endblock %}
 {% block content %}
 <div class="compact-page-header">
   <div>
-    <h1>Дефицит ТМЦ</h1>
+    <h1>ТМЦ</h1>
     <div class="text-muted small">Сколько материалов не хватает на открытые задания производства (по BOM × остаток выпуска). Для закупки и прихода.</div>
   </div>
   <div class="d-flex gap-2">
-    <a href="{{ url_for('main.inventory_balances_list', warehouse_id=warehouse_id) }}" class="btn btn-soft btn-sm">Остатки</a>
     {% if current_user.is_admin or current_user.is_director or current_user.is_warehouse %}
     <a href="{{ url_for('main.inventory_receipt_create', warehouse_id=warehouse_id) }}" class="btn btn-orange btn-sm">Приход</a>
     {% endif %}
   </div>
 </div>
+
+{% include '_inventory_tmc_tabs.html' with active_tab='deficit', warehouse_id=warehouse_id %}
 
 <form method="get" class="app-card p-3 mb-3">
   <div class="row g-2 align-items-end">

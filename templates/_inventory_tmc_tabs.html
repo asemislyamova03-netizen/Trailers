@@ -1,0 +1,10 @@
+<ul class="nav nav-tabs mb-3">
+  <li class="nav-item">
+    <a class="nav-link {% if active_tab == 'balances' %}active{% endif %}"
+       href="{{ url_for('main.inventory_balances_list', warehouse_id=warehouse_id) if warehouse_id else url_for('main.inventory_balances_list') }}">Остатки</a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if active_tab == 'deficit' %}active{% endif %}"
+       href="{{ url_for('main.inventory_deficit_report', warehouse_id=warehouse_id) if warehouse_id else url_for('main.inventory_deficit_report') }}">Дефицит</a>
+  </li>
+</ul>
