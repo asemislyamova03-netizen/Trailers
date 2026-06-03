@@ -1435,7 +1435,7 @@ def _default_trailer_config_values() -> dict:
         'wheel_code': 'Q13',
         'hub_code': '',
         'support_wheel_code': 'OK',
-        'tent_code': '90',
+        'tent_code': '',
         'special_options': [],
     }
 
@@ -2989,7 +2989,7 @@ def trailer_config_test():
         'wheel_code': request.values.get('wheel_code', 'Q14'),
         'hub_code': request.values.get('hub_code', ''),
         'support_wheel_code': request.values.get('support_wheel_code', 'OK'),
-        'tent_code': request.values.get('tent_code', '90'),
+        'tent_code': request.values.get('tent_code') or '',
         'body_execution_code': request.values.get('body_execution_code', 'BOARD'),
         'special_options': request.values.getlist('special_options'),
     }
@@ -3057,14 +3057,14 @@ def manager_trailer_picker():
 
     config = _config_from_request_values(request.values)
     if not config.get('body_size_code'):
-        config.update({
+        config = _config_with_defaults({
             'group_code': config.get('group_code') or '002',
             'body_execution_code': config.get('body_execution_code') or 'BOARD',
             'body_size_code': '2515',
             'board_height_code': 'E50',
             'wheel_code': 'Q14',
             'support_wheel_code': 'OK',
-            'tent_code': '90',
+            'tent_code': '',
         })
     result = build_trailer_configuration_result(config)
     result['config'] = config
@@ -3150,7 +3150,7 @@ def manager_trailer_picker():
 
         if action == 'production_order':
             if result.get('errors'):
-                flash('Исправьте ошибки конфигурации перед созданием заказа.', 'danger')
+                flash('Исправьте ошибки конфигурации перед созданием заказа: ' + '; '.join(result['errors']), 'danger')
                 return redirect(url_for('main.manager_trailer_picker', **redirect_params))
             item = get_or_create_configured_item(result)
             quantity = max(request.form.get('quantity', type=int) or 1, 1)
@@ -3227,7 +3227,7 @@ def manager_trailer_picker():
 
         if action == 'stock_replenishment':
             if result.get('errors'):
-                flash('Исправьте ошибки конфигурации перед пополнением склада.', 'danger')
+                flash('Исправьте ошибки конфигурации перед пополнением склада: ' + '; '.join(result['errors']), 'danger')
                 return redirect(url_for('main.manager_trailer_picker', **config))
             item = get_or_create_configured_item(result)
             need = SupplyNeed(
@@ -7174,9 +7174,9 @@ def get_or_create_configured_item(config_result: dict) -> Item:
         board_height_mm=board.height_mm if board else None,
         axle_count=group.axle_count if group else None,
         wheel_radius=wheel.code if wheel else None,
-        has_tent=bool(tent and (tent.code or '').upper() not in ('NO', 'NONE', '0')),
-        tent_hight_mm=(int(''.join(ch for ch in (tent.code if tent else '') if ch.isdigit()) or 0) * 10) if tent else None,
-        has_jockey_wheel=bool(support and (support.code or '').upper() not in ('NO', 'NONE', '0')),
+        has_tent=bool(tent and not tent.is_no_tent),
+        tent_hight_mm=(tent.height_mm if tent and not tent.is_no_tent else None),
+        has_jockey_wheel=bool(support and (support.code or '').upper() == 'OK'),
         hub_type=hub.name if hub else None,
         size_external=dimensions.get('overall_dimensions_text'),
         size_body=dimensions.get('inner_dimensions_text') or (body_size.name if body_size else None),

@@ -107,6 +107,38 @@ def _has_allowed_options(group, option_type):
     ).first() is not None
 
 
+def _allowed_option_codes(group, option_type):
+    if not group:
+        return set()
+    model = OPTION_MODELS.get(option_type)
+    if not model:
+        return set()
+    allowed_ids = [
+        row.option_id for row in TrailerAllowedOption.query.filter_by(
+            group_id=group.id,
+            option_type=option_type,
+            is_allowed=True,
+        ).all()
+    ]
+    if not allowed_ids:
+        return set()
+    return {
+        (row.code or '').upper()
+        for row in model.query.filter(model.id.in_(allowed_ids)).all()
+    }
+
+
+def _group_requires_option_choice(group, option_type):
+    """Тент/опорное обязательны только если в матрице нет варианта «без»."""
+    if not _has_allowed_options(group, option_type):
+        return False
+    if option_type == 'tent':
+        return 'NONE' not in _allowed_option_codes(group, option_type)
+    if option_type == 'support_wheel':
+        return 'NOOK' not in _allowed_option_codes(group, option_type)
+    return True
+
+
 def validate_trailer_config(config):
     config, objects = load_config_objects(config)
     errors = []
@@ -118,9 +150,9 @@ def validate_trailer_config(config):
         ('board_height', 'Не выбрана высота борта'),
         ('body_execution', 'Не выбран тип кузова'),
     ]
-    if _has_allowed_options(group, 'support_wheel'):
+    if _group_requires_option_choice(group, 'support_wheel'):
         required.append(('support_wheel', 'Не выбрано опорное колесо'))
-    if _has_allowed_options(group, 'tent'):
+    if _group_requires_option_choice(group, 'tent'):
         required.append(('tent', 'Не выбран тент'))
     for key, message in required:
         if not objects[key]:
@@ -371,11 +403,7 @@ def resolve_otss_modification(config):
     else:
         rows = [row for row in rows if row.board_height_id is None]
 
-    for row in rows:
-        if row.special_option_id and row.special_option_id not in special_ids:
-            continue
-        if not row.special_option_id and special_ids and (group.code or '').endswith('G'):
-            continue
+    def _row_payload(row):
         return {
             'otss_number': row.otss_number or group.otss_number,
             'otss_type': row.otss_type or group.otss_type,
@@ -385,6 +413,21 @@ def resolve_otss_modification(config):
             'otts_valid_to': row.otts_valid_to or group.otts_valid_to,
             'description': row.description,
         }
+
+    matched_special = []
+    generic = []
+    for row in rows:
+        if row.special_option_id and row.special_option_id not in special_ids:
+            continue
+        if row.special_option_id:
+            matched_special.append(row)
+        else:
+            generic.append(row)
+
+    for row in matched_special:
+        return _row_payload(row)
+    for row in generic:
+        return _row_payload(row)
 
     return {'error': 'Не найдена ОТТС-модификация для выбранной конфигурации'}
 
