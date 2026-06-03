@@ -181,7 +181,7 @@
                 <form method="post" action="{{ url_for('main.order_line_create_missing_production', order_id=order.id, line_id=line.id) }}" class="mt-1">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                   <input type="hidden" name="form_token" value="{{ form_token() }}">
-                  <button class="btn btn-sm btn-outline-primary">Дозаказать {{ row.shortage_qty }} шт.</button>
+                  <button class="btn btn-sm btn-outline-primary">{% if row.production_qty > 0 %}Дозаказать {{ row.shortage_qty }} шт.{% else %}Создать потребность{% endif %}</button>
                 </form>
                 {% endif %}
               </td>

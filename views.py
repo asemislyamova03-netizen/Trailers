@@ -810,31 +810,22 @@ def _attach_ready_trailer_to_order_line(
 def _ensure_production_needs_after_confirmed_payment(order: CustomerOrder) -> int:
     if (order.fulfillment_source or '').lower() != 'production':
         return 0
-    created = 0
     if _order_has_lines(order):
+        created = 0
         for line in order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()):
-            if (line.fulfillment_source or '').lower() != 'production':
+            if not _line_eligible_for_production_need(line, order):
                 continue
-            if _line_active_supply_needs(line):
+            if _line_production_shortage(line) <= 0:
                 continue
-            need = SupplyNeed(
-                order_id=order.id,
-                order_line_id=line.id,
-                item_id=line.item_id,
-                warehouse_id=order.warehouse_id,
+            _create_production_need_for_line(
+                order,
+                line,
                 quantity=line.quantity or 1,
-                status='NEW',
-                priority=10,
-                need_type='CUSTOMER_ORDER',
-                required_by=order.expected_date,
                 note='Потребность создана при подтверждении оплаты',
             )
-            _apply_snapshot(need, _order_snapshot(order))
-            db.session.add(need)
-            line.supply_need = need
-            _sync_order_line_workflow_links(line)
             created += 1
         return created
+    created = 0
     if order.trailer_id or order.supply_needs.count():
         return 0
     can_request, _ = order_can_request_production(order)
@@ -5421,6 +5412,87 @@ def _line_active_supply_needs(line: CustomerOrderLine) -> list[SupplyNeed]:
     ]
 
 
+def _line_active_production_needs(line: CustomerOrderLine) -> list[SupplyNeed]:
+    return [
+        need for need in (line.supply_needs or [])
+        if (need.status or '').upper() in ('NEW', 'PLANNED', 'IN_PRODUCTION', 'SENT_TO_PRODUCTION', 'PARTIALLY_DONE')
+    ]
+
+
+def _line_production_shortage(line: CustomerOrderLine) -> int:
+    production_qty = sum(need.quantity or 0 for need in _line_active_production_needs(line))
+    return max((line.quantity or 1) - production_qty, 0)
+
+
+def _line_eligible_for_production_need(line: CustomerOrderLine, order: CustomerOrder) -> bool:
+    if not line or not line.item_id:
+        return False
+    line_source = (line.fulfillment_source or '').lower()
+    if line_source == 'production':
+        return True
+    if line_source in ('later', '', 'none') and (order.fulfillment_source or '').lower() == 'production':
+        return True
+    return False
+
+
+def _create_production_need_for_line(
+    order: CustomerOrder,
+    line: CustomerOrderLine,
+    quantity: int | None = None,
+    note: str | None = None,
+) -> SupplyNeed:
+    missing_qty = quantity if quantity is not None else _line_production_shortage(line)
+    if missing_qty <= 0:
+        raise ValueError('По этой позиции уже создано производство на всё количество.')
+    if (line.fulfillment_source or '').lower() in ('later', '', 'none'):
+        line.fulfillment_source = 'production'
+        line.source_type = 'production'
+        line.fulfillment_status = line.fulfillment_status or 'production_requested'
+        if not line.status or line.status in ('new', 'draft', ''):
+            line.status = 'waiting_production'
+    need = SupplyNeed(
+        order_id=order.id,
+        order_line_id=line.id,
+        item_id=line.item_id,
+        warehouse_id=order.warehouse_id,
+        quantity=missing_qty,
+        status='NEW',
+        priority=10,
+        need_type='CUSTOMER_ORDER',
+        required_by=order.expected_date,
+        note=note or f'Потребность по позиции #{line.line_no}',
+    )
+    _apply_snapshot(need, {key: getattr(line, key, None) for key in SNAPSHOT_FIELD_NAMES})
+    db.session.add(need)
+    line.supply_need = need
+    _sync_order_line_workflow_links(line)
+    return need
+
+
+def _ensure_production_needs_for_order_lines(order: CustomerOrder) -> int:
+    if not order or order.status in ('cancelled', 'canceled', 'closed', 'done') or order.is_shipped:
+        return 0
+    created = 0
+    for line in order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()):
+        if not _line_eligible_for_production_need(line, order):
+            continue
+        shortage = _line_production_shortage(line)
+        if shortage <= 0:
+            continue
+        _create_production_need_for_line(
+            order,
+            line,
+            quantity=shortage,
+            note='Потребность создана из карточки заказа',
+        )
+        created += 1
+    if created:
+        order.fulfillment_source = order.fulfillment_source or 'production'
+        _sync_order_totals_from_lines(order)
+        _refresh_order_status(order)
+    return created
+
+
 def _line_active_movements(line: CustomerOrderLine) -> list[StockMovement]:
     return [
         movement for movement in line.movements
@@ -6548,7 +6620,12 @@ def order_can_request_production(order: CustomerOrder) -> tuple[bool, str]:
     if not order or order.status in ('cancelled', 'canceled', 'closed', 'done') or order.is_shipped or order.documents_issued:
         return False, 'Заказ уже обеспечен или закрыт. Заявка в производство не требуется.'
     if _order_has_lines(order):
-        return False, 'Для заказа со строками создавайте потребность через позицию заказа.'
+        if any(
+            _line_eligible_for_production_need(line, order) and _line_production_shortage(line) > 0
+            for line in order.lines
+        ):
+            return True, ''
+        return False, 'По позициям заказа уже есть потребности или не выбрана номенклатура. Создайте потребность в блоке нужной позиции.'
     if order.trailer_id:
         return False, 'По заказу уже выбран готовый прицеп. Заявка в производство не требуется.'
     existing = _active_supply_need_for_order(order.id)
@@ -8970,10 +9047,10 @@ def order_detail(order_id):
             .all()
         )
         active_reservation = next((row for row in getattr(line, 'reservations', []) if row.status == 'ACTIVE'), None)
-        active_needs = [row for row in getattr(line, 'supply_needs', []) if row.status in ('NEW', 'PLANNED', 'IN_PRODUCTION', 'SENT_TO_PRODUCTION', 'PARTIALLY_DONE')]
+        active_needs = _line_active_production_needs(line)
         production_qty = sum(need.quantity or 0 for need in active_needs)
         vin_count = len(vin_rows)
-        shortage_qty = max((line.quantity or 1) - production_qty, 0) if line.fulfillment_source == 'production' else 0
+        shortage_qty = _line_production_shortage(line) if _line_eligible_for_production_need(line, order) else 0
         can_edit_qty, edit_qty_message = _can_edit_order_line_quantity(line)
         can_edit_details, edit_details_message = _can_edit_order_line_details(line)
         can_delete_line, delete_message = _can_delete_order_line(line)
@@ -9459,6 +9536,8 @@ def order_edit(order_id):
             order.fulfillment_source = order.fulfillment_source or 'stock'
         elif order.fulfillment_source == 'production':
             created = _ensure_production_needs_after_confirmed_payment(order)
+            if not created and _order_has_lines(order):
+                created = _ensure_production_needs_for_order_lines(order)
             if not created:
                 warning = _sync_editable_order_production_need(order, configured_snapshot)
                 if warning:
@@ -9673,29 +9752,23 @@ def order_line_create_missing_production(order_id, line_id):
     if order.status == 'cancelled' or order.documents_issued or order.is_shipped:
         flash('Производственную потребность можно менять только до выдачи документов и отгрузки.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
-    active_needs = [need for need in line.supply_needs if need.status in ('NEW', 'PLANNED', 'IN_PRODUCTION', 'SENT_TO_PRODUCTION', 'PARTIALLY_DONE')]
-    production_qty = sum(need.quantity or 0 for need in active_needs)
-    missing_qty = max((line.quantity or 1) - production_qty, 0)
+    missing_qty = _line_production_shortage(line)
     if missing_qty <= 0:
         flash('По этой позиции уже создано производство на всё количество.', 'warning')
         return redirect(url_for('main.order_detail', order_id=order.id))
     idem_key, duplicate = _reserve_idempotency_key()
     if duplicate:
         return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
-    need = SupplyNeed(
-        order_id=order.id,
-        order_line_id=line.id,
-        item_id=line.item_id,
-        warehouse_id=order.warehouse_id,
-        quantity=missing_qty,
-        status='NEW',
-        priority=10,
-        need_type='CUSTOMER_ORDER',
-        required_by=order.expected_date,
-        note=f'Досоздана недостающая потребность по позиции #{line.line_no}',
-    )
-    _apply_snapshot(need, {key: getattr(line, key, None) for key in SNAPSHOT_FIELD_NAMES})
-    db.session.add(need)
+    try:
+        need = _create_production_need_for_line(
+            order,
+            line,
+            quantity=missing_qty,
+            note=f'Досоздана недостающая потребность по позиции #{line.line_no}',
+        )
+    except ValueError as exc:
+        flash(str(exc), 'warning')
+        return redirect(url_for('main.order_detail', order_id=order.id))
     _finish_idempotency(idem_key, 'SupplyNeed', need.id)
     add_order_event(order, 'production_need_created', new_value=missing_qty, comment=f'Досоздано производство по позиции #{line.line_no}')
     db.session.commit()
@@ -10954,7 +11027,18 @@ def order_create_production_need(order_id):
     order = CustomerOrder.query.get_or_404(order_id)
     _ensure_can_manage_order(order)
     if _order_has_lines(order):
-        flash('Для заказа со строками создавайте производственную потребность через позицию заказа.', 'warning')
+        idem_key, duplicate = _reserve_idempotency_key()
+        if duplicate:
+            return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
+        created = _ensure_production_needs_for_order_lines(order)
+        if created:
+            _finish_idempotency(idem_key, 'CustomerOrder', order.id)
+            add_order_event(order, 'production_need_created', new_value=created, comment='Потребности созданы по позициям заказа')
+            db.session.commit()
+            flash(f'Создано производственных потребностей: {created}.', 'success')
+        else:
+            db.session.rollback()
+            flash('Нет позиций, которым нужна потребность: проверьте номенклатуру и источник «производство».', 'warning')
         return redirect(url_for('main.order_detail', order_id=order.id))
     can_request, message = order_can_request_production(order)
     if not can_request:

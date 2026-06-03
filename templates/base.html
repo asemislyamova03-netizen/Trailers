@@ -69,6 +69,7 @@
                 {% elif current_user.is_manager %}
                     {{ nav_item('CRM', 'bi-speedometer2', 'main.manager_workspace', section='crm') }}
                     {{ nav_item('Сделки', 'bi-receipt', 'main.orders_list', section='deals') }}
+                    {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', section='production') }}
                     {{ nav_item('Наличие', 'bi-box-seam', href=url_for('main.trailers_list', status='IN_STOCK'), section='availability') }}
                     {{ nav_item('Перемещения', 'bi-truck', 'main.stock_movements_list', section='movements') }}
                     {{ nav_tmc_item() }}
