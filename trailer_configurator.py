@@ -162,11 +162,11 @@ def validate_trailer_config(config):
     execution = objects['body_execution']
     board = objects['board_height']
     if execution and board:
-        if execution.code == 'BOARD' and board.code not in ('E30', 'E50'):
-            errors.append('Для BOARD высота борта должна быть E30 или E50')
-        elif execution.code == 'PLATFORM' and board.code != 'E0':
-            errors.append('Для PLATFORM высота борта должна быть E0')
-        elif execution.code in ('VAN', 'TRAL', 'TRADE', 'LIVING', 'G') and board.code in ('E30', 'E50'):
+        if execution.code == 'BOARD' and board.is_no_board:
+            errors.append('Для бортового кузова выберите высоту борта, а не «без борта».')
+        elif execution.code == 'PLATFORM' and not board.is_no_board:
+            errors.append('Для платформы без бортов высота борта должна быть «без борта» (E0).')
+        elif execution.code in ('VAN', 'TRAL', 'TRADE', 'LIVING', 'G') and not board.is_no_board:
             errors.append('Для выбранного типа кузова высота борта не применяется.')
 
     if _by_code(TrailerHubOption, 'R14'):
