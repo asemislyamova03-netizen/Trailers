@@ -41,6 +41,18 @@ def _by_code(model, code):
     return model.query.filter_by(code=code).first()
 
 
+def _dedupe_special_options(codes):
+    options = []
+    seen_ids = set()
+    for code in _unique_option_codes(codes):
+        option = _by_code(TrailerSpecialOption, code)
+        if option is None or option.id in seen_ids:
+            continue
+        seen_ids.add(option.id)
+        options.append(option)
+    return options
+
+
 def _amount(value):
     return int(value or Decimal('0'))
 
@@ -49,6 +61,21 @@ def _lower_first(text):
     if not text:
         return ''
     return text[:1].lower() + text[1:]
+
+
+def _unique_option_codes(codes):
+    seen = set()
+    unique = []
+    for raw in codes or []:
+        code = (raw or '').strip()
+        if not code:
+            continue
+        key = code.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(code)
+    return unique
 
 
 def normalize_config(config):
@@ -61,7 +88,7 @@ def normalize_config(config):
         'support_wheel_code': config.get('support_wheel_code') or '',
         'tent_code': config.get('tent_code') or '',
         'body_execution_code': config.get('body_execution_code') or '',
-        'special_options': [code for code in config.get('special_options', []) if code],
+        'special_options': _unique_option_codes(config.get('special_options', [])),
     }
 
 
@@ -76,11 +103,7 @@ def load_config_objects(config):
         'support_wheel': _by_code(TrailerSupportWheelOption, config['support_wheel_code']),
         'tent': _by_code(TrailerTentOption, config['tent_code']),
         'body_execution': _by_code(TrailerBodyExecution, config['body_execution_code']),
-        'special_options': [
-            option for option in (
-                _by_code(TrailerSpecialOption, code) for code in config['special_options']
-            ) if option is not None
-        ],
+        'special_options': _dedupe_special_options(config['special_options']),
     }
     return config, objects
 
@@ -184,12 +207,14 @@ def validate_trailer_config(config):
     for special in objects['special_options']:
         special_by_type.setdefault(special.option_type, []).append(special)
     for option_type, options in special_by_type.items():
-        if len(options) > 1:
-            if option_type == 'tire_layout':
-                errors.append('Нельзя одновременно выбрать односкатный и двухскатный вариант')
-            else:
-                names = ', '.join(option.name for option in options)
-                errors.append(f'Можно выбрать только один спец. параметр типа {option_type}: {names}')
+        if len(options) <= 1:
+            continue
+        codes = {option.code for option in options}
+        if option_type == 'tire_layout' and codes >= {'SINGLE', 'DOUBLE'}:
+            errors.append('Нельзя одновременно выбрать односкатный и двухскатный вариант')
+        else:
+            names = ', '.join(option.name for option in options)
+            errors.append(f'Можно выбрать только один спец. параметр типа {option_type}: {names}')
 
     execution = objects['body_execution']
     board = objects['board_height']

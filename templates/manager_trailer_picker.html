@@ -10,9 +10,6 @@
   <input type="hidden" name="hub_code" value="{{ config.hub_code }}">
   <input type="hidden" name="support_wheel_code" value="{{ config.support_wheel_code }}">
   <input type="hidden" name="tent_code" value="{{ config.tent_code }}">
-  {% for code in config.special_options %}
-    <input type="hidden" name="special_options" value="{{ code }}">
-  {% endfor %}
 {%- endmacro %}
 
 {% macro stock_table(title, rows, config, target_order) -%}
@@ -31,7 +28,7 @@
           <td><span class="badge text-bg-{{ row.status|status_badge_class }}">{{ row.status|status_label }}</span></td>
           <td class="text-end">{{ row.price|money }}</td>
           <td class="text-end">
-            <form method="post" class="d-inline picker-action-form">
+            <form method="post" class="d-inline picker-action-form" data-picker-submit-form>
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               {{ config_hidden(config) }}
               {% if target_order %}<input type="hidden" name="order_id" value="{{ target_order.id }}">{% endif %}
@@ -158,7 +155,7 @@
 </div>
 
 <div class="d-flex gap-2 flex-wrap mb-3">
-  <form method="post" class="picker-action-form">
+  <form method="post" class="picker-action-form" data-picker-submit-form>
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {{ config_hidden(config) }}
     {% if target_order %}<input type="hidden" name="order_id" value="{{ target_order.id }}">{% endif %}
@@ -170,7 +167,7 @@
       <button class="btn btn-orange">{% if target_order and configure_primary_line %}Сохранить в заказ{% elif target_order %}Добавить позицию в заказ{% else %}Заказать в производство под клиента{% endif %}</button>
     </div>
   </form>
-  <form method="post" class="picker-action-form">
+  <form method="post" class="picker-action-form" data-picker-submit-form>
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {{ config_hidden(config) }}
     <input type="hidden" name="action" value="stock_replenishment">
@@ -294,6 +291,9 @@
   if (customer) customer.addEventListener('change', syncForms);
   if (warehouse) warehouse.addEventListener('change', syncForms);
   if (configForm) configForm.querySelectorAll('[data-config-field]').forEach((field) => field.addEventListener('change', () => { syncForms(); refreshConfigOptions(); }));
+  document.querySelectorAll('[data-picker-submit-form]').forEach((form) => {
+    form.addEventListener('submit', () => syncForms());
+  });
   syncForms();
 })();
 </script>

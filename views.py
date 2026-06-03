@@ -5116,6 +5116,8 @@ def _config_from_request_values(values):
     specials = getlist('special_options') if getlist else values.get('special_options', [])
     if isinstance(specials, str):
         specials = [s for s in specials.split(',') if s]
+    from trailer_configurator import _unique_option_codes
+    specials = _unique_option_codes(specials)
     return {
         'group_code': values.get('group_code') or '002',
         'body_size_code': values.get('body_size_code') or '',
