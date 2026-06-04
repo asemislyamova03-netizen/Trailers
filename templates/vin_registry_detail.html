@@ -15,6 +15,11 @@
   Документы выданы по VIN, но физический прицеп ещё не привязан. Производство должно нанести именно этот VIN.
 </div>
 {% endif %}
+{% if row.status == 'assigned' and current_user.is_logistics %}
+<div class="alert alert-info">
+  VIN привязан к прицепу и ждёт подтверждения нанесения. Подтверждение выполняет менеджер или директор.
+</div>
+{% endif %}
 
 <div class="row g-3 mb-3">
   <div class="col-lg-6">

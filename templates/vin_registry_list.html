@@ -68,13 +68,27 @@
 <div class="app-card p-3">
   <div class="table-responsive">
     <table class="table table-sm align-middle vin-registry-table">
-      <thead><tr><th>VIN</th><th></th><th>Категория</th><th>serial7</th><th>Модификация</th><th>Год</th><th>Статус</th><th>Документы</th><th>Заказ</th><th class="d-none d-lg-table-cell">Договор</th><th>Клиент</th><th class="d-none d-xl-table-cell">Прицеп</th><th class="d-none d-xl-table-cell">Кто резервировал</th><th class="d-none d-lg-table-cell">Дата</th><th class="d-none d-xl-table-cell">Комментарий</th></tr></thead>
+      <thead><tr><th>VIN</th><th></th><th>Действие</th><th>Категория</th><th>serial7</th><th>Модификация</th><th>Год</th><th>Статус</th><th>Документы</th><th>Заказ</th><th class="d-none d-lg-table-cell">Договор</th><th>Клиент</th><th class="d-none d-xl-table-cell">Прицеп</th><th class="d-none d-xl-table-cell">Кто резервировал</th><th class="d-none d-lg-table-cell">Дата</th><th class="d-none d-xl-table-cell">Комментарий</th></tr></thead>
       <tbody>
       {% for row in rows %}
         {% set vin_order = row.customer_order or (row.order_line.order if row.order_line else none) %}
         <tr>
           <td class="fw-semibold">{{ row.vin_full or '—' }}</td>
           <td><a class="btn btn-sm btn-soft" href="{{ url_for('main.vin_registry_detail', vin_id=row.id) }}">Открыть</a></td>
+          <td>
+            {% if row.status == 'assigned' %}
+              {% if current_user.is_manager or current_user.is_director %}
+                <form method="post" action="{{ url_for('main.vin_registry_confirm', vin_id=row.id) }}" class="d-inline">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button class="btn btn-sm btn-orange">Подтвердить</button>
+                </form>
+              {% else %}
+                <span class="badge text-bg-warning">Подтверждает менеджер</span>
+              {% endif %}
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
           <td>{{ vin_category_name(row) if vin_category_name else '' }}</td>
           <td>{{ row.serial7 }}</td>
           <td>{{ row.vin_modification_code or '' }}</td>
@@ -90,7 +104,7 @@
           <td class="d-none d-xl-table-cell">{{ row.comment or '' }}</td>
         </tr>
       {% else %}
-        <tr><td colspan="15" class="text-muted">VIN не найдены.</td></tr>
+        <tr><td colspan="16" class="text-muted">VIN не найдены.</td></tr>
       {% endfor %}
       </tbody>
     </table>
