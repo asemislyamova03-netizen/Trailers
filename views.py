@@ -7494,6 +7494,19 @@ def _production_need_label(need: SupplyNeed) -> str:
     return ' — '.join(str(part) for part in parts if part)
 
 
+def _resolve_supply_need_target_warehouse_id(need: SupplyNeed) -> int | None:
+    if need.warehouse_id:
+        return need.warehouse_id
+    if need.order and need.order.warehouse_id:
+        return need.order.warehouse_id
+    user_warehouse_id = getattr(current_user, 'warehouse_id', None)
+    if user_warehouse_id:
+        warehouse = Warehouse.query.get(user_warehouse_id)
+        if warehouse and warehouse.is_active:
+            return warehouse.id
+    return None
+
+
 def _fill_production_line_form_choices(form: ProductionRequestLineForm, target_warehouse_id: int | None = None, current_line_id: int | None = None) -> None:
     needs_query = SupplyNeed.query.filter(SupplyNeed.status.in_(['NEW', 'IN_PRODUCTION']))
     if target_warehouse_id:
@@ -11858,10 +11871,16 @@ def supply_need_create_production_request(need_id):
 
     is_stock_need = _is_stock_replenishment_need(need)
     note_prefix = 'Пополнение склада' if is_stock_need else 'Клиентский заказ'
+    target_warehouse_id = _resolve_supply_need_target_warehouse_id(need)
+    if not target_warehouse_id:
+        flash('Укажите склад назначения в заказе или потребности перед отправкой в производство.', 'danger')
+        return redirect(request.referrer or url_for('main.supply_needs_list'))
+    if not need.warehouse_id:
+        need.warehouse_id = target_warehouse_id
     pr = ProductionRequest(
         request_number=_next_number('PR', ProductionRequest, 'request_number'),
         status='approved',
-        target_warehouse_id=need.warehouse_id,
+        target_warehouse_id=target_warehouse_id,
         note=f'{note_prefix}. Создана из потребности #{need.id}',
     )
     db.session.add(pr)
