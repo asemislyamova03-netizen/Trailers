@@ -1932,10 +1932,13 @@ def trailer_create():
                 flash(error, 'danger')
             return render_template('trailer_form.html', form=form, title='Новый прицеп', config_options=_trailer_config_form_context(), config=config, result=result, locked_config=None)
         item = get_or_create_configured_item(result)
-        vin = (request.form.get('vin') or '').strip().upper()
         warehouse_id = request.form.get('warehouse_id', type=int)
-        if not vin or not warehouse_id:
-            flash('Укажите VIN и склад.', 'danger')
+        if not warehouse_id:
+            flash('Укажите склад.', 'danger')
+            return render_template('trailer_form.html', form=form, title='Новый прицеп', config_options=_trailer_config_form_context(), config=config, result=result, locked_config=None)
+        vin, vin_error = _validate_trailer_vin(request.form.get('vin'), exclude_trailer_id=None)
+        if vin_error:
+            flash(vin_error, 'danger')
             return render_template('trailer_form.html', form=form, title='Новый прицеп', config_options=_trailer_config_form_context(), config=config, result=result, locked_config=None)
 
         trailer = Trailer(
@@ -1946,7 +1949,12 @@ def trailer_create():
             status=request.form.get('status') or 'IN_STOCK',
         )
         db.session.add(trailer)
-        db.session.commit()
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            flash('VIN уже существует или произошла ошибка сохранения. Проверьте VIN и попробуйте снова.', 'danger')
+            return render_template('trailer_form.html', form=form, title='Новый прицеп', config_options=_trailer_config_form_context(), config=config, result=result, locked_config=None)
         flash('Прицеп создан', 'success')
         return redirect(url_for('main.trailers_list'))
 
@@ -2011,13 +2019,24 @@ def trailer_edit(trailer_id):
             flash('Нельзя менять размер рамы / кузова и количество осей.', 'danger')
             return render_template('trailer_form.html', form=form, title='Редактирование прицепа', config_options=_trailer_config_form_context(), config=config, result=result, locked_config=base_config)
 
-        trailer.vin = (request.form.get('vin') or '').strip().upper()
+        new_vin, vin_error = _validate_trailer_vin(
+            request.form.get('vin'), exclude_trailer_id=trailer.id
+        )
+        if vin_error:
+            flash(vin_error, 'danger')
+            return render_template('trailer_form.html', form=form, title='Редактирование прицепа', config_options=_trailer_config_form_context(), config=config, result=result, locked_config=base_config)
+        trailer.vin = new_vin
         trailer.warehouse_id = request.form.get('warehouse_id', type=int)
         trailer.manufacture_date = form.manufacture_date.data
         trailer.status = request.form.get('status') or trailer.status
         trailer.item_id = item.id
 
-        db.session.commit()
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            flash('VIN уже существует или произошла ошибка сохранения. Проверьте VIN и попробуйте снова.', 'danger')
+            return render_template('trailer_form.html', form=form, title='Редактирование прицепа', config_options=_trailer_config_form_context(), config=config, result=result, locked_config=base_config)
         flash('Прицеп обновлён', 'success')
         return redirect(url_for('main.trailers_list'))
 
@@ -6699,6 +6718,51 @@ def _order_line_vin_capacity_left(line: CustomerOrderLine | None) -> int:
     if not line:
         return 0
     return max((line.quantity or 1) - _active_vin_registry_count_for_order_line(line.id), 0)
+
+
+_VIN_PLACEHOLDERS = frozenset({
+    '', '-', 'N/A', 'NA', 'TEST', 'VIN', 'TBD', 'UNKNOWN', 'NONE', 'NULL',
+    '0' * 7, '0' * 17, '0' * 20, '1' * 17, 'XXXXXXXXXXXXXXXXX',
+})
+
+
+def _validate_trailer_vin(raw: str | None, exclude_trailer_id: int | None = None) -> tuple[str | None, str | None]:
+    """
+    Normalize and validate a VIN value for trailer create/edit.
+
+    Returns (normalized_vin, error_message).
+    error_message is None when the VIN is acceptable.
+    Does NOT enforce strict 17-char format to preserve legacy VINs,
+    but blocks empty strings, obvious placeholders, too-short values, and duplicates.
+    """
+    vin = (raw or '').strip().upper()
+    if not vin or vin in _VIN_PLACEHOLDERS:
+        return None, 'VIN не может быть пустым или содержать заменитель (N/A, TEST и т.п.).'
+    if ' ' in vin:
+        return None, 'VIN не должен содержать пробелы.'
+    if len(vin) < 7:
+        return None, f'VIN слишком короткий ({len(vin)} симв.). Минимум 7 символов.'
+    # Uniqueness: no other Trailer may have the same VIN
+    q = Trailer.query.filter(Trailer.vin == vin)
+    if exclude_trailer_id is not None:
+        q = q.filter(Trailer.id != exclude_trailer_id)
+    if q.first():
+        return None, f'VIN «{vin}» уже принадлежит другому прицепу в системе.'
+    # Cross-check vin_registry: warn if a non-void registry row holds this VIN
+    # (does not block, but catches the most obvious conflicts)
+    conflicting_row = VinRegistry.query.filter(
+        VinRegistry.vin_full == vin,
+        VinRegistry.status.notin_(['void', 'free']),
+    ).first()
+    if conflicting_row:
+        # Only block if the registry row is linked to a *different* trailer
+        if conflicting_row.trailer_id and conflicting_row.trailer_id != exclude_trailer_id:
+            return None, (
+                f'VIN «{vin}» уже используется в реестре VIN '
+                f'(реестр #{conflicting_row.id}, статус {conflicting_row.status}). '
+                'Используйте действие «Привязать VIN» вместо прямого редактирования.'
+            )
+    return vin, None
 
 
 def _parse_vin_full(vin_full: str) -> tuple[dict | None, str | None]:
