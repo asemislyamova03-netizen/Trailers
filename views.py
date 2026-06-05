@@ -5910,6 +5910,17 @@ def _order_lines_document_blockers(order: CustomerOrder) -> list[str]:
         vin_count = len(_active_vin_rows_for_order_line(line))
         if line.line_type == 'TRAILER' and vin_count < (line.quantity or 1):
             blockers.append(f'по позиции #{line.line_no} не хватает VIN: {vin_count}/{line.quantity or 1}')
+        # P0-I: for stock/production lines the physical trailer must exist before
+        # documents are issued. 'later' fulfillment is intentionally allowed here —
+        # it represents pre-production sales where the trailer is produced after the
+        # legal sale. GOODS/COMPONENT lines do not require a trailer at all.
+        if (line.line_type == 'TRAILER'
+                and (line.fulfillment_source or '').lower() in ('stock', 'production')
+                and not _trailers_for_order_line(line)):
+            blockers.append(
+                f'по позиции #{line.line_no} физический прицеп не привязан — '
+                'завершите выпуск производства или привяжите прицеп из наличия.'
+            )
     return blockers
 
 
