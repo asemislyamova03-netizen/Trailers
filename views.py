@@ -13728,51 +13728,62 @@ def logistics_assign_vin(unit_id):
         trailer_status = 'IN_STOCK'
         if order:
             trailer_status = 'SOLD' if order.documents_issued or order.status == 'sold_not_shipped' else 'RESERVED'
-        trailer = Trailer(vin=vin, item_id=unit.item_id, warehouse_id=production_warehouse.id, manufacture_date=form.manufacture_date.data, status=trailer_status, lifecycle_status='ready_production_warehouse')
-        db.session.add(trailer)
-        db.session.flush()
-        _finish_idempotency(idem_key, 'Trailer', trailer.id)
-        unit.status = 'vin_assigned'
-        unit.trailer_id = trailer.id
-        if order:
-            unit.order_id = order.id
-            order.trailer_id = trailer.id
-            if order.documents_issued or order.status == 'sold_not_shipped':
-                order.status = 'sold_not_shipped'
-            elif unit.target_warehouse_id and unit.target_warehouse_id != production_warehouse.id:
-                order.status = 'waiting_transfer'
-            else:
-                order.status = 'ready_to_ship'
-            _ensure_order_reservation(order, trailer, 'PRODUCTION')
-            add_order_event(order, 'vin_assigned', new_value=vin)
-            add_order_event(order, 'trailer_assigned', new_value=vin)
-        old_vin_status = vin_registry_row.status
-        vin_registry_row.trailer_id = trailer.id
-        vin_registry_row.status = 'assigned'
-        vin_registry_row.assigned_by_user_id = current_user.id
-        vin_registry_row.assigned_at = datetime.utcnow()
-        order_line = None
-        if unit.order_line_id:
-            order_line = CustomerOrderLine.query.get(unit.order_line_id)
-        elif line and line.order_line_id:
-            order_line = line.order_line
-            unit.order_line_id = line.order_line_id
-        elif line and line.order_line:
-            order_line = line.order_line
-            unit.order_line_id = line.order_line.id
-        elif order:
-            order_line = _primary_order_line(order)
-        if order and not vin_registry_row.customer_order_id:
-            vin_registry_row.customer_order_id = order.id
-        if order_line and not vin_registry_row.order_line_id:
-            vin_registry_row.order_line_id = order_line.id
-        if line and line.supply_need and not vin_registry_row.supply_need_id:
-            vin_registry_row.supply_need_id = line.supply_need.id
-        if order_line:
-            order_line.trailer_id = trailer.id
-            _set_line_source_state(order_line, order_line.fulfillment_source or 'production', 'vin_assigned')
-        _add_vin_event(vin_registry_row, 'assigned', old_vin_status, vin_registry_row.status, comment='VIN привязан к выпущенному прицепу')
-        db.session.commit()
+        # P0-G2: wrap trailer creation + all link writes + commit atomically.
+        # Any exception triggers full rollback so produced_unit can never reach
+        # status='vin_assigned' with trailer_id=NULL in the database.
+        try:
+            trailer = Trailer(vin=vin, item_id=unit.item_id, warehouse_id=production_warehouse.id, manufacture_date=form.manufacture_date.data, status=trailer_status, lifecycle_status='ready_production_warehouse')
+            db.session.add(trailer)
+            db.session.flush()
+            _finish_idempotency(idem_key, 'Trailer', trailer.id)
+            unit.status = 'vin_assigned'
+            unit.trailer_id = trailer.id
+            if order:
+                unit.order_id = order.id
+                order.trailer_id = trailer.id
+                if order.documents_issued or order.status == 'sold_not_shipped':
+                    order.status = 'sold_not_shipped'
+                elif unit.target_warehouse_id and unit.target_warehouse_id != production_warehouse.id:
+                    order.status = 'waiting_transfer'
+                else:
+                    order.status = 'ready_to_ship'
+                _ensure_order_reservation(order, trailer, 'PRODUCTION')
+                add_order_event(order, 'vin_assigned', new_value=vin)
+                add_order_event(order, 'trailer_assigned', new_value=vin)
+            old_vin_status = vin_registry_row.status
+            vin_registry_row.trailer_id = trailer.id
+            vin_registry_row.status = 'assigned'
+            vin_registry_row.assigned_by_user_id = current_user.id
+            vin_registry_row.assigned_at = datetime.utcnow()
+            order_line = None
+            if unit.order_line_id:
+                order_line = CustomerOrderLine.query.get(unit.order_line_id)
+            elif line and line.order_line_id:
+                order_line = line.order_line
+                unit.order_line_id = line.order_line_id
+            elif line and line.order_line:
+                order_line = line.order_line
+                unit.order_line_id = line.order_line.id
+            elif order:
+                order_line = _primary_order_line(order)
+            if order and not vin_registry_row.customer_order_id:
+                vin_registry_row.customer_order_id = order.id
+            if order_line and not vin_registry_row.order_line_id:
+                vin_registry_row.order_line_id = order_line.id
+            if line and line.supply_need and not vin_registry_row.supply_need_id:
+                vin_registry_row.supply_need_id = line.supply_need.id
+            if order_line:
+                order_line.trailer_id = trailer.id
+                _set_line_source_state(order_line, order_line.fulfillment_source or 'production', 'vin_assigned')
+            _add_vin_event(vin_registry_row, 'assigned', old_vin_status, vin_registry_row.status, comment='VIN привязан к выпущенному прицепу')
+            # P0-G2: pre-commit integrity assertion — both links must be set
+            if unit.trailer_id is None or vin_registry_row.trailer_id is None:
+                raise RuntimeError('P0-G2: trailer_id link missing before commit')
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            flash('Ошибка при выпуске VIN. Все изменения отменены. Попробуйте ещё раз или обратитесь к администратору.', 'danger')
+            return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row, back_url=back_url, expected_modification=expected_modification, vin_options=vin_options)
         flash('VIN присвоен. Прицеп создан на производственном складе.', 'success')
         return redirect(back_url)
     return render_template('assign_vin_form.html', form=form, unit=unit, reserved_vin_row=reserved_vin_row, back_url=back_url, expected_modification=expected_modification, vin_options=vin_options)
