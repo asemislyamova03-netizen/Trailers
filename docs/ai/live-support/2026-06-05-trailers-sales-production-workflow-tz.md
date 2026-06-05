@@ -2,9 +2,9 @@
 
 Дата: 2026-06-05
 Обновлён: 2026-06-05
-Статус: v2 / approved
+Статус: v2 / approved for business direction — not approved for direct implementation
 Проект: Trailers Flask live/reference
-Основа для implementation plan.
+Основа для implementation plan. Перед любым кодом нужен отдельный implementation plan с таблицей затрагиваемых файлов.
 Кодить по этому документу нельзя без отдельного implementation plan.
 
 ---
@@ -340,9 +340,10 @@ Admin должен иметь доступ к тем же действиям, ч
 9. Позиция получает статус: "В производстве".
 10. Производство указывает плановую дату выпуска.
 11. После выпуска позиция получает статус: "Готов к перемещению" или "Готов к отгрузке" — в зависимости от склада.
-12. Логист наносит/вносит VIN.
-13. Менеджер подтверждает VIN.
-14. Позиция становится готовой к отгрузке.
+12. Логист вносит serial7 / VIN в пул (`VinRegistry`, статус `free`).
+13. Менеджер или директор назначает VIN на выпущенный прицеп (`ProducedUnit`, статус `assigned`).
+14. Менеджер, директор или admin подтверждает нанесение VIN (статус `confirmed`).
+15. Позиция становится готовой к отгрузке.
 
 ### 5.4. Сценарий D: производство на пополнение склада
 
@@ -350,9 +351,10 @@ Admin должен иметь доступ к тем же действиям, ч
 2. Указывает склад, модель/артикул, конфигурацию и количество.
 3. Производство принимает заявку.
 4. Производство выпускает прицеп.
-5. Логист вносит VIN.
-6. Менеджер/директор подтверждает VIN.
-7. Прицеп становится свободным складским остатком.
+5. Логист вносит serial7 / VIN в пул (`VinRegistry`, статус `free`).
+6. Менеджер или директор назначает VIN на выпущенный прицеп (статус `assigned`).
+7. Менеджер, директор или admin подтверждает нанесение VIN (статус `confirmed`).
+8. Прицеп становится свободным складским остатком.
 
 Такие заявки должны отображаться отдельно от клиентских.
 
@@ -361,18 +363,29 @@ Admin должен иметь доступ к тем же действиям, ч
 1. Позиция заказа связана с производственной потребностью.
 2. Производство уже приняло заявку.
 3. Клиент отказался или менеджер решил заменить источник.
-4. Менеджер снимает резерв с позиции.
-5. Связь с клиентским заказом убирается или переводится в статус "резерв снят".
-6. Производственная потребность не удаляется.
-7. Потребность становится "производство на склад".
-8. Готовый прицеп поступает на целевой склад как свободный остаток.
+4. Менеджер снимает резерв с позиции (только это доступно без отдельного implementation plan).
+5. **Шаги 5–8 требуют отдельного implementation plan** — конвертация `client_order` → `stock_replenishment` затрагивает несколько связанных таблиц и не является атомарной операцией.
+6. (target) Производственная потребность не удаляется.
+7. (target) Потребность переводится в производство на склад.
+8. (target) Готовый прицеп поступает на целевой склад как свободный остаток.
 
 Важно:
 
 ```text
 Менеджеру не надо отменять производство, если оно уже началось.
-Он должен иметь право снять бронь.
+Он должен иметь право снять бронь (шаг 4 — реализуем сейчас).
+Шаги 5–8 — только после отдельного implementation plan.
 ```
+
+> Codex review note: конвертация `client_order` → `stock_replenishment` не является одной атомарной операцией.
+> Для реализации нужен отдельный implementation plan с явным списком изменяемых полей:
+> - `SupplyNeed.need_type`, `SupplyNeed.order_id`, `SupplyNeed.order_line_id`;
+> - `ProductionRequestLine.order_line_id`;
+> - `ProducedUnit.order_id`, `ProducedUnit.order_line_id`;
+> - состояние `VinRegistry` (free/reserved для связанных VIN);
+> - `CustomerOrderLine.supply_need_id`, `fulfillment_source`, `fulfillment_status`;
+> - целевой склад после снятия резерва должен быть явно указан (не None).
+> Не реализовывать без отдельного implementation plan с rollback.
 
 ### 5.6. Сценарий F: заявка в производство ещё не принята
 
@@ -381,6 +394,18 @@ Admin должен иметь доступ к тем же действиям, ч
 - менеджер может отменить заявку на производство;
 - позиция заказа возвращается в статус "требуется источник";
 - менеджер может выбрать наличие, перемещение или новую конфигурацию.
+
+**Отмена заявки требует отдельного implementation plan** — список изменяемых полей и rollback определяются в плане, не в этом ТЗ.
+
+> Codex review note: "не принята" маппится на `SupplyNeed.status in ('NEW', 'PLANNED', 'DRAFT')` без связанного `ProducedUnit`.
+> Отмена разрешена только если `SupplyNeed.status in ('NEW', 'PLANNED', 'DRAFT')`
+> и `ProductionRequestLine` не имеет связанного `ProducedUnit`.
+> При отмене обязательно откатить:
+> - `CustomerOrderLine.supply_need_id = None`;
+> - `CustomerOrderLine.production_request_line_id = None`;
+> - `CustomerOrderLine.fulfillment_source = None`;
+> - `CustomerOrderLine.fulfillment_status = 'source_required'` (или аналог);
+> - статус заказа пересчитать через `_refresh_order_status`.
 
 ---
 
@@ -704,38 +729,40 @@ Admin должен иметь доступ к тем же действиям, ч
 
 ## 12. VIN-процесс
 
-### 12.1. Логист
+> Codex review note (2026-06-05): VIN workflow состоит из трёх строго разделённых операций.
+> Логист НЕ назначает VIN на прицеп — он работает только с VIN pool (serial7).
+
+### 12.1. Операция 1: Загрузка VIN в пул (логист)
 
 Логист:
 
-- набивает VIN;
-- вносит VIN в систему.
+- набивает VIN на прицепе физически;
+- вносит serial7 или полный VIN в реестр через `/logistics/vin-registry` (POST);
+- VIN получает статус `free` в таблице `VinRegistry`.
 
-После этого VIN получает статус:
+Права: logistics / director / admin.
 
-```text
-VIN внесён
-```
+### 12.2. Операция 2: Назначение VIN на выпущенный прицеп (менеджер / директор)
 
-### 12.2. Менеджер
+Менеджер или директор:
 
-Менеджер:
+- открывает выпущенный прицеп (`ProducedUnit`);
+- назначает VIN из пула через `/logistics/produced-units/<id>/assign-vin`;
+- VIN получает статус `assigned` в `VinRegistry`.
 
-- проверяет VIN;
-- подтверждает нанесение VIN.
+Права: manager / director / admin.
+Логист не может выполнить эту операцию.
 
-После этого VIN получает статус:
+### 12.3. Операция 3: Подтверждение нанесения VIN (менеджер / директор / admin)
 
-```text
-VIN подтверждён
-```
+Менеджер, директор или admin:
 
-### 12.3. Права
+- проверяет, что VIN физически нанесён на прицеп;
+- нажимает "Подтвердить" в VIN registry (`/logistics/vin-registry/<id>/confirm`);
+- VIN получает статус `confirmed`.
 
-```text
-logistics: внести VIN
-manager/director/admin: подтвердить VIN
-```
+Права: manager / director / admin.
+Исправлено: `971d1b6` — admin теперь видит кнопку подтверждения в списке.
 
 Если пользователь не имеет права подтверждать VIN:
 
@@ -918,25 +945,34 @@ manager/director/admin: подтвердить VIN
 
 ## 18. Минимальная матрица прав
 
-| Действие | Manager | Production | Logistics | Director | Admin |
-|---|---:|---:|---:|---:|---:|
-| Создать заказ | Да | Нет | Нет | Да | Да |
-| Редактировать заказ | Да | Нет | Нет | Да | Да |
-| Добавить позицию из конфигуратора | Да | Нет | Нет | Да | Да |
-| Добавить позицию из наличия | Да | Нет | Нет | Да | Да |
-| Изменить комплектацию | Да | Нет | Нет | Да | Да |
-| Изменить размер рамы | Нет | Нет | Нет | Нет | Нет |
-| Изменить количество осей | Нет | Нет | Нет | Нет | Нет |
-| Создать заявку в производство | Да | Нет | Нет | Да | Да |
-| Создать заявку на перемещение | Да | Нет | Нет | Да | Да |
-| Принять в производство | Нет | Да | Нет | Да | Да |
-| Выпустить из производства | Нет | Да | Нет | Да | Да |
-| Внести VIN | Нет | Нет | Да | Да | Да |
-| Подтвердить VIN | Да | Нет | Нет | Да | Да |
-| Снять резерв | Да | Нет | Нет | Да | Да |
-| Отменить заявку до принятия | Да | Нет | Нет | Да | Да |
-| Снять бронь с прицепа в производстве | Да | Нет | Нет | Да | Да |
-| Отгрузить | Да | Нет | Возможно | Да | Да |
+> Codex review note (2026-06-05): матрица содержит несоответствия с текущими маршрутами.
+> Колонка "Несоответствие" фиксирует расхождение между target и current.
+> Матрица является нормативным target — для приведения текущих маршрутов нужен отдельный implementation plan.
+
+| Действие | Manager | Production | Logistics | Director | Admin | Несоответствие с текущим кодом |
+|---|---:|---:|---:|---:|---:|---|
+| Создать заказ | Да | Нет | Нет | Да | Да | Нет |
+| Редактировать заказ | Да | Нет | Нет | Да | Да | Нет |
+| Добавить позицию из конфигуратора | Да | Нет | Нет | Да | Да | Нет |
+| Добавить позицию из наличия | Да | Нет | Нет | Да | Да | Нет |
+| Изменить комплектацию | Да | Нет | Нет | Да | Да | Нет |
+| Изменить размер рамы | Нет | Нет | Нет | Нет | Нет | Нет |
+| Изменить количество осей | Нет | Нет | Нет | Нет | Нет | Нет |
+| Создать заявку в производство | Да | Нет | Нет | Да | Да | Нет |
+| Создать заявку на перемещение | Да | Нет | Нет | Да | Да | Нет |
+| Принять в производство (операционно) | Нет | Да | Нет | Нет | Да | **Да** — `@role_required('production')`, director не включён напрямую; target должен разделить: production = операционный релиз, director = административная коррекция (отдельный implementation plan) |
+| Принять в производство (admin correction) | Нет | Нет | Нет | Нет | Да | **Да** — только через admin bypass сейчас |
+| Выпустить из производства (операционно) | Нет | Да | Нет | Нет | Да | **Да** — аналогично `production_line_start`; director получит доступ только после отдельного implementation plan |
+| Внести VIN в пул (serial7) | Нет | Нет | Да | Да | Да | Нет — VIN pool upload разрешён logistics/director/admin |
+| Назначить VIN на прицеп | Да | Нет | Нет | Да | Да | Нет — текущий маршрут `@role_required('manager','director')` соответствует target; manager назначает VIN в рамках ведения заказа |
+| Подтвердить VIN | Да | Нет | Нет | Да | Да | Нет — исправлено `971d1b6` |
+| Снять резерв (складской прицеп) | Да | Нет | Нет | Да | Да | Нет |
+| Снять VIN-резерв из карточки заказа | Нет | Нет | Нет | Да | Да | **Да** — `order_cancel_vin_reservation` явно `abort(403)` для manager и logistics; только director/admin |
+| Снять VIN-резерв из VIN registry | Нет | Нет | Да | Да | Да | Нет — `/logistics/vin-registry/<id>/cancel-reservation` = `@role_required('logistics','director')` + admin bypass; logistics имеет доступ по текущему коду и шаблону `vin_registry_detail.html` |
+| Отменить заявку до принятия (stock) | Да | Нет | Нет | Да | Да | Нет — `supply_need_cancel` разрешён manager для stock replenishment |
+| Отменить заявку до принятия (client_order) | Нет | Нет | Нет | Да | Да | **Да** — `supply_need_cleanup_production` = admin/director only |
+| Снять бронь с прицепа в производстве | Да | Нет | Нет | Да | Да | Нет |
+| Отгрузить | Да | Нет | Нет | Да | Да | **Да** — stock movement send/receive = manager/director/admin; logistics workspace redirects к VIN registry |
 
 ---
 
@@ -1141,6 +1177,65 @@ order_detail → production request → production list display
 
 ## 23. P0: Обязательная складская привязка
 
+> Codex review note (2026-06-05): раздел содержит target field names, которые не совпадают с текущими моделями.
+> До начала реализации обязательно использовать таблицу маппинга ниже.
+> P0 разбит на две фазы: read-only audit и guards для новых записей.
+> Изменение схемы (добавление новых полей) — отдельный migration plan.
+
+### Маппинг: target field — текущая модель Flask
+
+| Target concept | Текущее поле в коде |
+|---|---|
+| `order.sales_warehouse_id` | `CustomerOrder.warehouse_id` |
+| `order_item.source_warehouse_id` (откуда прицеп) | для stock: `Trailer.warehouse_id` / `Reservation.trailer.warehouse_id`; для transfer: `StockMovement.from_warehouse_id` |
+| `order_item.target_warehouse_id` (куда прицеп) | для stock/производство: `CustomerOrder.warehouse_id`; для production: `SupplyNeed.warehouse_id` / `ProducedUnit.target_warehouse_id`; для transfer: `StockMovement.to_warehouse_id` |
+| `production_request.target_warehouse_id` | `ProductionRequest.target_warehouse_id` (существует) |
+| `production_request.production_warehouse_id` | `_default_production_warehouse()` / `Warehouse.is_production` (системная функция, не поле в заявке) |
+| `production_location_id` | не существует в схеме — требует migration plan |
+| `trailer.warehouse_id` | `Trailer.warehouse_id` (существует) |
+| `transfer.source_warehouse_id` | `StockMovement.from_warehouse_id` |
+| `transfer.target_warehouse_id` | `StockMovement.to_warehouse_id` |
+
+### Фаза 1 (P0-A): Read-only audit — без изменений данных
+
+Найти существующие проблемные записи, используя текущие имена полей:
+
+```text
+CustomerOrder WHERE warehouse_id IS NULL;
+Trailer WHERE warehouse_id IS NULL;
+ProductionRequest WHERE target_warehouse_id IS NULL;
+SupplyNeed WHERE warehouse_id IS NULL;
+CustomerOrderLine — без связанного склада: см. per-source аудит ниже.
+```
+
+Per-source аудит для `CustomerOrderLine`:
+
+| fulfillment_source | Как определить склад | Признак проблемы |
+|---|---|---|
+| `stock` / `stock_reserved` | `Reservation.trailer.warehouse_id` / `Trailer.warehouse_id` | нет связанного `Trailer` с `warehouse_id` |
+| `transfer` | `StockMovement.from_warehouse_id` / `to_warehouse_id` | нет связанного `StockMovement` или склад NULL |
+| `production` / `production_requested` | `SupplyNeed.warehouse_id` / `ProducedUnit.target_warehouse_id` | нет `SupplyNeed` или `target_warehouse_id` NULL |
+| `external` / `component` | не применимо — склад не является обязательным | пропустить |
+| NULL / не задан | нет источника | записать как `source_required` |
+
+Результат: read-only SQL-запросы или скрипт в `scripts/`, без изменения данных.
+
+### Фаза 2 (P0-B): Guards для новых записей
+
+Запретить создание новых проблемных записей без склада:
+
+```text
+CustomerOrder без warehouse_id;
+Trailer без warehouse_id при создании складского остатка;
+ProductionRequest без target_warehouse_id.
+```
+
+Реализация: добавить validation в существующие формы/routes. Не требует migration.
+
+### Фаза 3 (P0-C): Production warehouse / settings — отдельный migration plan
+
+Введение `default_production_warehouse_id` в настройках или `production_location_id` в схеме требует отдельного ADR и migration plan. Не реализовывать в рамках этого ТЗ.
+
 ### Проблема
 
 После удаления производственного склада из общих настроек появилась критичная проблема:
@@ -1169,17 +1264,17 @@ VIN;
 
 Нельзя создавать заказ, позицию заказа, складской прицеп, производственную заявку или перемещение без явной складской привязки.
 
-Минимально обязательные поля:
+Минимально обязательные поля (target concepts — текущие имена см. в таблице маппинга):
 
 ```text
-order.sales_warehouse_id
-order_item.source_warehouse_id, если выбран складской прицеп
-order_item.target_warehouse_id, если позиция должна поступить на склад продажи
-trailer.warehouse_id, если прицеп физически существует
-production_request.target_warehouse_id
-production_request.production_warehouse_id или production_location_id, если производство отделено от склада продажи
-transfer.source_warehouse_id
-transfer.target_warehouse_id
+order.sales_warehouse_id         → CustomerOrder.warehouse_id
+order_item.source_warehouse_id   → Trailer.warehouse_id / StockMovement.from_warehouse_id (по источнику)
+order_item.target_warehouse_id   → CustomerOrder.warehouse_id / SupplyNeed.warehouse_id (по источнику)
+trailer.warehouse_id             → Trailer.warehouse_id (существует)
+production_request.target_warehouse_id → ProductionRequest.target_warehouse_id (существует)
+production_request.production_warehouse_id → Warehouse.is_production / P0-C migration plan
+transfer.source_warehouse_id     → StockMovement.from_warehouse_id
+transfer.target_warehouse_id     → StockMovement.to_warehouse_id
 ```
 
 ### Производственный склад
@@ -1224,40 +1319,48 @@ production_location_id
 Запрещено:
 
 ```text
-подставлять None;
-создавать trailer без warehouse_id;
-создавать production_request без target_warehouse_id;
-создавать order без sales_warehouse_id.
+подставлять None молча;
+создавать Trailer без Trailer.warehouse_id;
+создавать ProductionRequest без ProductionRequest.target_warehouse_id;
+создавать CustomerOrder без CustomerOrder.warehouse_id.
 ```
 
 ### Data integrity check
 
-Нужно добавить проверку существующих проблемных данных:
+Нужно добавить проверку существующих проблемных данных (текущие имена полей):
 
 ```text
-заказы без sales_warehouse_id;
-позиции заказа без source/target warehouse;
-прицепы без warehouse_id;
-производственные заявки без target_warehouse_id;
-резервы без связанного склада.
+CustomerOrder WHERE warehouse_id IS NULL;
+CustomerOrderLine без склада по per-source правилам аудита выше;
+Trailer WHERE warehouse_id IS NULL;
+ProductionRequest WHERE target_warehouse_id IS NULL;
+SupplyNeed WHERE warehouse_id IS NULL.
 ```
 
-Это не означает немедленную миграцию. Сначала нужен read-only audit.
+Это не означает немедленную миграцию. Сначала нужен read-only audit (P0-A).
 
-### Acceptance criteria
+### Acceptance criteria (используют текущие имена полей)
 
 ```text
-новый заказ невозможно сохранить без склада продажи;
-прицеп невозможно создать как складской остаток без warehouse_id;
-заявка в производство всегда имеет target_warehouse_id;
-производственная заявка под клиента показывает склад продажи и целевой склад;
-при выборе прицепа из другого склада система создаёт сценарий перемещения;
-старые записи без склада найдены и вынесены в audit.
+P0-A: аудит выполнен — найдены CustomerOrder WHERE warehouse_id IS NULL, Trailer WHERE warehouse_id IS NULL, ProductionRequest WHERE target_warehouse_id IS NULL;
+P0-A: аудит выполнен — per-source проверка CustomerOrderLine без склада;
+P0-A: никаких изменений данных не выполнено;
+P0-B: новый CustomerOrder невозможно сохранить без CustomerOrder.warehouse_id;
+P0-B: новый Trailer невозможно создать как складской остаток без Trailer.warehouse_id;
+P0-B: новый ProductionRequest невозможно сохранить без target_warehouse_id;
+P0-C (отдельный план): SupplyNeed.warehouse_id обязателен при создании из заказа;
+P0-C (отдельный план): production_warehouse context определён через Warehouse.is_production или системную настройку.
 ```
 
 ---
 
 ## 24. P1: Единая модель статусов заказа, позиции и прицепа
+
+> Codex review note (2026-06-05): enum-значения в этом разделе — target vocabulary (целевой словарь), а не текущие persisted значения в БД.
+> Прямая замена текущих статусов требует migrations и data mapping — отдельный migration plan.
+> Первый реализуемый шаг: display mapping в шаблонах поверх текущих значений. Persisted enum — только после ADR.
+> `ready_to_ship` не должен дублироваться на уровне коммерческого статуса заказа и исполнительного статуса позиции — разделить.
+> Агрегация для multi-line заказов должна использовать count-based summary, а не один агрегированный статус.
 
 ### Проблема
 
@@ -1305,6 +1408,9 @@ VIN подтверждён или нет;
 что происходит с продажей?
 ```
 
+> Примечание: `ready_to_ship` не входит в коммерческий статус — это исполнительный статус позиций.
+> Коммерческий статус отражает только оплату, договор и отгрузку.
+
 Возможные значения:
 
 ```text
@@ -1313,7 +1419,6 @@ contract_prepared
 contract_issued
 paid
 partially_paid
-ready_to_ship
 shipped
 cancelled
 ```
@@ -1326,7 +1431,6 @@ UI-метки:
 Договор выдан
 Оплачен
 Частично оплачен
-Готов к отгрузке
 Отгружен
 Отменён
 ```
@@ -1389,6 +1493,10 @@ VIN подтверждён
 что физически происходит с единицей прицепа?
 ```
 
+> Примечание (Codex review): физический статус не должен включать `sold` как самостоятельное физическое состояние.
+> Юридическая продажа и физическая отгрузка — разные события. Физический статус показывает,
+> где прицеп находится физически, а не коммерческое состояние сделки.
+
 Возможные значения:
 
 ```text
@@ -1398,8 +1506,7 @@ produced
 in_stock
 reserved
 in_transfer
-sold
-shipped
+customer_shipped
 cancelled
 ```
 
@@ -1412,10 +1519,24 @@ UI-метки:
 На складе
 В резерве
 В перемещении
-Продан
-Отгружен
+Физически отгружен клиенту
 Отменён
 ```
+
+### Статус перемещения
+
+> Target vocabulary — для display mapping. Текущие значения `StockMovement.status` см. в маппинге.
+
+| Target value | UI-метка | Текущий `StockMovement.status` |
+|---|---|---|
+| `transfer_required` | Требуется перемещение | нет прямого поля — производится из отсутствия `StockMovement` при `fulfillment_source = transfer` |
+| `draft` | Черновик | `draft` |
+| `pending` | Ожидает отправки | `pending` / `created` |
+| `in_transit` | В перемещении | `in_transit` / `sent` |
+| `arrived` | Прибыло на склад | `arrived` / `received` |
+| `cancelled` | Отменено | `cancelled` |
+
+Переходы: `draft → pending → in_transit → arrived`. Отмена возможна до `arrived`.
 
 ### Статус производственной заявки
 
@@ -1441,22 +1562,34 @@ UI-метки:
 Отменена
 ```
 
+> Переходы (`draft → sent_to_production → accepted → in_progress → produced → transferred_to_stock`) не защищены guard-ами в текущем коде. Добавление transition guards — отдельный implementation plan.
+
 ### Статус VIN
 
+> Примечание (Codex review): текущий live-код использует значения `free/reserved/assigned/confirmed/void`
+> в таблице `VinRegistry`. Назначение VIN на выпущенный прицеп выполняется менеджером/директором
+> через `/logistics/produced-units/<id>/assign-vin`, а не логистом.
+> Логист работает с VIN pool (загрузка/освобождение serial7), а не с назначением на конкретный прицеп.
+> Три операции VIN строго разделены — см. раздел 12.
+
+Target vocabulary (для будущего display mapping):
+
 ```text
-missing
-entered_by_logistics
-confirmed_by_manager
-rejected
+free             — VIN в пуле, не назначен
+reserved         — VIN зарезервирован под заказ
+assigned         — VIN назначен на прицеп (менеджер/директор)
+confirmed        — нанесение VIN подтверждено (менеджер/директор/admin)
+void             — аннулирован
 ```
 
 UI-метки:
 
 ```text
-VIN не указан
-VIN внесён логистом
-VIN подтверждён менеджером
-VIN отклонён
+Свободен
+Зарезервирован
+Назначен
+Подтверждён
+Аннулирован
 ```
 
 ### Что показывать в списке заказов
@@ -1470,7 +1603,14 @@ VIN отклонён
 исполнение позиций.
 ```
 
-Пример:
+Для одной позиции:
+
+```text
+Коммерция: Договор выдан
+Исполнение: В производстве — план 12.06.2026
+```
+
+Для нескольких позиций (multi-line) — count-based summary:
 
 ```text
 Заказ №123
@@ -1478,29 +1618,37 @@ VIN отклонён
 Исполнение: 1 в производстве, 1 готов к отгрузке
 ```
 
-Или для одной позиции:
+Частичные состояния multi-line заказа должны отображаться явно:
 
 ```text
-Коммерция: Договор выдан
-Исполнение: В производстве — план 12.06.2026
+Частично отгружен (1/3)
+Частично выпущен (2/3)
+Частично VIN подтверждён (1/3)
 ```
+
+> Codex review note: один агрегированный статус исполнения для multi-line заказов скрывает
+> реальную ситуацию и воспроизводит исходную проблему. Использовать count-based summary.
 
 ### Агрегация статуса исполнения заказа
 
-Если нужен один агрегированный статус исполнения заказа, он должен вычисляться из позиций по приоритету.
+Агрегация применяется только для однострочных заказов или как fallback.
 
-Рекомендуемый порядок:
+Для multi-line заказов — count-based summary (см. выше).
+
+Для однострочных, рекомендуемый приоритет:
 
 ```text
 cancelled — если заказ отменён;
-shipped — если все позиции отгружены;
-ready_to_ship — если все активные позиции готовы к отгрузке;
-vin_required — если хотя бы одна позиция выпущена, но VIN не подтверждён;
-in_production — если хотя бы одна позиция в производстве;
-production_requested — если хотя бы одна позиция заказана в производство;
-transfer_required / transfer_in_progress — если хотя бы одна позиция требует/ждёт перемещение;
-reserved_from_stock — если все позиции зарезервированы из наличия;
-source_required — если хотя бы одной позиции не выбран источник.
+shipped — если позиция отгружена;
+ready_to_ship — если позиция готова к отгрузке;
+vin_confirmed — если VIN подтверждён;
+vin_required — если позиция выпущена, но VIN не подтверждён;
+in_production — если позиция в производстве;
+production_requested — если позиция заказана в производство;
+transfer_in_progress — если выполняется перемещение;
+transfer_required — если требуется перемещение;
+reserved_from_stock — если зарезервирована из наличия;
+source_required — если источник не выбран.
 ```
 
 ### Запрет
@@ -1536,31 +1684,37 @@ VIN показывает отдельный статус;
 
 ## 25. Рекомендуемый порядок реализации с учётом разделов 23–24
 
-### Шаг 1. Read-only audit складов
+### Шаг 1. Read-only audit складов (текущие имена полей)
 
-Найти:
+Найти, используя только существующие поля моделей:
 
 ```text
-orders без sales_warehouse_id;
-trailers без warehouse_id;
-production_requests без target_warehouse_id;
-order_items без source/target warehouse;
-расхождения между order status и trailer/order item status.
+CustomerOrder WHERE warehouse_id IS NULL;
+Trailer WHERE warehouse_id IS NULL;
+ProductionRequest WHERE target_warehouse_id IS NULL;
+SupplyNeed WHERE warehouse_id IS NULL;
+CustomerOrderLine — по per-source правилам аудита из раздела 23 (Фаза 1).
 ```
+
+Расхождения между статусом заказа и статусом позиций/прицепов — read-only диагностика.
 
 Без изменений данных.
 
-### Шаг 2. P0 guard для новых записей без склада
+### Шаг 2. P0 guard для новых записей без склада (текущие имена полей)
 
 Запретить создание новых проблемных записей без склада:
 
 ```text
-order без sales_warehouse_id;
-trailer без warehouse_id;
-production_request без target_warehouse_id.
+CustomerOrder без CustomerOrder.warehouse_id;
+Trailer без Trailer.warehouse_id;
+ProductionRequest без ProductionRequest.target_warehouse_id.
 ```
 
-### Шаг 3. Восстановить production warehouse setting или production location
+### Шаг 3. Восстановить production warehouse setting или production location (P0-C — отдельный план)
+
+> Это НЕ часть P0-A (read-only audit) и НЕ часть P0-B (guards для новых записей).
+> Введение `default_production_warehouse_id` или `production_location_id` требует ADR и отдельного migration plan.
+> Не реализовывать в рамках P0-A/P0-B.
 
 Вернуть системное понятие производственного склада/локации.
 
