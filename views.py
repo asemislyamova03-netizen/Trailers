@@ -173,6 +173,16 @@ def _trailer_source_warehouses():
     return query.order_by(Warehouse.name).all()
 
 
+def _manager_warehouses():
+    warehouses = _trailer_source_warehouses()
+    if current_user.is_authenticated and current_user.warehouse_id and all(w.id != current_user.warehouse_id for w in warehouses):
+        user_warehouse = Warehouse.query.filter_by(id=current_user.warehouse_id, is_active=True).first()
+        if user_warehouse:
+            warehouses.append(user_warehouse)
+            warehouses.sort(key=lambda w: w.name or '')
+    return warehouses
+
+
 def _active_warehouses():
     return Warehouse.query.filter(Warehouse.is_active == True).order_by(Warehouse.name.asc()).all()
 
@@ -1565,12 +1575,7 @@ def manager_workspace():
     if not (current_user.is_manager or current_user.is_admin or current_user.is_director):
         return redirect(url_for('main.role_home'))
 
-    warehouses = _trailer_source_warehouses()
-    if current_user.warehouse_id and all(w.id != current_user.warehouse_id for w in warehouses):
-        user_warehouse = Warehouse.query.filter_by(id=current_user.warehouse_id, is_active=True).first()
-        if user_warehouse:
-            warehouses.append(user_warehouse)
-            warehouses.sort(key=lambda w: w.name or '')
+    warehouses = _manager_warehouses()
     warehouse_id = request.args.get('warehouse_id', type=int) or current_user.warehouse_id
     if current_user.can_view_all and not warehouse_id and warehouses:
         warehouse_id = warehouses[0].id
@@ -4688,7 +4693,7 @@ def _fill_order_form_choices(form: CustomerOrderForm, item_id_prefill: int | Non
     form.customer_id.choices = customer_choices
     items = Item.query.filter(Item.item_type == 'TRAILER', Item.is_active == True).order_by(Item.article, Item.name).all()
     form.item_id.choices = [(0, '— выберите модель —')] + [(i.id, _item_label(i)) for i in items]
-    form.warehouse_id.choices = [(0, '— не выбрано —')] + [(w.id, w.name) for w in _sales_warehouses()]
+    form.warehouse_id.choices = [(0, '— не выбрано —')] + [(w.id, w.name) for w in _manager_warehouses()]
     form.assigned_user_id.choices = [(0, '— не назначен —')] + [(u.id, u.full_name or u.username) for u in User.query.order_by(User.full_name, User.username).all()]
     if form.fulfillment_source.data in ('other_warehouse', 'transit'):
         form.fulfillment_source.data = 'stock' if form.fulfillment_source.data == 'other_warehouse' else 'later'
