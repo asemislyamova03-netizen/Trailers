@@ -1,13 +1,14 @@
 {% extends "base.html" %}
-{% block title %}{{ 'Привязать зарезервированный VIN' if reserved_vin_row else 'Присвоить VIN' }}{% endblock %}
+{% set has_context_vins = context_vin_ids and vin_options and (vin_options | selectattr('id', 'in', context_vin_ids) | list) %}
+{% block title %}{{ 'Привязать зарезервированный VIN' if has_context_vins else 'Присвоить VIN' }}{% endblock %}
 {% block content %}
 <div class="compact-page-header">
-  <div><h1>{{ 'Привязать зарезервированный VIN' if reserved_vin_row else 'Присвоить VIN' }}</h1><div class="text-muted small">Создание конкретного прицепа на производственном складе после выпуска</div></div>
+  <div><h1>{{ 'Привязать зарезервированный VIN' if has_context_vins else 'Присвоить VIN' }}</h1><div class="text-muted small">Создание конкретного прицепа на производственном складе после выпуска</div></div>
 </div>
 <div class="app-card p-4">
   <div class="alert alert-secondary">Единица #{{ unit.id }}: {{ unit.item.article if unit.item else '' }} {{ unit.item.name if unit.item else '' }}</div>
-  {% if reserved_vin_row %}
-    <div class="alert alert-warning">По заказу зарезервирован VIN: <strong>{{ reserved_vin_row.vin_full }}</strong>.<br>Будет привязан именно этот VIN.</div>
+  {% if has_context_vins %}
+    <div class="alert alert-warning">Для этого заказа зарезервирован VIN. Он показан первым в списке и будет выбран по умолчанию.</div>
   {% elif expected_modification %}
     <div class="alert alert-info">Показаны свободные VIN из реестра с модификацией <strong>{{ expected_modification }}</strong>.</div>
   {% endif %}
@@ -17,14 +18,20 @@
       {{ form.vin_registry_id.label(class="form-label") }}
       {{ form.vin_registry_id(class="form-select") }}
       {% if not vin_options %}
-        <div class="form-text text-danger">Нет свободных VIN в реестре. Сначала логист должен загрузить VIN в реестр.</div>
+        {% if reserved_vin_row %}
+          <div class="form-text text-danger">Зарезервированный VIN недоступен (уже привязан или аннулирован). Обратитесь к логисту.</div>
+        {% else %}
+          <div class="form-text text-danger">Нет доступных VIN в реестре для этого заказа и модификации. Логист должен загрузить VIN в реестр.</div>
+        {% endif %}
+      {% elif has_context_vins %}
+        <div class="form-text text-success">Зарезервированный VIN выбран автоматически. Можно также выбрать свободный VIN из списка.</div>
       {% else %}
         <div class="form-text">VIN выбирается только из реестра. Ручной ввод отключён.</div>
       {% endif %}
       {% for e in form.vin_registry_id.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
     </div>
     <div class="col-md-6">{{ form.manufacture_date.label(class="form-label") }}{{ form.manufacture_date(class="form-control") }}</div>
-    <div class="col-12"><button class="btn btn-orange" {% if not vin_options %}disabled{% endif %}>{{ 'Привязать зарезервированный VIN' if reserved_vin_row else 'Присвоить VIN' }}</button> <a class="btn btn-soft" href="{{ back_url or url_for('main.vin_registry_list') }}">Назад</a></div>
+    <div class="col-12"><button class="btn btn-orange" {% if not vin_options %}disabled{% endif %}>{{ 'Привязать VIN' if has_context_vins else 'Присвоить VIN' }}</button> <a class="btn btn-soft" href="{{ back_url or url_for('main.vin_registry_list') }}">Назад</a></div>
   </form>
 </div>
 {% endblock %}

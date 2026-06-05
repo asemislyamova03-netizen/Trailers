@@ -168,7 +168,13 @@
             {% if problem_unit.trailer %} · {{ problem_unit.trailer.vin }} · {{ problem_unit.trailer.status|status_label }}{% endif %}
             {% if problem_unit.order_id or problem_unit.order_line_id %} · есть связь с заказом{% endif %}
           </div>
-          {% if current_user.is_admin or current_user.is_director %}
+          {% if problem_unit.status == 'produced_no_vin' %}
+            {% if current_user.is_admin or current_user.is_director or current_user.is_manager %}
+              <a class="btn btn-sm btn-orange" href="{{ url_for('main.logistics_assign_vin', unit_id=problem_unit.id) }}">Назначить VIN</a>
+            {% else %}
+              <span class="text-muted small">Следующий шаг менеджера: назначить VIN выпущенной единице.</span>
+            {% endif %}
+          {% elif current_user.is_admin or current_user.is_director %}
             <form method="post" action="{{ url_for('main.produced_unit_admin_delete', unit_id=problem_unit.id) }}" onsubmit="return confirm('Удалить ошибочный выпуск? Если прицеп/VIN уже связан с продажей, будет удалена только производственная связь.');">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="reason" value="Очистка проблемного выпуска из пополнения склада">
