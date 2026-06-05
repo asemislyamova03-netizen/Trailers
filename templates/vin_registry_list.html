@@ -77,7 +77,7 @@
           <td><a class="btn btn-sm btn-soft" href="{{ url_for('main.vin_registry_detail', vin_id=row.id) }}">Открыть</a></td>
           <td>
             {% if row.status == 'assigned' %}
-              {% if current_user.is_manager or current_user.is_director %}
+              {% if current_user.is_admin or current_user.is_manager or current_user.is_director %}
                 <form method="post" action="{{ url_for('main.vin_registry_confirm', vin_id=row.id) }}" class="d-inline">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                   <button class="btn btn-sm btn-orange">Подтвердить</button>
