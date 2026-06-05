@@ -1565,7 +1565,12 @@ def manager_workspace():
     if not (current_user.is_manager or current_user.is_admin or current_user.is_director):
         return redirect(url_for('main.role_home'))
 
-    warehouses = _sales_warehouses()
+    warehouses = _trailer_source_warehouses()
+    if current_user.warehouse_id and all(w.id != current_user.warehouse_id for w in warehouses):
+        user_warehouse = Warehouse.query.filter_by(id=current_user.warehouse_id, is_active=True).first()
+        if user_warehouse:
+            warehouses.append(user_warehouse)
+            warehouses.sort(key=lambda w: w.name or '')
     warehouse_id = request.args.get('warehouse_id', type=int) or current_user.warehouse_id
     if current_user.can_view_all and not warehouse_id and warehouses:
         warehouse_id = warehouses[0].id
