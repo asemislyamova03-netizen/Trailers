@@ -142,8 +142,10 @@
                 <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.produced_unit_change_item', unit_id=row.unit.id) }}">Комплектация</a>
                 {% if row.vin_conflict_trailer %}
                   <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.trailers_list', vin=row.vin_conflict_vin) }}">Открыть прицеп</a>
-                {% else %}
+                {% elif current_user.is_manager or current_user.is_director or current_user.is_admin %}
                   <a class="btn btn-sm btn-orange" href="{{ url_for('main.logistics_assign_vin', unit_id=row.unit.id) }}">{{ 'Привязать VIN' if row.vin_to_apply else 'Присвоить VIN' }}</a>
+                {% else %}
+                  <span class="text-muted small">Менеджер / директор назначит VIN</span>
                 {% endif %}
               </td>
             </tr>

@@ -8776,7 +8776,44 @@ def stock_replenishment_list():
         query = query.filter(SupplyNeed.status == status)
     needs = query.order_by(SupplyNeed.created_at.desc(), SupplyNeed.id.desc()).all()
     stats = {need.id: _stock_replenishment_stats(need) for need in needs}
-    return render_template('stock_replenishment_list.html', needs=needs, stats=stats, status=status)
+    # P0-L2: also collect CUSTOMER_ORDER produced_no_vin units waiting for manager VIN
+    # assignment. These belong to orders with produced_waiting_vin status and
+    # documents already issued — excluded from normal attach flows.
+    customer_order_vin_pending = []
+    if current_user.is_manager or current_user.is_director or current_user.is_admin:
+        pending_units = (
+            ProducedUnit.query
+            .filter(
+                ProducedUnit.status == 'produced_no_vin',
+                ProducedUnit.trailer_id.is_(None),
+                ProducedUnit.order_line_id.isnot(None),
+            )
+            .order_by(ProducedUnit.created_at.desc())
+            .limit(30)
+            .all()
+        )
+        for pu in pending_units:
+            ol = CustomerOrderLine.query.get(pu.order_line_id)
+            if not ol:
+                continue
+            order = CustomerOrder.query.get(ol.order_id)
+            if not order or order.status != 'produced_waiting_vin':
+                continue
+            if order.is_shipped:
+                continue
+            customer_order_vin_pending.append({
+                'unit': pu,
+                'order': order,
+                'order_line': ol,
+                'context': _produced_unit_context(pu),
+            })
+    return render_template(
+        'stock_replenishment_list.html',
+        needs=needs,
+        stats=stats,
+        status=status,
+        customer_order_vin_pending=customer_order_vin_pending,
+    )
 
 
 @main_bp.route('/stock-replenishment/new', methods=['GET', 'POST'])
@@ -9203,6 +9240,23 @@ def order_detail(order_id):
             and not _line_has_any_realization(line)
             and _order_line_vin_modification_code(line, order)
         )
+        # P0-L2: manager/director/admin can assign reserved VIN to produced_no_vin
+        # unit even after documents are issued (produced_waiting_vin orders).
+        # Logistics users must not see or use this action.
+        vin_assign_unit = None
+        if (
+            (current_user.is_manager or current_user.is_director or current_user.is_admin)
+            and not getattr(current_user, 'is_logistics', False)
+            and (line.fulfillment_source or '').lower() == 'production'
+            and order.status == 'produced_waiting_vin'
+            and not order.is_shipped
+            and not line.trailer_id
+        ):
+            vin_assign_unit = ProducedUnit.query.filter_by(
+                order_line_id=line.id,
+                status='produced_no_vin',
+                trailer_id=None,
+            ).first()
         attachable_produced_units = []
         attachable_ready_trailers = []
         if (
@@ -9287,6 +9341,7 @@ def order_detail(order_id):
             'line_vin_modification': _order_line_vin_modification_code(line, order),
             'attachable_produced_units': attachable_produced_units,
             'attachable_ready_trailers': attachable_ready_trailers,
+            'vin_assign_unit': vin_assign_unit,
         })
     add_line_stock_trailers = [
         trailer for trailer in (

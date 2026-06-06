@@ -219,4 +219,54 @@
 {% else %}
   <div class="app-card p-4 text-muted">Заявок на пополнение склада нет</div>
 {% endfor %}
+
+{% if customer_order_vin_pending %}
+<div class="app-card p-4 mt-3">
+  <h5 class="mb-3">Производственные заказы — ожидают привязки VIN</h5>
+  <div class="small text-muted mb-3">
+    Выпущено под заказ клиента. Документы уже выданы. Менеджер / директор должен привязать зарезервированный VIN.
+    Логист НЕ выполняет это действие.
+  </div>
+  <table class="table table-sm">
+    <thead>
+      <tr>
+        <th>Заказ</th>
+        <th>Позиция</th>
+        <th>Единица выпуска</th>
+        <th>Зарезервированный VIN</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in customer_order_vin_pending %}
+      <tr>
+        <td>
+          <a href="{{ url_for('main.order_detail', order_id=row.order.id) }}">{{ row.order.order_number }}</a>
+          <div class="small text-muted">{{ row.order.status|status_label }}</div>
+        </td>
+        <td>
+          #{{ row.order_line.line_no }}
+          <div class="small text-muted">{{ row.order_line.fulfillment_source }}</div>
+        </td>
+        <td>
+          #{{ row.unit.id }}
+          <div class="small text-muted">{{ row.unit.item.article if row.unit.item else '' }}</div>
+        </td>
+        <td>
+          {% if row.context.vin_registry %}
+            <span class="text-warning fw-semibold">{{ row.context.vin_registry.vin_full }}</span>
+            <div class="small text-muted">{{ row.context.vin_registry.status|status_label }}</div>
+          {% else %}
+            <span class="text-muted small">VIN не зарезервирован</span>
+          {% endif %}
+        </td>
+        <td class="text-end">
+          <a class="btn btn-sm btn-orange" href="{{ url_for('main.logistics_assign_vin', unit_id=row.unit.id) }}">Привязать VIN</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
 {% endblock %}

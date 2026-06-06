@@ -270,6 +270,15 @@
                   </div>
                   {% endif %}
 
+                  {% if row.vin_assign_unit %}
+                  <div class="border-top pt-2">
+                    <div class="small fw-semibold mb-1 text-warning">Выпуск готов — нужно привязать VIN</div>
+                    <div class="d-flex gap-2 align-items-center flex-wrap">
+                      <span class="small text-muted">Единица #{{ row.vin_assign_unit.id }}: выпущена без VIN, документы уже выданы.</span>
+                      <a class="btn btn-sm btn-orange" href="{{ url_for('main.logistics_assign_vin', unit_id=row.vin_assign_unit.id) }}">Привязать VIN к выпуску</a>
+                    </div>
+                  </div>
+                  {% endif %}
                   {% if row.attachable_produced_units %}
                   <div class="border-top pt-2">
                     <div class="small fw-semibold mb-1">Выпуск без VIN под эту позицию</div>
