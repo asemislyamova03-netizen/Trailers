@@ -204,11 +204,12 @@
             {% if assigned_vins_to_confirm %}<li class="mb-2"><span class="badge text-bg-warning me-2">{{ assigned_vins_to_confirm|length }}</span>Сделки ждут подтверждения VIN.</li>{% endif %}
             {% if waiting_realization_rows %}<li class="mb-2"><span class="badge text-bg-primary me-2">{{ waiting_realization_rows|length }}</span>Сделки готовы к реализации.</li>{% endif %}
             {% if waiting_movement_rows %}<li class="mb-2"><span class="badge text-bg-info me-2">{{ waiting_movement_rows|length }}</span>Сделки требуют перемещения.</li>{% endif %}
+            {% if customer_order_vin_pending %}<li class="mb-2"><span class="badge text-bg-warning me-2">{{ customer_order_vin_pending|length }}</span>Выпущенные клиентские заказы ждут привязки VIN.</li>{% endif %}
             {% if stock_replenishment_to_production %}<li class="mb-2"><span class="badge text-bg-info me-2">{{ stock_replenishment_to_production|length }}</span>Пополнение склада нужно отдать в производство.</li>{% endif %}
             {% if stock_replenishment_needs_vin %}<li class="mb-2"><span class="badge text-bg-warning me-2">{{ stock_replenishment_needs_vin|length }}</span>Выпущенные пополнения ждут VIN.</li>{% endif %}
             {% if stock_replenishment_needs_movement %}<li class="mb-2"><span class="badge text-bg-info me-2">{{ stock_replenishment_needs_movement|length }}</span>Пополнения с VIN нужно переместить на склад.</li>{% endif %}
             {% if blocked_order_rows %}<li class="mb-2"><span class="badge text-bg-secondary me-2">{{ blocked_order_rows|length }}</span>Сделки имеют блокеры.</li>{% endif %}
-            {% if not unread_messages_count and not assigned_vins_to_confirm and not waiting_realization_rows and not waiting_movement_rows and not stock_replenishment_to_production and not stock_replenishment_needs_vin and not stock_replenishment_needs_movement and not blocked_order_rows %}<li class="text-muted">Критичных задач нет.</li>{% endif %}
+            {% if not unread_messages_count and not assigned_vins_to_confirm and not waiting_realization_rows and not waiting_movement_rows and not customer_order_vin_pending and not stock_replenishment_to_production and not stock_replenishment_needs_vin and not stock_replenishment_needs_movement and not blocked_order_rows %}<li class="text-muted">Критичных задач нет.</li>{% endif %}
           </ul>
         </div>
       </div>
@@ -235,6 +236,58 @@
           </div>
         </div>
       </div>
+      {% if customer_order_vin_pending %}
+      <div class="col-12">
+        <div class="app-card p-3">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h2 class="h6 mb-0">Клиентские заказы ждут VIN</h2>
+            <a class="btn btn-sm btn-soft" href="{{ url_for('main.stock_replenishment_list') }}">Открыть список</a>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+              <thead>
+                <tr>
+                  <th>Заказ</th>
+                  <th>Позиция</th>
+                  <th>Выпуск</th>
+                  <th>VIN</th>
+                  <th class="text-end">Действие</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in customer_order_vin_pending %}
+                  <tr>
+                    <td>
+                      <a class="fw-semibold" href="{{ url_for('main.order_detail', order_id=row.order.id) }}">{{ row.order.order_number }}</a>
+                      <div class="small text-muted">{{ row.order.status|status_label }}</div>
+                    </td>
+                    <td>
+                      #{{ row.order_line.line_no }}
+                      <div class="small text-muted">{{ row.order_line.fulfillment_source or 'источник не задан' }}</div>
+                    </td>
+                    <td>
+                      #{{ row.unit.id }}
+                      <div class="small text-muted">{{ row.unit.item.article if row.unit.item else '' }}</div>
+                    </td>
+                    <td>
+                      {% if row.context.vin_registry %}
+                        <span class="text-warning fw-semibold">{{ row.context.vin_registry.vin_full or row.context.vin_registry.serial7 }}</span>
+                        <div class="small text-muted">{{ row.context.vin_registry.status|status_label }}</div>
+                      {% else %}
+                        <span class="text-muted small">VIN не зарезервирован</span>
+                      {% endif %}
+                    </td>
+                    <td class="text-end">
+                      <a class="btn btn-sm btn-orange" href="{{ url_for('main.logistics_assign_vin', unit_id=row.unit.id) }}">Привязать VIN</a>
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      {% endif %}
       {% if stock_replenishment_needs_vin %}
       <div class="col-12">
         <div class="app-card p-3">

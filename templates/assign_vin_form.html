@@ -12,6 +12,18 @@
   {% elif expected_modification %}
     <div class="alert alert-info">Показаны свободные VIN из реестра с модификацией <strong>{{ expected_modification }}</strong>.</div>
   {% endif %}
+  {% if free_vin_diagnostics %}
+    {% if free_vin_diagnostics.serial_only_count or free_vin_diagnostics.modification_hidden_count %}
+      <div class="alert alert-light border small">
+        {% if free_vin_diagnostics.serial_only_count %}
+          <div>Не показаны VIN без полного номера: {{ free_vin_diagnostics.serial_only_count }}. Логист должен заполнить полный VIN.</div>
+        {% endif %}
+        {% if expected_modification and free_vin_diagnostics.modification_hidden_count %}
+          <div>Не показаны VIN другой модификации: {{ free_vin_diagnostics.modification_hidden_count }}. Для этого выпуска нужна модификация {{ expected_modification }}.</div>
+        {% endif %}
+      </div>
+    {% endif %}
+  {% endif %}
   <form method="post" class="row g-3">
     {{ form.hidden_tag() }}
     <div class="col-md-6">
