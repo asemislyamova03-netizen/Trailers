@@ -576,7 +576,10 @@ def _order_is_shipped(order: CustomerOrder | None) -> bool:
 def _trailer_available_for_sale(trailer: Trailer, exclude_order_id: int | None = None) -> bool:
     if not trailer or trailer.status != 'IN_STOCK' or _trailer_is_customer_shipped(trailer):
         return False
-    if trailer.warehouse and not getattr(trailer.warehouse, 'can_sell', True):
+    if trailer.warehouse and not (
+        getattr(trailer.warehouse, 'can_sell', True)
+        or getattr(trailer.warehouse, 'is_production', False)
+    ):
         return False
     return _active_reservation_for_trailer(trailer.id, exclude_order_id=exclude_order_id) is None
 
