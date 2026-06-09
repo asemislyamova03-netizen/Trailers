@@ -86,6 +86,9 @@
           {% if st.problem_qty %}
             <span class="badge text-bg-danger">Проблемные выпуски: {{ st.problem_qty }}</span>
           {% endif %}
+          {% if st.reassigned_qty %}
+            <span class="badge text-bg-secondary">Переназначено в заказ: {{ st.reassigned_qty }}</span>
+          {% endif %}
           <span class="text-muted small">{{ need.created_at|date_format }}</span>
         </div>
         <div class="fw-semibold stock-need-title">{{ need.item.article if need.item else '' }}</div>
@@ -106,6 +109,9 @@
         {% if st.problem_qty %}
           <div class="stock-need-metric border-danger-subtle"><div class="label text-danger">Проблемы</div><div class="value text-danger">{{ st.problem_qty }}</div></div>
         {% endif %}
+        {% if st.reassigned_qty %}
+          <div class="stock-need-metric border-secondary-subtle"><div class="label text-secondary">В заказе</div><div class="value text-secondary">{{ st.reassigned_qty }}</div></div>
+        {% endif %}
         <div class="stock-need-metric"><div class="label">Осталось</div><div class="value">{{ st.remaining_qty }}</div></div>
         {% if st.needs_vin_qty %}
           <div class="stock-need-next-step bg-warning-subtle text-warning-emphasis">
@@ -121,6 +127,11 @@
           <div class="stock-need-next-step bg-danger-subtle text-danger-emphasis">
             <div class="fw-semibold">Проблемные выпуски</div>
             <div class="small">Выпуск не попал ни в VIN, ни в перемещение, ни на склад. Проверьте связь с продажей, перемещением или старым заказом.</div>
+          </div>
+        {% elif st.reassigned_qty %}
+          <div class="stock-need-next-step bg-secondary-subtle text-secondary-emphasis">
+            <div class="fw-semibold">Выпуск переназначен в заказ</div>
+            <div class="small">Эти единицы больше не считаются складским пополнением. История выпуска сохранена, действий не требуется.</div>
           </div>
         {% endif %}
       </div>
@@ -183,6 +194,15 @@
           {% else %}
             <span class="text-muted small">Нужна очистка директором/админом или проверка PR.</span>
           {% endif %}
+        {% elif st.reassigned_qty %}
+          <div class="text-secondary fw-semibold">Переназначено в заказ</div>
+          {% for reassigned_unit in st.reassigned_units %}
+            <div class="small text-muted">
+              #{{ reassigned_unit.id }}
+              {% if reassigned_unit.trailer %} · {{ reassigned_unit.trailer.vin }}{% endif %}
+              {% if reassigned_unit.order_id %} · заказ #{{ reassigned_unit.order_id }}{% endif %}
+            </div>
+          {% endfor %}
         {% elif need.status == 'NEW' and (current_user.is_admin or current_user.is_director or current_user.is_manager) %}
           <form method="post" action="{{ url_for('main.supply_need_create_production_request', need_id=need.id) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

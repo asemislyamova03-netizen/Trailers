@@ -8799,27 +8799,34 @@ def supply_needs_list():
     return render_template('supply_needs_list.html', needs=needs, status=status)
 
 
-def _stock_replenishment_stats(need: SupplyNeed):
-    lines = list(need.production_lines or [])
-    units = (
-        ProducedUnit.query
-        .join(ProductionRequestLine, ProductionRequestLine.id == ProducedUnit.production_request_line_id)
-        .filter(ProductionRequestLine.supply_need_id == need.id)
-        .all()
-    )
+def _is_stock_replenishment_unit_reassigned(unit) -> bool:
+    """Stock replenishment unit no longer counts toward warehouse fill metrics."""
+    if unit.order_id or unit.order_line_id:
+        return True
+    trailer = unit.trailer
+    if not trailer:
+        return False
+    if (trailer.status or '').upper() == 'SOLD' or trailer.lifecycle_status == 'customer_shipped':
+        return True
+    return _trailer_has_sale_or_document_links(trailer)
+
+
+def _stock_replenishment_metrics(need: SupplyNeed, lines: list, units: list):
+    reassigned_units = [unit for unit in units if _is_stock_replenishment_unit_reassigned(unit)]
+    stock_units = [unit for unit in units if unit not in reassigned_units]
     accepted_qty = sum(
-        1 for unit in units
+        1 for unit in stock_units
         if unit.trailer and unit.trailer.warehouse_id == need.warehouse_id and unit.trailer.status == 'IN_STOCK'
     )
     # P0-L: include ALL produced_no_vin units regardless of order_line_id.
     # A unit with order_line_id is waiting for VIN assignment for a customer-order
     # production run — it needs the "Присвоить VIN" action, not "Удалить выпуск".
     needs_vin_units = [
-        unit for unit in units
+        unit for unit in stock_units
         if unit.status == 'produced_no_vin' and not unit.order_id
     ]
     needs_movement_units = [
-        unit for unit in units
+        unit for unit in stock_units
         if (
             unit.status == 'vin_assigned'
             and unit.trailer
@@ -8829,12 +8836,12 @@ def _stock_replenishment_stats(need: SupplyNeed):
         )
     ]
     accepted_unit_ids = {
-        unit.id for unit in units
+        unit.id for unit in stock_units
         if unit.trailer and unit.trailer.warehouse_id == need.warehouse_id and unit.trailer.status == 'IN_STOCK'
     }
     accounted_unit_ids = accepted_unit_ids | {unit.id for unit in needs_vin_units} | {unit.id for unit in needs_movement_units}
     problem_units = [
-        unit for unit in units
+        unit for unit in stock_units
         if unit.id not in accounted_unit_ids
         and (
             unit.order_id
@@ -8844,7 +8851,7 @@ def _stock_replenishment_stats(need: SupplyNeed):
             or (unit.status not in ('produced_no_vin', 'vin_assigned'))
         )
     ]
-    produced_qty = len(units)
+    produced_qty = len(stock_units)
     in_production_qty = sum(line.quantity or 0 for line in lines)
     production_requests = {}
     for line in lines:
@@ -8861,8 +8868,21 @@ def _stock_replenishment_stats(need: SupplyNeed):
         'problem_units': problem_units,
         'accepted_qty': accepted_qty,
         'remaining_qty': max((need.quantity or 0) - accepted_qty, 0),
+        'reassigned_qty': len(reassigned_units),
+        'reassigned_units': reassigned_units,
         'production_requests': sorted(production_requests.values(), key=lambda pr: pr.created_at or datetime.min, reverse=True),
     }
+
+
+def _stock_replenishment_stats(need: SupplyNeed):
+    lines = list(need.production_lines or [])
+    units = (
+        ProducedUnit.query
+        .join(ProductionRequestLine, ProductionRequestLine.id == ProducedUnit.production_request_line_id)
+        .filter(ProductionRequestLine.supply_need_id == need.id)
+        .all()
+    )
+    return _stock_replenishment_metrics(need, lines, units)
 
 
 def _customer_order_vin_pending_rows(limit: int = 30) -> list[dict]:
