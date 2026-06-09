@@ -1547,29 +1547,11 @@ def _locked_config_base_matches(config: dict, locked_config: dict | None) -> boo
 
 
 def _can_change_trailer_item(trailer: Trailer) -> tuple[bool, str]:
-    if _trailer_is_customer_shipped(trailer):
-        return False, 'Комплектацию нельзя менять: прицеп уже отгружен клиенту.'
-    if _active_movement_for_trailer(trailer.id):
-        return False, 'Комплектацию нельзя менять: по прицепу есть активное перемещение.'
-    orders = CustomerOrder.query.filter_by(trailer_id=trailer.id).all()
-    if any(order.documents_issued or _order_is_shipped(order) for order in orders):
-        return False, 'Комплектацию нельзя менять: по связанному заказу уже выданы документы или выполнена отгрузка.'
-    if SalesContract.query.filter_by(trailer_id=trailer.id).first():
-        return False, 'Комплектацию нельзя менять: по прицепу уже есть договор.'
-    if VinRegistry.query.filter(VinRegistry.trailer_id == trailer.id, VinRegistry.docs_issued_at.isnot(None)).first():
-        return False, 'Комплектацию нельзя менять: по VIN уже выданы документы.'
-    return True, ''
+    return _configuration_change_allowance_for_trailer(trailer)
 
 
 def _can_change_produced_unit_item(unit: ProducedUnit) -> tuple[bool, str]:
-    if unit.status != 'produced_no_vin' or unit.trailer_id:
-        return False, 'Комплектацию можно менять только у выпущенной единицы без VIN.'
-    order = unit.order if unit.order_id else None
-    if not order and unit.production_request_line and unit.production_request_line.supply_need:
-        order = unit.production_request_line.supply_need.order
-    if order and (order.documents_issued or _order_is_shipped(order)):
-        return False, 'Комплектацию нельзя менять: по заказу уже выданы документы или выполнена отгрузка.'
-    return True, ''
+    return _configuration_change_allowance_for_produced_unit(unit)
 
 
 @main_bp.route('/workspace')
@@ -2067,85 +2049,26 @@ def trailer_change_item(trailer_id):
     result = _build_config_result(config)
 
     if request.method == 'POST':
-        if not _locked_config_base_matches(config, locked_config):
-            flash('Нельзя менять группу, тип кузова и размер кузова. Измените только комплектацию.', 'danger')
-            return render_template(
-                'trailer_item_form.html',
-                form=form,
-                title='Изменить комплектацию прицепа',
-                current_item=trailer.item,
-                target_label=f'Trailer #{trailer.id} {trailer.vin or ""}',
-                back_url=back_url,
-                locked_base=True,
-                locked_config=locked_config,
-                config=config,
-                config_options=_trailer_config_form_context(),
-                result=result,
-            )
-        if result.get('errors'):
-            for error in result.get('errors') or []:
-                flash(error, 'danger')
-            return render_template(
-                'trailer_item_form.html',
-                form=form,
-                title='Изменить комплектацию прицепа',
-                current_item=trailer.item,
-                target_label=f'Trailer #{trailer.id} {trailer.vin or ""}',
-                back_url=back_url,
-                locked_base=True,
-                locked_config=locked_config,
-                config=config,
-                config_options=_trailer_config_form_context(),
-                result=result,
-            )
-        item = get_or_create_configured_item(result)
-        if not _item_base_matches_locked_item(item, trailer.item):
-            flash('Нельзя менять размер рамы / кузова и количество осей. Выберите комплектацию с тем же размером и осями.', 'danger')
-            return render_template(
-                'trailer_item_form.html',
-                form=form,
-                title='Изменить комплектацию прицепа',
-                current_item=trailer.item,
-                target_label=f'Trailer #{trailer.id} {trailer.vin or ""}',
-                back_url=back_url,
-                locked_base=True,
-                locked_config=locked_config,
-                config=config,
-                config_options=_trailer_config_form_context(),
-                result=result,
-            )
-        old_item = trailer.item
-        old_label = old_item.article if old_item else trailer.item_id
-        trailer.item_id = item.id
-        for unit in ProducedUnit.query.filter_by(trailer_id=trailer.id).all():
-            unit.item_id = item.id
-        for reservation in Reservation.query.filter_by(trailer_id=trailer.id, status='ACTIVE').all():
-            reservation.item_id = item.id
-        for order in CustomerOrder.query.filter_by(trailer_id=trailer.id).all():
-            if not order.documents_issued and not _order_is_shipped(order):
-                order.item_id = item.id
-                add_order_event(
-                    order,
-                    'comment_added',
-                    old_value=str(old_label or ''),
-                    new_value=item.article or str(item.id),
-                    comment='Изменена комплектация закреплённого прицепа',
-                )
-        db.session.commit()
-        flash('Комплектация прицепа обновлена.', 'success')
-        return redirect(back_url)
+        chain = _resolve_configuration_chain_from_trailer(trailer)
+        return _process_configuration_change_post(
+            chain,
+            locked_item=trailer.item,
+            back_url=back_url,
+            title='Изменить комплектацию прицепа',
+            target_label=f'Trailer #{trailer.id} {trailer.vin or ""}',
+            form=form,
+            config=config,
+            result=result,
+            success_comment='Изменена комплектация закреплённого прицепа',
+        )
 
-    return render_template(
-        'trailer_item_form.html',
+    return _render_configuration_change_form(
         form=form,
         title='Изменить комплектацию прицепа',
-        current_item=trailer.item,
+        locked_item=trailer.item,
         target_label=f'Trailer #{trailer.id} {trailer.vin or ""}',
         back_url=back_url,
-        locked_base=True,
-        locked_config=locked_config,
         config=config,
-        config_options=_trailer_config_form_context(),
         result=result,
     )
 
@@ -5699,6 +5622,443 @@ def _can_edit_order_line_quantity(line: CustomerOrderLine) -> tuple[bool, str]:
 
 def _line_has_posted_realization(line: CustomerOrderLine) -> bool:
     return any(row.realization and row.realization.status == 'posted' for row in line.realization_lines)
+
+
+_INACTIVE_SUPPLY_NEED_STATUSES = frozenset({'CANCELLED', 'CANCELED', 'DONE', 'CLOSED', 'VOID'})
+_CONFIGURATION_CHANGE_ADMIN_HINT = (
+    ' Для исправления после выдачи документов или проведённой реализации нужен отдельный admin correction flow.'
+)
+_CONFIGURATION_BOM_WARNING = 'BOM/material delta requires separate inventory operation.'
+
+
+class _ConfigurationChain:
+    __slots__ = (
+        'produced_units', 'trailer', 'order_line', 'order',
+        'supply_need', 'production_request_line', 'reservations',
+    )
+
+    def __init__(
+        self,
+        *,
+        produced_units=None,
+        trailer=None,
+        order_line=None,
+        order=None,
+        supply_need=None,
+        production_request_line=None,
+        reservations=None,
+    ):
+        self.produced_units = list(produced_units or [])
+        self.trailer = trailer
+        self.order_line = order_line
+        self.order = order
+        self.supply_need = supply_need
+        self.production_request_line = production_request_line
+        self.reservations = list(reservations or [])
+
+
+def _is_active_supply_need(need: SupplyNeed | None) -> bool:
+    if not need:
+        return False
+    return (need.status or '').upper() not in _INACTIVE_SUPPLY_NEED_STATUSES
+
+
+def _is_active_production_request_line(line: ProductionRequestLine | None) -> bool:
+    if not line:
+        return False
+    return (line.status or '').lower() not in _INACTIVE_PRODUCTION_REQUEST_LINE_STATUSES
+
+
+def _order_has_posted_realization(order: CustomerOrder | None) -> bool:
+    if not order or not order.id:
+        return False
+    return any((row.status or '').lower() == 'posted' for row in order.sales_realizations)
+
+
+def _produced_unit_reassigned_from_stock_replenishment(unit: ProducedUnit) -> bool:
+    if unit.order_id or unit.order_line_id:
+        return True
+    trailer = unit.trailer
+    if not trailer:
+        return False
+    if (trailer.status or '').upper() == 'SOLD' or trailer.lifecycle_status == 'customer_shipped':
+        return True
+    return _trailer_has_sale_or_document_links(trailer)
+
+
+def _resolve_configuration_chain_from_produced_unit(unit: ProducedUnit) -> _ConfigurationChain:
+    prl = unit.production_request_line
+    raw_need = prl.supply_need if prl else None
+    need = raw_need if _is_active_supply_need(raw_need) else None
+    active_prl = prl if _is_active_production_request_line(prl) else None
+    order_line = unit.order_line
+    if not order_line and unit.order_line_id:
+        order_line = CustomerOrderLine.query.get(unit.order_line_id)
+    if not order_line and need and need.order_line_id:
+        order_line = need.order_line or CustomerOrderLine.query.get(need.order_line_id)
+    order = unit.order
+    if not order and unit.order_id:
+        order = CustomerOrder.query.get(unit.order_id)
+    if not order and order_line:
+        order = order_line.order
+    if not order and need and need.order_id:
+        order = need.order
+    trailer = unit.trailer
+    produced_units = [unit]
+    if trailer:
+        produced_units = ProducedUnit.query.filter_by(trailer_id=trailer.id).all() or [unit]
+    reservations = []
+    if trailer:
+        reservations = Reservation.query.filter_by(trailer_id=trailer.id, status='ACTIVE').all()
+    return _ConfigurationChain(
+        produced_units=produced_units,
+        trailer=trailer,
+        order_line=order_line,
+        order=order,
+        supply_need=need,
+        production_request_line=active_prl,
+        reservations=reservations,
+    )
+
+
+def _resolve_configuration_chain_from_trailer(trailer: Trailer) -> _ConfigurationChain:
+    produced_units = ProducedUnit.query.filter_by(trailer_id=trailer.id).all()
+    pu = produced_units[0] if produced_units else None
+    if pu:
+        chain = _resolve_configuration_chain_from_produced_unit(pu)
+        chain.trailer = trailer
+        if not chain.reservations:
+            chain.reservations = Reservation.query.filter_by(trailer_id=trailer.id, status='ACTIVE').all()
+        return chain
+    order = CustomerOrder.query.filter_by(trailer_id=trailer.id).first()
+    order_line = None
+    if order:
+        order_line = order.lines.filter_by(trailer_id=trailer.id).first()
+        if not order_line:
+            order_line = order.lines.filter(CustomerOrderLine.line_type == 'TRAILER').first()
+    reservations = Reservation.query.filter_by(trailer_id=trailer.id, status='ACTIVE').all()
+    return _ConfigurationChain(
+        produced_units=produced_units,
+        trailer=trailer,
+        order_line=order_line,
+        order=order,
+        supply_need=None,
+        production_request_line=None,
+        reservations=reservations,
+    )
+
+
+def _effective_vin_for_configuration_chain(chain: _ConfigurationChain) -> str | None:
+    if chain.trailer and chain.trailer.vin:
+        return chain.trailer.vin
+    if chain.order_line:
+        row = _active_vin_registry_for_order_line(chain.order_line.id)
+        if row and row.vin_full:
+            return row.vin_full
+    return None
+
+
+def _normalize_vin_modification_code(value: str | None) -> str:
+    raw = (value or '').strip()
+    if not raw:
+        return ''
+    digits = ''.join(ch for ch in raw if ch.isdigit())
+    if len(digits) >= 3:
+        return digits[-3:]
+    try:
+        return f'{int(raw):03d}'
+    except ValueError:
+        return raw
+
+
+def _vin_modification_compatible(vin: str | None, snapshot: dict | None) -> bool:
+    if not vin:
+        return True
+    expected = _normalize_vin_modification_code(_extract_modification_from_vin(vin))
+    actual = _normalize_vin_modification_code((snapshot or {}).get('vin_modification_code'))
+    if not expected or not actual:
+        return True
+    return expected == actual
+
+
+def _configuration_change_blockers(
+    chain: _ConfigurationChain,
+    *,
+    locked_item: Item | None = None,
+    new_item: Item | None = None,
+    snapshot: dict | None = None,
+) -> list[str]:
+    blockers: list[str] = []
+    trailer = chain.trailer
+    order = chain.order
+
+    if trailer and _trailer_is_customer_shipped(trailer):
+        blockers.append('прицеп уже отгружен клиенту')
+    if trailer and _active_movement_for_trailer(trailer.id):
+        blockers.append('по прицепу есть активное перемещение')
+    if trailer and _posted_realization_for_trailer(trailer.id):
+        blockers.append('по прицепу уже проведена реализация')
+
+    for unit in chain.produced_units:
+        if _produced_unit_reassigned_from_stock_replenishment(unit):
+            blockers.append(f'выпуск #{unit.id} переназначен в заказ')
+            break
+
+    if chain.produced_units:
+        allowed_statuses = {'produced_no_vin', 'vin_assigned'}
+        if any((unit.status or '').lower() not in allowed_statuses for unit in chain.produced_units):
+            blockers.append('статус выпуска не позволяет менять комплектацию')
+
+    orders_to_check: list[CustomerOrder] = []
+    if order:
+        orders_to_check.append(order)
+    if trailer:
+        orders_to_check.extend(CustomerOrder.query.filter_by(trailer_id=trailer.id).all())
+    seen_order_ids: set[int] = set()
+    for ord_row in orders_to_check:
+        if not ord_row or not ord_row.id or ord_row.id in seen_order_ids:
+            continue
+        seen_order_ids.add(ord_row.id)
+        if _order_is_shipped(ord_row) or (ord_row.status or '').lower() in ('shipped', 'customer_shipped', 'done'):
+            blockers.append('заказ уже отгружен')
+            break
+        if _order_has_posted_realization(ord_row):
+            blockers.append('по заказу уже проведена реализация')
+            break
+        if ord_row.documents_issued:
+            blockers.append(
+                'по заказу уже выданы документы.' + _CONFIGURATION_CHANGE_ADMIN_HINT
+            )
+            break
+
+    if chain.order_line and _line_has_posted_realization(chain.order_line):
+        blockers.append('по позиции уже проведена реализация')
+
+    if trailer:
+        vin_row = VinRegistry.query.filter(
+            VinRegistry.trailer_id == trailer.id,
+            VinRegistry.docs_issued_at.isnot(None),
+        ).first()
+        if vin_row:
+            blockers.append('по VIN уже выданы документы.' + _CONFIGURATION_CHANGE_ADMIN_HINT)
+
+    if new_item and locked_item and not _item_base_matches_locked_item(new_item, locked_item):
+        blockers.append('нельзя менять размер рамы / кузова и количество осей')
+
+    effective_vin = _effective_vin_for_configuration_chain(chain)
+    if effective_vin and snapshot is not None and not _vin_modification_compatible(effective_vin, snapshot):
+        blockers.append(
+            'несовместимая модификация VIN: выберите комплектацию с той же модификацией или смените VIN'
+        )
+
+    return blockers
+
+
+def _configuration_change_allowance_message(blockers: list[str]) -> str:
+    if not blockers:
+        return ''
+    message = blockers[0]
+    if not message.endswith('.'):
+        message += '.'
+    return 'Комплектацию нельзя менять: ' + message
+
+
+def _configuration_change_allowance_for_trailer(trailer: Trailer) -> tuple[bool, str]:
+    chain = _resolve_configuration_chain_from_trailer(trailer)
+    blockers = _configuration_change_blockers(chain, locked_item=trailer.item)
+    if blockers:
+        return False, _configuration_change_allowance_message(blockers)
+    return True, ''
+
+
+def _configuration_change_allowance_for_produced_unit(unit: ProducedUnit) -> tuple[bool, str]:
+    chain = _resolve_configuration_chain_from_produced_unit(unit)
+    blockers = _configuration_change_blockers(chain, locked_item=unit.item)
+    if blockers:
+        return False, _configuration_change_allowance_message(blockers)
+    return True, ''
+
+
+def _should_sync_order_header_for_configuration(order: CustomerOrder | None, line: CustomerOrderLine | None) -> bool:
+    if not order or not line:
+        return False
+    trailer_lines = [row for row in order.lines if (row.line_type or '').upper() == 'TRAILER']
+    if len(trailer_lines) == 1 and trailer_lines[0].id == line.id:
+        return True
+    if order.trailer_id and line.trailer_id == order.trailer_id:
+        return True
+    return False
+
+
+def _sync_sales_contract_lines_for_configuration(
+    chain: _ConfigurationChain,
+    new_item: Item,
+    snapshot: dict,
+) -> None:
+    if not chain.order or chain.order.documents_issued or _order_has_posted_realization(chain.order):
+        return
+    contract_lines: list[SalesContractLine] = []
+    seen_ids: set[int] = set()
+    if chain.order_line:
+        for row in SalesContractLine.query.filter_by(order_line_id=chain.order_line.id).all():
+            if row.id not in seen_ids:
+                seen_ids.add(row.id)
+                contract_lines.append(row)
+    if chain.trailer:
+        for row in SalesContractLine.query.filter_by(trailer_id=chain.trailer.id).all():
+            if row.id not in seen_ids:
+                seen_ids.add(row.id)
+                contract_lines.append(row)
+    for row in contract_lines:
+        row.item_id = new_item.id
+        _apply_snapshot(row, snapshot)
+
+
+def _apply_configuration_change(
+    chain: _ConfigurationChain,
+    new_item: Item,
+    snapshot: dict,
+    *,
+    old_item: Item | None,
+    comment: str | None = None,
+) -> None:
+    old_label = old_item.article if old_item else None
+    new_label = new_item.article or str(new_item.id)
+
+    for unit in chain.produced_units:
+        unit.item_id = new_item.id
+    if chain.trailer:
+        chain.trailer.item_id = new_item.id
+    if chain.order_line:
+        chain.order_line.item_id = new_item.id
+        _apply_snapshot(chain.order_line, snapshot)
+    if chain.order and _should_sync_order_header_for_configuration(chain.order, chain.order_line):
+        chain.order.item_id = new_item.id
+        _apply_snapshot(chain.order, snapshot)
+    for reservation in chain.reservations:
+        reservation.item_id = new_item.id
+    if chain.supply_need:
+        chain.supply_need.item_id = new_item.id
+        _apply_snapshot(chain.supply_need, snapshot)
+    if chain.production_request_line:
+        chain.production_request_line.item_id = new_item.id
+        _apply_snapshot(chain.production_request_line, snapshot)
+        note = f'Изменена комплектация: {old_label or "?"} -> {new_label}. {_CONFIGURATION_BOM_WARNING}'
+        existing = (chain.production_request_line.production_comment or '').strip()
+        chain.production_request_line.production_comment = f'{existing}\n{note}'.strip() if existing else note
+    _sync_sales_contract_lines_for_configuration(chain, new_item, snapshot)
+    if chain.order:
+        add_order_event(
+            chain.order,
+            'comment_added',
+            old_value=str(old_label or ''),
+            new_value=new_label,
+            comment=comment or 'Изменена комплектация',
+        )
+
+
+def _render_configuration_change_form(
+    *,
+    form,
+    title: str,
+    locked_item: Item | None,
+    target_label: str,
+    back_url: str,
+    config: dict,
+    result: dict,
+):
+    return render_template(
+        'trailer_item_form.html',
+        form=form,
+        title=title,
+        current_item=locked_item,
+        target_label=target_label,
+        back_url=back_url,
+        locked_base=True,
+        locked_config=_config_from_item(locked_item),
+        config=config,
+        config_options=_trailer_config_form_context(),
+        result=result,
+    )
+
+
+def _process_configuration_change_post(
+    chain: _ConfigurationChain,
+    *,
+    locked_item: Item | None,
+    back_url: str,
+    title: str,
+    target_label: str,
+    form,
+    config: dict,
+    result: dict,
+    success_comment: str,
+):
+    locked_config = _config_from_item(locked_item)
+    if not _locked_config_base_matches(config, locked_config):
+        flash('Нельзя менять группу, тип кузова и размер кузова. Измените только комплектацию.', 'danger')
+        return _render_configuration_change_form(
+            form=form,
+            title=title,
+            locked_item=locked_item,
+            target_label=target_label,
+            back_url=back_url,
+            config=config,
+            result=result,
+        )
+    if result.get('errors'):
+        for error in result.get('errors') or []:
+            flash(error, 'danger')
+        return _render_configuration_change_form(
+            form=form,
+            title=title,
+            locked_item=locked_item,
+            target_label=target_label,
+            back_url=back_url,
+            config=config,
+            result=result,
+        )
+    item = get_or_create_configured_item(result)
+    snapshot = _snapshot_from_result(result)
+    blockers = _configuration_change_blockers(
+        chain,
+        locked_item=locked_item,
+        new_item=item,
+        snapshot=snapshot,
+    )
+    if blockers:
+        flash(_configuration_change_allowance_message(blockers), 'danger')
+        return _render_configuration_change_form(
+            form=form,
+            title=title,
+            locked_item=locked_item,
+            target_label=target_label,
+            back_url=back_url,
+            config=config,
+            result=result,
+        )
+    if not _item_base_matches_locked_item(item, locked_item):
+        flash('Нельзя менять размер рамы / кузова и количество осей. Выберите комплектацию с тем же размером и осями.', 'danger')
+        return _render_configuration_change_form(
+            form=form,
+            title=title,
+            locked_item=locked_item,
+            target_label=target_label,
+            back_url=back_url,
+            config=config,
+            result=result,
+        )
+    _apply_configuration_change(
+        chain,
+        item,
+        snapshot,
+        old_item=locked_item,
+        comment=success_comment,
+    )
+    db.session.commit()
+    flash('Комплектация обновлена.', 'success')
+    flash(_CONFIGURATION_BOM_WARNING, 'warning')
+    return redirect(back_url)
 
 
 def _line_has_any_realization(line: CustomerOrderLine) -> bool:
@@ -14074,85 +14434,26 @@ def produced_unit_change_item(unit_id):
     result = _build_config_result(config)
 
     if request.method == 'POST':
-        if not _locked_config_base_matches(config, locked_config):
-            flash('Нельзя менять группу, тип кузова и размер кузова. Измените только комплектацию.', 'danger')
-            return render_template(
-                'trailer_item_form.html',
-                form=form,
-                title='Изменить комплектацию выпущенной единицы',
-                current_item=unit.item,
-                target_label=f'Выпущенная единица #{unit.id}',
-                back_url=back_url,
-                locked_base=True,
-                locked_config=locked_config,
-                config=config,
-                config_options=_trailer_config_form_context(),
-                result=result,
-            )
-        if result.get('errors'):
-            for error in result.get('errors') or []:
-                flash(error, 'danger')
-            return render_template(
-                'trailer_item_form.html',
-                form=form,
-                title='Изменить комплектацию выпущенной единицы',
-                current_item=unit.item,
-                target_label=f'Выпущенная единица #{unit.id}',
-                back_url=back_url,
-                locked_base=True,
-                locked_config=locked_config,
-                config=config,
-                config_options=_trailer_config_form_context(),
-                result=result,
-            )
-        item = get_or_create_configured_item(result)
-        if not _item_base_matches_locked_item(item, unit.item):
-            flash('Нельзя менять размер рамы / кузова и количество осей. Выберите комплектацию с тем же размером и осями.', 'danger')
-            return render_template(
-                'trailer_item_form.html',
-                form=form,
-                title='Изменить комплектацию выпущенной единицы',
-                current_item=unit.item,
-                target_label=f'Выпущенная единица #{unit.id}',
-                back_url=back_url,
-                locked_base=True,
-                locked_config=locked_config,
-                config=config,
-                config_options=_trailer_config_form_context(),
-                result=result,
-            )
-        old_item = unit.item
-        old_label = old_item.article if old_item else unit.item_id
-        unit.item_id = item.id
+        chain = _resolve_configuration_chain_from_produced_unit(unit)
+        return _process_configuration_change_post(
+            chain,
+            locked_item=unit.item,
+            back_url=back_url,
+            title='Изменить комплектацию выпущенной единицы',
+            target_label=f'Выпущенная единица #{unit.id}',
+            form=form,
+            config=config,
+            result=result,
+            success_comment='Изменена комплектация выпущенной единицы',
+        )
 
-        order = unit.order if unit.order_id else None
-        if not order and unit.production_request_line and unit.production_request_line.supply_need:
-            order = unit.production_request_line.supply_need.order
-        if order and not order.documents_issued and not _order_is_shipped(order):
-            order.item_id = item.id
-            add_order_event(
-                order,
-                'comment_added',
-                old_value=str(old_label or ''),
-                new_value=item.article or str(item.id),
-                comment='Изменена комплектация выпущенной единицы без VIN',
-            )
-
-        db.session.commit()
-        flash('Комплектация выпущенной единицы обновлена.', 'success')
-        return redirect(back_url)
-
-    return render_template(
-        'trailer_item_form.html',
+    return _render_configuration_change_form(
         form=form,
         title='Изменить комплектацию выпущенной единицы',
-        current_item=unit.item,
+        locked_item=unit.item,
         target_label=f'Выпущенная единица #{unit.id}',
         back_url=back_url,
-        locked_base=True,
-        locked_config=locked_config,
         config=config,
-        config_options=_trailer_config_form_context(),
         result=result,
     )
 
