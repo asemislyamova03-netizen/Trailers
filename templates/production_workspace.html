@@ -55,9 +55,10 @@
 <div class="app-card">
   <div class="table-responsive">
     <table class="table table-sm align-middle mb-0">
-      <thead><tr><th>Ед.</th><th>Модель</th><th>Склад</th><th>VIN</th><th>Статус</th><th>Дата</th></tr></thead>
+      <thead><tr><th>Ед.</th><th>Модель</th><th>Склад</th><th>VIN</th><th>Статус</th><th>Дата</th><th></th></tr></thead>
       <tbody>
-      {% for unit in (today_units if active_tab == 'done_today' else history_units) %}
+      {% for row in (today_unit_rows if active_tab == 'done_today' else history_unit_rows) %}
+        {% set unit = row.unit %}
         {% set vin_row = production_vin_row_for_unit(unit) %}
         <tr>
           <td class="fw-semibold">#{{ unit.id }}</td>
@@ -66,9 +67,10 @@
           <td>{% if unit.trailer %}<span class="fw-semibold">{{ unit.trailer.vin }}</span>{% elif vin_row %}<span class="fw-semibold">{{ vin_row.vin_full }}</span>{% else %}<span class="text-muted">ждёт менеджера</span>{% endif %}{% if vin_row and vin_row.docs_issued_at %}<div class="small text-danger">Документы выданы</div>{% endif %}</td>
           <td><span class="badge text-bg-{{ unit.status|status_badge_class }}">{{ unit.status|status_label }}</span></td>
           <td>{{ unit.produced_at|date_format }}</td>
+          <td class="text-end">{% with config_change=row.config_change %}{% include '_configuration_change_button.html' %}{% endwith %}</td>
         </tr>
       {% else %}
-        <tr><td colspan="6" class="text-muted p-3">Выпусков нет</td></tr>
+        <tr><td colspan="7" class="text-muted p-3">Выпусков нет</td></tr>
       {% endfor %}
       </tbody>
     </table>

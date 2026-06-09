@@ -141,6 +141,7 @@
           <div class="text-warning fw-semibold">Выпущено, ждёт VIN</div>
           {% if current_user.is_admin or current_user.is_director or current_user.is_manager %}
             <a class="btn btn-sm btn-orange" href="{{ url_for('main.logistics_assign_vin', unit_id=st.needs_vin_units[0].id) }}">Присвоить VIN</a>
+            {% with config_change=st.needs_vin_config_change %}{% include '_configuration_change_button.html' %}{% endwith %}
           {% else %}
             <span class="text-muted small">Следующий шаг менеджера: присвоить VIN выпущенной единице.</span>
           {% endif %}
@@ -164,6 +165,7 @@
             </form>
             <div class="small text-muted">{{ move_unit.trailer.vin }} -> {{ need.warehouse.name }}</div>
           {% endif %}
+          {% with config_change=st.needs_movement_config_change %}{% include '_configuration_change_button.html' %}{% endwith %}
           {% if current_user.is_admin or current_user.is_director %}
             <form method="post" action="{{ url_for('main.produced_unit_admin_delete', unit_id=move_unit.id) }}" onsubmit="return confirm('Удалить ошибочный выпуск? Если прицеп/VIN уже связан с продажей, будет удалена только производственная связь.');">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

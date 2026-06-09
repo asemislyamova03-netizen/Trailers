@@ -1,0 +1,5 @@
+{% if config_change.show_link %}
+<a href="{{ config_change.url }}" class="btn btn-sm btn-outline-secondary">Комплектация</a>
+{% elif config_change.show_disabled %}
+<span class="btn btn-sm btn-outline-secondary disabled" title="{{ config_change.block_message }}" tabindex="0">Комплектация</span>
+{% endif %}

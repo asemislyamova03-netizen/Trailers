@@ -73,7 +73,8 @@
         </tr>
     </thead>
     <tbody>
-        {% for t in trailers %}
+        {% for row in trailer_rows %}
+        {% set t = row.trailer %}
         <tr>
             <td>{{ t.id }}</td>
             <td>{{ t.vin }}</td>
@@ -91,10 +92,7 @@
                 {% endif %}
             </td>
             <td>
-                {% if current_user.is_admin or current_user.role in ['logistics', 'director'] %}
-                    <a href="{{ url_for('main.trailer_change_item', trailer_id=t.id) }}"
-                       class="btn btn-sm btn-outline-secondary">Комплектация</a>
-                {% endif %}
+                {% with config_change=row.config_change %}{% include '_configuration_change_button.html' %}{% endwith %}
                 {% if current_user.is_admin %}
                     <a href="{{ url_for('main.trailer_edit', trailer_id=t.id) }}"
                        class="btn btn-sm btn-outline-primary">Изменить</a>
@@ -103,7 +101,7 @@
                        onclick="return confirm('Удалить прицеп?');">
                         Удалить
                     </a>
-                {% elif current_user.role not in ['logistics', 'director'] %}
+                {% elif not (current_user.is_manager or current_user.is_director or current_user.is_admin) and current_user.role not in ['logistics', 'director'] %}
                     <span class="text-muted small">Просмотр</span>
                 {% endif %}
             </td>

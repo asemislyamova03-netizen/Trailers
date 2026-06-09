@@ -1554,6 +1554,128 @@ def _can_change_produced_unit_item(unit: ProducedUnit) -> tuple[bool, str]:
     return _configuration_change_allowance_for_produced_unit(unit)
 
 
+def _user_can_use_configuration_change_ui() -> bool:
+    if not current_user.is_authenticated:
+        return False
+    return current_user.is_admin or current_user.is_manager or current_user.is_director
+
+
+def _configuration_change_ui_finalize(
+    *,
+    allowed: bool,
+    block_message: str,
+    url: str | None,
+    entry_point: str | None,
+    has_anchor: bool,
+) -> dict:
+    role_ok = _user_can_use_configuration_change_ui()
+    return {
+        'allowed': allowed,
+        'block_message': block_message or '',
+        'url': url if allowed else None,
+        'entry_point': entry_point,
+        'show_action': role_ok and (allowed or has_anchor),
+        'show_disabled': role_ok and not allowed and has_anchor,
+        'show_link': role_ok and allowed and bool(url),
+    }
+
+
+def _configuration_change_ui_for_produced_unit(unit: ProducedUnit | None) -> dict:
+    if not unit:
+        return _configuration_change_ui_finalize(
+            allowed=False,
+            block_message='',
+            url=None,
+            entry_point=None,
+            has_anchor=False,
+        )
+    ok, message = _can_change_produced_unit_item(unit)
+    url = url_for('main.produced_unit_change_item', unit_id=unit.id) if ok else None
+    return _configuration_change_ui_finalize(
+        allowed=ok,
+        block_message=message,
+        url=url,
+        entry_point='produced_unit',
+        has_anchor=True,
+    )
+
+
+def _configuration_change_ui_for_trailer(trailer: Trailer | None) -> dict:
+    if not trailer:
+        return _configuration_change_ui_finalize(
+            allowed=False,
+            block_message='',
+            url=None,
+            entry_point=None,
+            has_anchor=False,
+        )
+    ok, message = _can_change_trailer_item(trailer)
+    url = url_for('main.trailer_change_item', trailer_id=trailer.id) if ok else None
+    return _configuration_change_ui_finalize(
+        allowed=ok,
+        block_message=message,
+        url=url,
+        entry_point='trailer',
+        has_anchor=True,
+    )
+
+
+def _configuration_change_ui_for_order_line(line: CustomerOrderLine | None) -> dict:
+    if not line or (line.line_type or '').upper() != 'TRAILER':
+        return _configuration_change_ui_finalize(
+            allowed=False,
+            block_message='',
+            url=None,
+            entry_point=None,
+            has_anchor=False,
+        )
+    unit = (
+        ProducedUnit.query
+        .filter_by(order_line_id=line.id)
+        .order_by(ProducedUnit.id.desc())
+        .first()
+    )
+    pu_state = _configuration_change_ui_for_produced_unit(unit) if unit else None
+    if pu_state and pu_state['allowed']:
+        return pu_state
+    trailer = line.trailer or (unit.trailer if unit else None)
+    trailer_state = _configuration_change_ui_for_trailer(trailer) if trailer else None
+    if trailer_state and trailer_state['allowed']:
+        return trailer_state
+    if pu_state and unit:
+        return pu_state
+    if trailer_state:
+        return trailer_state
+    return _configuration_change_ui_finalize(
+        allowed=False,
+        block_message='',
+        url=None,
+        entry_point=None,
+        has_anchor=False,
+    )
+
+
+def _production_workspace_unit_row(unit: ProducedUnit) -> dict:
+    return {
+        'unit': unit,
+        'config_change': _configuration_change_ui_for_produced_unit(unit),
+    }
+
+
+def _enrich_stock_replenishment_stats_ui(stats: dict) -> dict:
+    needs_vin_units = stats.get('needs_vin_units') or []
+    needs_movement_units = stats.get('needs_movement_units') or []
+    stats['needs_vin_config_change'] = (
+        _configuration_change_ui_for_produced_unit(needs_vin_units[0])
+        if needs_vin_units else _configuration_change_ui_for_produced_unit(None)
+    )
+    stats['needs_movement_config_change'] = (
+        _configuration_change_ui_for_produced_unit(needs_movement_units[0])
+        if needs_movement_units else _configuration_change_ui_for_produced_unit(None)
+    )
+    return stats
+
+
 @main_bp.route('/workspace')
 @main_bp.route('/manager/workspace')
 @login_required
@@ -1889,12 +2011,17 @@ def trailers_list():
         query = query.filter(ProductCategory.code == category_filter)
 
     trailers = query.order_by(Trailer.id.desc()).all()
+    trailer_rows = [
+        {'trailer': trailer, 'config_change': _configuration_change_ui_for_trailer(trailer)}
+        for trailer in trailers
+    ]
     warehouses = _trailer_source_warehouses() if getattr(current_user, 'is_manager', False) else Warehouse.query.order_by(Warehouse.name).all()
     categories = ProductCategory.query.filter_by(is_active=True).order_by(ProductCategory.sort_order, ProductCategory.name).all()
 
     return render_template(
         'trailers_list.html',
         trailers=trailers,
+        trailer_rows=trailer_rows,
         warehouses=warehouses,
         vin_filter=vin_filter,
         article_filter=article_filter,
@@ -9287,7 +9414,10 @@ def stock_replenishment_list():
     if status:
         query = query.filter(SupplyNeed.status == status)
     needs = query.order_by(SupplyNeed.created_at.desc(), SupplyNeed.id.desc()).all()
-    stats = {need.id: _stock_replenishment_stats(need) for need in needs}
+    stats = {
+        need.id: _enrich_stock_replenishment_stats_ui(_stock_replenishment_stats(need))
+        for need in needs
+    }
     # P0-L2: also collect CUSTOMER_ORDER produced_no_vin units waiting for manager VIN
     # assignment. These belong to orders with produced_waiting_vin status and
     # documents already issued — excluded from normal attach flows.
@@ -9829,6 +9959,7 @@ def order_detail(order_id):
             'attachable_produced_units': attachable_produced_units,
             'attachable_ready_trailers': attachable_ready_trailers,
             'vin_assign_unit': vin_assign_unit,
+            'config_change': _configuration_change_ui_for_order_line(line),
         })
     add_line_stock_trailers = [
         trailer for trailer in (
@@ -13749,11 +13880,15 @@ def production_workspace():
         .limit(80)
         .all()
     )
+    today_unit_rows = [_production_workspace_unit_row(unit) for unit in today_units]
+    history_unit_rows = [_production_workspace_unit_row(unit) for unit in history_units]
     return render_template(
         'production_workspace.html',
         lines=lines,
         today_units=today_units,
         history_units=history_units,
+        today_unit_rows=today_unit_rows,
+        history_unit_rows=history_unit_rows,
         warehouse_rows=warehouse_rows,
         frame_rows=frame_rows,
         active_tab=active_tab,
@@ -14089,7 +14224,11 @@ def logistics_workspace():
         .all()
     )
     produced_units = ProducedUnit.query.filter_by(status='produced_no_vin').order_by(ProducedUnit.created_at.desc()).all()
-    produced_unit_rows = [_produced_unit_context(unit) for unit in produced_units]
+    produced_unit_rows = []
+    for unit in produced_units:
+        row = _produced_unit_context(unit)
+        row['config_change'] = _configuration_change_ui_for_produced_unit(unit)
+        produced_unit_rows.append(row)
     ready_trailers = (
         Trailer.query
         .filter(
@@ -14110,6 +14249,7 @@ def logistics_workspace():
         if not target_warehouse or target_warehouse.id == production_warehouse.id:
             continue
         context['trailer'] = trailer
+        context['config_change'] = _configuration_change_ui_for_trailer(trailer)
         ready_trailer_rows.append(context)
     sold_not_shipped_trailers = (
         Trailer.query
