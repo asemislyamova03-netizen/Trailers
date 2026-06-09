@@ -846,6 +846,7 @@ def _ensure_production_needs_after_confirmed_payment(order: CustomerOrder) -> in
         return 0
     order_line = _sync_primary_order_line(order, _order_snapshot(order))
     db.session.flush()
+    _raise_if_line_production_pipeline_blocked(order_line)
     need = SupplyNeed(
         order_id=order.id,
         order_line_id=order_line.id,
@@ -5448,6 +5449,59 @@ def _line_active_supply_needs(line: CustomerOrderLine) -> list[SupplyNeed]:
     ]
 
 
+_INACTIVE_PRODUCTION_REQUEST_LINE_STATUSES = frozenset({'cancelled', 'canceled', 'closed', 'void'})
+_INACTIVE_PRODUCED_UNIT_STATUSES = frozenset({'cancelled', 'canceled', 'void'})
+
+
+def _line_active_production_request_lines(line: CustomerOrderLine) -> list[ProductionRequestLine]:
+    return [
+        prl for prl in (line.production_lines or [])
+        if (prl.status or '').lower() not in _INACTIVE_PRODUCTION_REQUEST_LINE_STATUSES
+    ]
+
+
+def _line_active_produced_units(line: CustomerOrderLine) -> list[ProducedUnit]:
+    return [
+        pu for pu in (line.produced_units or [])
+        if (pu.status or '').lower() not in _INACTIVE_PRODUCED_UNIT_STATUSES
+    ]
+
+
+def _line_production_pipeline_blockers(line: CustomerOrderLine) -> list[str]:
+    blockers: list[str] = []
+    if not line:
+        return blockers
+    for need in _line_active_supply_needs(line):
+        if (need.need_type or '') == 'CUSTOMER_ORDER' or need.order_line_id == line.id:
+            blockers.append(
+                f'по позиции #{line.line_no} уже есть потребность #{need.id} ({need.status})'
+            )
+            break
+    if not blockers:
+        for prl in _line_active_production_request_lines(line):
+            blockers.append(
+                f'по позиции #{line.line_no} уже есть производственная строка #{prl.id} ({prl.status})'
+            )
+            break
+    if not blockers:
+        for pu in _line_active_produced_units(line):
+            blockers.append(
+                f'по позиции #{line.line_no} уже есть выпуск #{pu.id} ({pu.status})'
+            )
+            break
+    return blockers
+
+
+def _line_production_pipeline_saturated(line: CustomerOrderLine) -> bool:
+    return bool(_line_production_pipeline_blockers(line))
+
+
+def _raise_if_line_production_pipeline_blocked(line: CustomerOrderLine) -> None:
+    blockers = _line_production_pipeline_blockers(line)
+    if blockers:
+        raise ValueError(blockers[0])
+
+
 def _line_active_production_needs(line: CustomerOrderLine) -> list[SupplyNeed]:
     return [
         need for need in (line.supply_needs or [])
@@ -5456,6 +5510,8 @@ def _line_active_production_needs(line: CustomerOrderLine) -> list[SupplyNeed]:
 
 
 def _line_production_shortage(line: CustomerOrderLine) -> int:
+    if _line_production_pipeline_saturated(line):
+        return 0
     production_qty = sum(need.quantity or 0 for need in _line_active_production_needs(line))
     return max((line.quantity or 1) - production_qty, 0)
 
@@ -5477,6 +5533,7 @@ def _create_production_need_for_line(
     quantity: int | None = None,
     note: str | None = None,
 ) -> SupplyNeed:
+    _raise_if_line_production_pipeline_blocked(line)
     missing_qty = quantity if quantity is not None else _line_production_shortage(line)
     if missing_qty <= 0:
         raise ValueError('По этой позиции уже создано производство на всё количество.')
@@ -5821,6 +5878,7 @@ def change_line_source_stock_to_production(line_id: int, target_item_id: int, qt
     line.total_price = (line.unit_price * quantity) if line.unit_price is not None else None
     _apply_snapshot(line, _line_snapshot_from_item(item))
 
+    _raise_if_line_production_pipeline_blocked(line)
     need = SupplyNeed(
         order_id=order.id,
         order_line_id=line.id,
@@ -5907,6 +5965,36 @@ def _trailer_for_order_line(line: CustomerOrderLine) -> Trailer | None:
     return trailers[0] if trailers else None
 
 
+def _trailer_line_catalog_identity(line: CustomerOrderLine) -> tuple[int | None, str, str]:
+    item = line.item if getattr(line, 'item', None) else None
+    item_id = line.item_id
+    article = (line.article_snapshot or '').strip() or ((item.article or '').strip() if item else '')
+    name = (line.product_name_snapshot or '').strip() or ((item.name or '').strip() if item else '')
+    return item_id, article, name
+
+
+def _trailer_line_has_catalog_identity(line: CustomerOrderLine) -> bool:
+    if not line or (line.line_type or '').upper() != 'TRAILER':
+        return True
+    item_id, article, name = _trailer_line_catalog_identity(line)
+    return bool(item_id and article and name)
+
+
+def _trailer_line_catalog_blockers(line: CustomerOrderLine) -> list[str]:
+    if _trailer_line_has_catalog_identity(line):
+        return []
+    return [f'по позиции #{line.line_no} не заполнена номенклатура (item_id / артикул / наименование)']
+
+
+def _order_trailer_catalog_blockers(order: CustomerOrder) -> list[str]:
+    blockers: list[str] = []
+    if not order:
+        return blockers
+    for line in order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()).all():
+        blockers.extend(_trailer_line_catalog_blockers(line))
+    return blockers
+
+
 def _order_lines_document_blockers(order: CustomerOrder) -> list[str]:
     blockers = []
     lines = order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()).all()
@@ -5928,6 +6016,7 @@ def _order_lines_document_blockers(order: CustomerOrder) -> list[str]:
                 f'по позиции #{line.line_no} физический прицеп не привязан — '
                 'завершите выпуск производства или привяжите прицеп из наличия.'
             )
+    blockers.extend(_order_trailer_catalog_blockers(order))
     return blockers
 
 
@@ -5942,6 +6031,7 @@ def _realization_create_blockers(order: CustomerOrder | None) -> list[str]:
         blockers.append('заказ уже отгружен')
     if not _order_unrealized_lines_source(order):
         blockers.append('нет непроведённых позиций для реализации')
+    blockers.extend(_order_trailer_catalog_blockers(order))
     return blockers
 
 
@@ -6411,6 +6501,7 @@ def _configure_order_line_from_production(
         need.required_by = order.expected_date
         _apply_snapshot(need, snapshot)
     else:
+        _raise_if_line_production_pipeline_blocked(line)
         need = SupplyNeed(
             order_id=order.id,
             order_line_id=line.id,
@@ -6672,6 +6763,9 @@ def order_can_request_production(order: CustomerOrder) -> tuple[bool, str]:
             for line in order.lines
         ):
             return True, ''
+        for line in order.lines:
+            if _line_eligible_for_production_need(line, order) and _line_production_pipeline_saturated(line):
+                return False, _line_production_pipeline_blockers(line)[0]
         return False, 'По позициям заказа уже есть потребности или не выбрана номенклатура. Создайте потребность в блоке нужной позиции.'
     if order.trailer_id:
         return False, 'По заказу уже выбран готовый прицеп. Заявка в производство не требуется.'
@@ -10298,6 +10392,9 @@ def _build_sales_realization_from_order(order: CustomerOrder) -> SalesRealizatio
         line_type = 'component'
         inventory_effect = 'ship_from_stock'
         if source_line.line_type == 'TRAILER':
+            catalog_blockers = _trailer_line_catalog_blockers(source_line)
+            if catalog_blockers:
+                raise ValueError('Нельзя создать реализацию: ' + catalog_blockers[0])
             line_type = 'trailer'
             inventory_effect = 'trailer_unit'
             units, error = _resolve_realization_trailer_units_for_line(order, source_line, only_unrealized=True)
@@ -10590,6 +10687,10 @@ def order_contract_create(order_id):
     _ensure_can_manage_order(order)
     if order.status == 'cancelled' or order.documents_issued or order.is_shipped:
         flash('Договор можно создать только до выдачи документов и физической отгрузки.', 'danger')
+        return redirect(url_for('main.order_detail', order_id=order.id))
+    catalog_blockers = _order_trailer_catalog_blockers(order)
+    if catalog_blockers:
+        flash('Нельзя создать договор: ' + '; '.join(catalog_blockers) + '.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
     effective_vin = get_order_effective_vin(order)
     if not effective_vin:
@@ -11218,6 +11319,7 @@ def order_create_production_need(order_id):
         return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
     order_line = _sync_primary_order_line(order, _order_snapshot(order))
     db.session.flush()
+    _raise_if_line_production_pipeline_blocked(order_line)
     need = SupplyNeed(order_id=order.id, order_line_id=order_line.id, item_id=order.item_id, warehouse_id=order.warehouse_id, quantity=order.quantity or 1, required_by=order.expected_date, status='NEW', need_type='CUSTOMER_ORDER', priority=10, note='Потребность создана из карточки заказа')
     _apply_snapshot(need, {
         'article_snapshot': order.article_snapshot,
