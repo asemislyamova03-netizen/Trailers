@@ -218,6 +218,28 @@ class OrderCustomerReplacementHttpTests(unittest.TestCase):
         self.assertIn('заменить клиента в заказе', html.lower())
         self.assertNotRegex(html, r'/customers/\d+/edit\?[^"\']*return_to=order_edit')
 
+    def _customer_search_input_tag(self, html: str) -> str:
+        import re
+        match = re.search(r'<input[^>]*id="customer_search"[^>]*>', html)
+        self.assertIsNotNone(match, 'customer_search input not found')
+        return match.group(0)
+
+    def test_new_order_customer_search_is_enabled(self):
+        client = self.app.test_client()
+        self._login(client, 4)
+        rv = client.get('/orders/new')
+        self.assertEqual(rv.status_code, 200)
+        tag = self._customer_search_input_tag(rv.get_data(as_text=True))
+        self.assertNotIn('disabled', tag)
+
+    def test_edit_order_customer_search_enabled_without_blockers(self):
+        client = self.app.test_client()
+        self._login(client, 4)
+        rv = client.get('/orders/80/edit')
+        self.assertEqual(rv.status_code, 200)
+        tag = self._customer_search_input_tag(rv.get_data(as_text=True))
+        self.assertNotIn('disabled', tag)
+
 
 if __name__ == '__main__':
     unittest.main()

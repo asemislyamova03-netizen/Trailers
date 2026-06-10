@@ -30,7 +30,8 @@
         <div class="col-12">
           {{ form.customer_search.label(class="form-label") }}
           <div class="input-group">
-            {{ form.customer_search(class="form-control", list="customerOptions", autocomplete="off", placeholder="ФИО, название, телефон или ИИН/БИН", disabled=(form.order_id and customer_change_blockers and not can_replace_order_customer)) }}
+            {% set customer_search_disabled = form.order_id and customer_change_blockers and not can_replace_order_customer %}
+            {{ form.customer_search(class="form-control flex-grow-1", list="customerOptions", autocomplete="off", placeholder="ФИО, название, телефон или ИИН/БИН", **({'disabled': True} if customer_search_disabled else {})) }}
             <a class="btn btn-soft" href="{% if form.order_id %}{{ url_for('main.customer_create', return_to='order_edit', order_id=form.order_id) }}{% else %}{{ url_for('main.customer_create', return_to='order_create') }}{% endif %}">Создать</a>
             <a class="btn btn-outline-secondary disabled" id="editCustomerLink" href="#" title="Редактировать реквизиты выбранного клиента">Карточка</a>
           </div>
