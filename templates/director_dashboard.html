@@ -119,13 +119,12 @@
       </div>
       <div class="list-group list-group-flush">
         <div class="list-group-item text-muted small fw-bold">Контроль заказов и VIN</div>
-        {% set attention_total = (later_orders|length) + (production_without_trailer|length) + (vin_reserved_without_trailer|length) + (docs_issued_without_trailer|length) + (paid_without_vin|length) + (vin_assigned_not_confirmed|length) %}
+        {% set attention_total = (later_orders|length) + (production_without_trailer|length) + (vin_reserved_without_trailer|length) + (docs_issued_without_trailer|length) + (paid_without_vin|length) %}
         {% if later_orders|length %}<div class="list-group-item d-flex justify-content-between align-items-center"><span>Подобрать позже</span><span class="badge text-bg-danger">{{ later_orders|length }}</span></div>{% endif %}
         {% if production_without_trailer|length %}<div class="list-group-item d-flex justify-content-between align-items-center"><span>В производстве без Trailer</span><span class="badge text-bg-danger">{{ production_without_trailer|length }}</span></div>{% endif %}
         {% if vin_reserved_without_trailer|length %}<div class="list-group-item d-flex justify-content-between align-items-center"><span>VIN зарезервирован, Trailer не привязан</span><span class="badge text-bg-danger">{{ vin_reserved_without_trailer|length }}</span></div>{% endif %}
         {% if docs_issued_without_trailer|length %}<div class="list-group-item d-flex justify-content-between align-items-center"><span>Документы выданы, Trailer не привязан</span><span class="badge text-bg-danger">{{ docs_issued_without_trailer|length }}</span></div>{% endif %}
         {% if paid_without_vin|length %}<div class="list-group-item d-flex justify-content-between align-items-center"><span>Оплачено, VIN не зарезервирован</span><span class="badge text-bg-danger">{{ paid_without_vin|length }}</span></div>{% endif %}
-        {% if vin_assigned_not_confirmed|length %}<div class="list-group-item d-flex justify-content-between align-items-center"><span>VIN назначен, не подтверждён</span><span class="badge text-bg-danger">{{ vin_assigned_not_confirmed|length }}</span></div>{% endif %}
         {% if not attention_total %}<div class="list-group-item text-muted">Нет проблем по заказам и VIN</div>{% endif %}
 
         <div class="list-group-item text-muted small fw-bold">Операционные проблемы</div>
@@ -186,11 +185,6 @@
     <div class="table-responsive mb-3"><table class="table table-hover align-middle">
       <thead><tr><th>Заказ</th><th>Клиент</th><th>VIN</th><th>Дата резерва</th><th>Статус VIN</th></tr></thead>
       <tbody>{% for row in vin_reserved_without_trailer[:8] %}{% set vin_order = row.customer_order or (row.order_line.order if row.order_line else none) %}<tr><td>{% if vin_order %}<a href="{{ url_for('main.order_detail', order_id=vin_order.id) }}">{{ vin_order.order_number }}</a>{% else %}&mdash;{% endif %}</td><td>{{ vin_order.customer.name if vin_order and vin_order.customer else '—' }}</td><td class="fw-bold">{{ row.vin_full }}</td><td>{{ row.reserved_at|date_format }}</td><td><span class="badge text-bg-{{ row.status|status_badge_class }}">{{ row.status|status_label }}</span></td></tr>{% else %}<tr><td colspan="5" class="text-muted p-3">Нет VIN-резервов</td></tr>{% endfor %}</tbody>
-    </table></div>
-    <h2 class="h6">VIN назначен, не подтверждён</h2>
-    <div class="table-responsive"><table class="table table-hover align-middle">
-      <thead><tr><th>VIN</th><th>Заказ</th><th>Trailer</th><th>Дата назначения</th><th>Статус</th></tr></thead>
-      <tbody>{% for row in vin_assigned_not_confirmed[:8] %}{% set vin_order = row.customer_order or (row.order_line.order if row.order_line else none) %}<tr><td class="fw-bold">{{ row.vin_full }}</td><td>{% if vin_order %}<a href="{{ url_for('main.order_detail', order_id=vin_order.id) }}">{{ vin_order.order_number }}</a>{% else %}&mdash;{% endif %}</td><td>{% if row.trailer %}Trailer #{{ row.trailer.id }}{% else %}&mdash;{% endif %}</td><td>{{ row.assigned_at|date_format }}</td><td><span class="badge text-bg-{{ row.status|status_badge_class }}">{{ row.status|status_label }}</span></td></tr>{% else %}<tr><td colspan="5" class="text-muted p-3">Нет назначенных VIN</td></tr>{% endfor %}</tbody>
     </table></div>
   </div>
 </div>

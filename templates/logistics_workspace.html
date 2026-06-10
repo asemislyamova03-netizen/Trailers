@@ -34,29 +34,6 @@
 </div>
 
 <div class="app-card mb-3">
-  <div class="card-header">VIN назначен, не подтверждён</div>
-  <div class="table-responsive">
-    <table class="table table-hover align-middle">
-      <thead><tr><th>VIN</th><th>Заказ</th><th>Прицеп</th><th>Назначен</th><th></th></tr></thead>
-      <tbody>
-      {% for row in assigned_not_confirmed_vins %}
-        {% set vin_order = row.customer_order or (row.order_line.order if row.order_line else none) %}
-        <tr>
-          <td class="fw-bold">{{ row.vin_full }}</td>
-          <td>{% if vin_order %}<a class="btn btn-sm btn-soft" href="{{ url_for('main.order_detail', order_id=vin_order.id) }}">{{ vin_order.order_number }}</a>{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
-          <td>{% if row.trailer %}Trailer #{{ row.trailer.id }}{% else %}<span class="text-muted">не привязан</span>{% endif %}</td>
-          <td>{{ row.assigned_at|date_format }}</td>
-          <td class="text-end"><span class="badge text-bg-warning">Ждёт подтверждения менеджера</span></td>
-        </tr>
-      {% else %}
-        <tr><td colspan="5" class="text-muted p-3">Нет назначенных VIN без подтверждения</td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-
-<div class="app-card mb-3">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span>Нужно запустить в производство</span>
     <span class="text-muted small">потребность → производство</span>

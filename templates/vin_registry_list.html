@@ -76,15 +76,8 @@
           <td class="fw-semibold">{{ row.vin_full or '—' }}</td>
           <td><a class="btn btn-sm btn-soft" href="{{ url_for('main.vin_registry_detail', vin_id=row.id) }}">Открыть</a></td>
           <td>
-            {% if row.status == 'assigned' %}
-              {% if current_user.is_admin or current_user.is_manager or current_user.is_director %}
-                <form method="post" action="{{ url_for('main.vin_registry_confirm', vin_id=row.id) }}" class="d-inline">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <button class="btn btn-sm btn-orange">Подтвердить</button>
-                </form>
-              {% else %}
-                <span class="badge text-bg-warning">Подтверждает менеджер</span>
-              {% endif %}
+            {% if row.status in ['assigned', 'confirmed'] %}
+              <span class="badge text-bg-success">VIN присвоен</span>
             {% else %}
               <span class="text-muted">—</span>
             {% endif %}

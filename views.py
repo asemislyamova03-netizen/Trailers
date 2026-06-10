@@ -1753,19 +1753,6 @@ def manager_workspace():
             .all()
         )
     ] if active_order_ids else []
-    assigned_vins_to_confirm = (
-        VinRegistry.query
-        .filter(
-            VinRegistry.status == 'assigned',
-            or_(
-                VinRegistry.customer_order_id.in_(active_order_ids),
-                VinRegistry.order_line_id.in_(active_order_line_ids) if active_order_line_ids else sa.false(),
-            ),
-        )
-        .order_by(VinRegistry.assigned_at.desc().nullslast(), VinRegistry.id.desc())
-        .all()
-        if active_order_ids else []
-    )
     stock_need_scope = SupplyNeed.query.filter(SupplyNeed.need_type.in_(['STOCK_REPLENISHMENT', 'WAREHOUSE_STOCK']))
     stock_unit_scope = (
         ProducedUnit.query
@@ -1831,7 +1818,6 @@ def manager_workspace():
         waiting_realization_rows=waiting_realization_rows,
         waiting_movement_rows=waiting_movement_rows,
         blocked_order_rows=blocked_order_rows,
-        assigned_vins_to_confirm=assigned_vins_to_confirm,
         stock_replenishment_to_production=stock_replenishment_to_production,
         stock_replenishment_needs_vin=stock_replenishment_needs_vin,
         stock_replenishment_needs_movement=stock_replenishment_needs_movement,
@@ -4480,7 +4466,6 @@ def _order_status_from_deal_code(code: str) -> str | None:
     return {
         'new': 'waiting_payment',
         'waiting_vin': 'produced_waiting_vin',
-        'waiting_vin_confirm': 'produced_waiting_vin',
         'waiting_kit': 'waiting_production',
         'waiting_payment': 'waiting_payment',
         'waiting_contract': 'confirmed',
@@ -6417,6 +6402,11 @@ def _release_order_line_before_delete(line: CustomerOrderLine, user_id: int, rea
     _sync_order_line_workflow_links(line)
 
 
+def _vin_registry_status_is_final(status: str | None) -> bool:
+    """assigned and confirmed are both final VIN states for workflow/UI (no separate confirm step)."""
+    return (status or '').lower() in ('assigned', 'confirmed')
+
+
 def _active_vin_rows_for_order_line(line: CustomerOrderLine) -> list[VinRegistry]:
     return (
         VinRegistry.query
@@ -6598,7 +6588,6 @@ ORDER_LIST_FILTERS = [
     ('all', 'Все'),
     ('new', 'Новые'),
     ('waiting_vin', 'Ждут VIN'),
-    ('waiting_vin_confirm', 'Ждут подтверждения VIN'),
     ('waiting_kit', 'Ждут комплектацию'),
     ('waiting_payment', 'Ждут оплату'),
     ('waiting_contract', 'Ждут договор'),
@@ -6627,20 +6616,18 @@ def _order_has_produced_units_waiting_vin(order: CustomerOrder) -> bool:
 def _order_primary_line_state(order: CustomerOrder) -> dict:
     lines = order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()).all()
     if not lines:
-        return {'vin_rows': [], 'trailers': [], 'missing_vin': True, 'assigned_unconfirmed': False, 'active_needs': [], 'active_movements': []}
+        return {'vin_rows': [], 'trailers': [], 'missing_vin': True, 'active_needs': [], 'active_movements': []}
 
     vin_rows = []
     trailers = []
     active_needs = []
     active_movements = []
     missing_vin = False
-    assigned_unconfirmed = False
     seen_trailer_ids = set()
 
     for line in lines:
         line_vins = _active_vin_rows_for_order_line(line)
         vin_rows.extend(line_vins)
-        assigned_unconfirmed = assigned_unconfirmed or any(row.status == 'assigned' for row in line_vins)
         line_trailers = _trailers_for_order_line(line)
         for trailer in line_trailers:
             if trailer and trailer.id not in seen_trailer_ids:
@@ -6655,7 +6642,6 @@ def _order_primary_line_state(order: CustomerOrder) -> dict:
         'vin_rows': vin_rows,
         'trailers': trailers,
         'missing_vin': missing_vin,
-        'assigned_unconfirmed': assigned_unconfirmed,
         'active_needs': active_needs,
         'active_movements': active_movements,
     }
@@ -6685,8 +6671,6 @@ def _order_list_state(order: CustomerOrder) -> dict:
         code, label, blocker, next_action = 'new', 'Новая', 'нет строк заказа', 'добавить позицию'
     elif any((need.status or '').upper() in ('NEW', 'PLANNED', 'SENT_TO_PRODUCTION', 'IN_PRODUCTION', 'PARTIALLY_DONE') for need in line_state['active_needs']):
         code, label, blocker, next_action = 'waiting_kit', 'Ждёт комплектацию', 'есть активная производственная потребность', 'завершить производство/комплектацию'
-    elif line_state['assigned_unconfirmed']:
-        code, label, blocker, next_action = 'waiting_vin_confirm', 'Ждёт подтверждения VIN', 'VIN назначен, но не подтверждён', 'подтвердить нанесение VIN'
     elif line_state['missing_vin']:
         fulfillment = (order.fulfillment_source or '').lower()
         if fulfillment == 'later':
@@ -10744,7 +10728,11 @@ def _link_vin_registry_to_order_line(order: CustomerOrder, line: CustomerOrderLi
 
     old_trailer_id = line.trailer_id
     line.trailer_id = trailer.id
-    _set_line_source_state(line, line.fulfillment_source or 'stock', 'vin_confirmed' if vin_row.status == 'confirmed' else 'vin_assigned')
+    _set_line_source_state(
+        line,
+        line.fulfillment_source or 'stock',
+        'vin_confirmed' if _vin_registry_status_is_final(vin_row.status) else 'vin_assigned',
+    )
     vin_row.order_line_id = line.id
     vin_row.customer_order_id = order.id
     line.vin_registry = vin_row
@@ -12303,17 +12291,19 @@ def vin_registry_assign(vin_id):
     old_status = row.status
     trailer.vin = row.vin_full
     row.trailer_id = trailer.id
-    row.status = 'assigned'
+    row.status = 'confirmed'
     row.assigned_by_user_id = current_user.id
     row.assigned_at = datetime.utcnow()
+    row.confirmed_by_user_id = current_user.id
+    row.confirmed_at = datetime.utcnow()
     if row.customer_order and not row.customer_order.trailer_id:
         row.customer_order.trailer_id = trailer.id
     if row.order_line:
         row.order_line.trailer_id = trailer.id
-        _set_line_source_state(row.order_line, row.order_line.fulfillment_source or 'stock', 'vin_assigned')
-    _add_vin_event(row, 'assigned', old_status, row.status, comment=(request.form.get('comment') or '').strip() or None)
+        _set_line_source_state(row.order_line, row.order_line.fulfillment_source or 'stock', 'vin_confirmed')
+    _add_vin_event(row, 'confirmed', old_status, row.status, comment=(request.form.get('comment') or '').strip() or None)
     db.session.commit()
-    flash('VIN привязан к прицепу.', 'success')
+    flash('VIN присвоен и привязан к прицепу.', 'success')
     return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
 
 
@@ -12321,6 +12311,9 @@ def vin_registry_assign(vin_id):
 @role_required('manager', 'director')
 def vin_registry_confirm(vin_id):
     row = VinRegistry.query.get_or_404(vin_id)
+    if _vin_registry_status_is_final(row.status):
+        flash('VIN уже присвоен и находится в финальном состоянии.', 'info')
+        return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
     if row.status != 'assigned':
         flash('Подтвердить нанесение можно только после назначения VIN.', 'danger')
         return redirect(url_for('main.vin_registry_detail', vin_id=row.id))
@@ -14332,13 +14325,6 @@ def logistics_workspace():
             'vin': vin_row,
             'need': _active_supply_need_for_order(order.id) if order else None,
         })
-    assigned_not_confirmed_vins = (
-        VinRegistry.query
-        .filter(VinRegistry.status == 'assigned', VinRegistry.confirmed_at.is_(None))
-        .order_by(VinRegistry.assigned_at.desc().nullslast(), VinRegistry.id.desc())
-        .limit(50)
-        .all()
-    )
     return render_template(
         'logistics_workspace.html',
         production_warehouse=production_warehouse,
@@ -14354,7 +14340,6 @@ def logistics_workspace():
         inbound=inbound,
         send_form=send_form,
         docs_issued_without_trailer_rows=docs_issued_without_trailer_rows,
-        assigned_not_confirmed_vins=assigned_not_confirmed_vins,
     )
 
 
@@ -14521,9 +14506,11 @@ def logistics_assign_vin(unit_id):
                 add_order_event(order, 'trailer_assigned', new_value=vin)
             old_vin_status = vin_registry_row.status
             vin_registry_row.trailer_id = trailer.id
-            vin_registry_row.status = 'assigned'
+            vin_registry_row.status = 'confirmed'
             vin_registry_row.assigned_by_user_id = current_user.id
             vin_registry_row.assigned_at = datetime.utcnow()
+            vin_registry_row.confirmed_by_user_id = current_user.id
+            vin_registry_row.confirmed_at = datetime.utcnow()
             order_line = None
             if unit.order_line_id:
                 order_line = CustomerOrderLine.query.get(unit.order_line_id)
@@ -14543,8 +14530,8 @@ def logistics_assign_vin(unit_id):
                 vin_registry_row.supply_need_id = line.supply_need.id
             if order_line:
                 order_line.trailer_id = trailer.id
-                _set_line_source_state(order_line, order_line.fulfillment_source or 'production', 'vin_assigned')
-            _add_vin_event(vin_registry_row, 'assigned', old_vin_status, vin_registry_row.status, comment='VIN привязан к выпущенному прицепу')
+                _set_line_source_state(order_line, order_line.fulfillment_source or 'production', 'vin_confirmed')
+            _add_vin_event(vin_registry_row, 'confirmed', old_vin_status, vin_registry_row.status, comment='VIN присвоен выпущенной единице')
             # P0-G2: pre-commit integrity assertion — both links must be set
             if unit.trailer_id is None or vin_registry_row.trailer_id is None:
                 raise RuntimeError('P0-G2: trailer_id link missing before commit')
@@ -14914,12 +14901,6 @@ def director_dashboard():
         ).order_by(CustomerOrder.created_at.desc()).all()
         if order.total_amount > 0 and order.confirmed_paid_amount >= order.total_amount and not get_order_effective_vin(order)
     ]
-    vin_assigned_not_confirmed = VinRegistry.query.filter(
-        VinRegistry.status == 'assigned',
-        VinRegistry.confirmed_at.is_(None),
-    ).order_by(VinRegistry.assigned_at.desc().nullslast(), VinRegistry.id.desc()).limit(20).all()
-    if warehouse_id:
-        vin_assigned_not_confirmed = [row for row in vin_assigned_not_confirmed if _vin_registry_order(row) and _vin_registry_order(row).warehouse_id == warehouse_id]
     orders_without_trailer = later_orders + production_without_trailer + docs_issued_without_trailer
     paid_without_contract = [
         order for order in scoped_order_query().filter(
@@ -15074,7 +15055,6 @@ def director_dashboard():
         docs_issued_without_trailer=docs_issued_without_trailer,
         vin_reserved_without_trailer=vin_reserved_without_trailer,
         paid_without_vin=paid_without_vin[:10],
-        vin_assigned_not_confirmed=vin_assigned_not_confirmed,
     )
 
 
@@ -15943,14 +15923,6 @@ def director_report(section='sales'):
             ).order_by(CustomerOrder.created_at.desc()).all()
             if order.total_amount > 0 and order.confirmed_paid_amount >= order.total_amount and not get_order_effective_vin(order)
         ]
-        vin_assigned_not_confirmed = VinRegistry.query.filter(
-            VinRegistry.status == 'assigned',
-            VinRegistry.confirmed_at.is_(None),
-        ).order_by(VinRegistry.assigned_at.desc().nullslast()).all()
-        if warehouse_id:
-            vin_assigned_not_confirmed = [row for row in vin_assigned_not_confirmed if _vin_registry_order(row) and _vin_registry_order(row).warehouse_id == warehouse_id]
-        if manager_id:
-            vin_assigned_not_confirmed = [row for row in vin_assigned_not_confirmed if _vin_registry_order(row) and _vin_registry_order(row).assigned_user_id == manager_id]
         paid_without_contract = [
             order for order in order_scope(CustomerOrder.query).filter(
                 CustomerOrder.documents_issued == False,
@@ -15997,7 +15969,6 @@ def director_report(section='sales'):
             {'type': 'Документы выданы, Trailer не привязан', 'items': docs_issued_without_trailer},
             {'type': 'VIN зарезервирован, Trailer не привязан', 'items': vin_reserved_without_trailer},
             {'type': 'Оплачено, VIN не зарезервирован', 'items': paid_without_vin},
-            {'type': 'VIN назначен, не подтверждён', 'items': vin_assigned_not_confirmed},
             {'type': 'Оплачено, но нет договора', 'items': paid_without_contract},
             {'type': 'Договор есть, документы не выданы', 'items': contract_without_docs},
             {'type': 'Документы выданы, не отгружено', 'items': sold_not_shipped},
