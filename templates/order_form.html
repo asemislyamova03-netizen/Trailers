@@ -30,10 +30,16 @@
         <div class="col-12">
           {{ form.customer_search.label(class="form-label") }}
           <div class="input-group">
-            {{ form.customer_search(class="form-control", list="customerOptions", autocomplete="off", placeholder="ФИО, название, телефон или ИИН/БИН") }}
+            {{ form.customer_search(class="form-control", list="customerOptions", autocomplete="off", placeholder="ФИО, название, телефон или ИИН/БИН", disabled=(form.order_id and customer_change_blockers and not can_replace_order_customer)) }}
             <a class="btn btn-soft" href="{% if form.order_id %}{{ url_for('main.customer_create', return_to='order_edit', order_id=form.order_id) }}{% else %}{{ url_for('main.customer_create', return_to='order_create') }}{% endif %}">Создать</a>
-            <a class="btn btn-outline-secondary disabled" id="editCustomerLink" href="#">Редактировать</a>
+            <a class="btn btn-outline-secondary disabled" id="editCustomerLink" href="#" title="Редактировать реквизиты выбранного клиента">Карточка</a>
           </div>
+          {% if form.order_id %}
+          <div class="form-text">Чтобы <strong>заменить клиента в заказе</strong>, найдите другого в поле поиска и нажмите «Сохранить».</div>
+          {% if customer_change_blockers %}
+          <div class="alert alert-warning small mt-2 mb-0">Замена клиента недоступна: {{ customer_change_blockers|join('; ') }}.</div>
+          {% endif %}
+          {% endif %}
           <datalist id="customerOptions">
             {% for customer in customer_options %}
               <option value="{{ customer.label }}" data-id="{{ customer.id }}"></option>
@@ -187,10 +193,13 @@
 
   function setEditCustomerLink(customerId) {
     if (!editCustomerLink || !customerId) return;
+    {% if form.order_id %}
+    editCustomerLink.href = `/customers/${customerId}/edit`;
+    {% else %}
     const params = new URLSearchParams();
-    params.set('return_to', {% if form.order_id %}'order_edit'{% else %}'order_create'{% endif %});
-    {% if form.order_id %}params.set('order_id', '{{ form.order_id }}');{% endif %}
+    params.set('return_to', 'order_create');
     editCustomerLink.href = `/customers/${customerId}/edit?${params.toString()}`;
+    {% endif %}
     editCustomerLink.classList.remove('disabled');
   }
 

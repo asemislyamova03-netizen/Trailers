@@ -7096,6 +7096,56 @@ def _configure_order_line_from_stock(
     return line
 
 
+def _order_customer_change_blockers(order: CustomerOrder | None) -> list[str]:
+    if not order:
+        return ['заказ не найден']
+    blockers = []
+    if (order.status or '').lower() in ('cancelled', 'canceled'):
+        blockers.append('заказ отменён')
+    if order.documents_issued:
+        blockers.append('документы уже выданы')
+    if order.is_shipped or (order.status or '').lower() in ('shipped', 'customer_shipped'):
+        blockers.append('заказ уже отгружен')
+    if SalesContract.query.filter_by(order_id=order.id).count():
+        blockers.append('по заказу уже создан договор')
+    if SalesRealization.query.filter_by(order_id=order.id).count():
+        blockers.append('по заказу уже создана реализация')
+    return blockers
+
+
+def _can_replace_order_customer(order: CustomerOrder) -> bool:
+    if current_user.is_admin:
+        return True
+    return current_user.is_manager and can_manage_order(order)
+
+
+def _apply_order_customer_id_change(order: CustomerOrder, new_customer_id: int | None) -> bool:
+    """Apply customer_id replacement when allowed. Returns True if applied or unchanged."""
+    old_customer_id = order.customer_id
+    new_customer_id = new_customer_id or None
+    if new_customer_id == old_customer_id:
+        return True
+    blockers = _order_customer_change_blockers(order)
+    if blockers:
+        flash('Нельзя заменить клиента в заказе: ' + '; '.join(blockers) + '.', 'danger')
+        return False
+    if not new_customer_id:
+        flash('Выберите клиента из списка поиска.', 'danger')
+        return False
+    if not Customer.query.get(new_customer_id):
+        flash('Клиент не найден.', 'danger')
+        return False
+    order.customer_id = new_customer_id
+    add_order_event(
+        order,
+        'customer_changed',
+        old_value=old_customer_id,
+        new_value=new_customer_id,
+        comment='Клиент в заказе заменён через шапку заказа',
+    )
+    return True
+
+
 def _order_delete_blockers(order: CustomerOrder) -> list[str]:
     blockers = []
     if order.documents_issued:
@@ -8107,15 +8157,19 @@ def _config_options_payload(config: dict) -> dict:
 
 def _render_order_form(form: CustomerOrderForm, title: str):
     config = _config_from_request_values(request.form) if request.method == 'POST' else {'group_code': '002', 'body_execution_code': 'BOARD'}
+    order = CustomerOrder.query.get(form.order_id) if getattr(form, 'order_id', None) else None
     return render_template(
         'order_form.html',
         form=form,
         title=title,
+        order=order,
         customer_options=_customer_options_for_order_form(form, limit=50),
         item_options=_trailer_item_options(),
         trailer_options=_order_trailer_options(getattr(form, 'order_id', None)),
         availability=_order_future_availability(form.item_id.data or None, form.warehouse_id.data or None),
         config_options=_trailer_config_form_context(config),
+        customer_change_blockers=_order_customer_change_blockers(order) if order else [],
+        can_replace_order_customer=_can_replace_order_customer(order) if order else True,
     )
 
 
@@ -8136,6 +8190,8 @@ def _render_order_header_form(
         customer_options=_customer_options_for_order_form(form, limit=50),
         order_lines=order_lines,
         can_configure_primary_line=can_configure_primary_line,
+        customer_change_blockers=_order_customer_change_blockers(order),
+        can_replace_order_customer=_can_replace_order_customer(order),
     )
 
 
@@ -10229,7 +10285,13 @@ def order_edit(order_id):
             if form.order_date.data:
                 order.created_at = datetime.combine(form.order_date.data, time.min)
             order.lead_id = form.lead_id.data or None
-            order.customer_id = form.customer_id.data or None
+            if not _apply_order_customer_id_change(order, form.customer_id.data or None):
+                return _render_order_header_form(
+                    form,
+                    order,
+                    'Редактирование шапки заказа',
+                    can_configure_primary_line=False,
+                )
             order.warehouse_id = form.warehouse_id.data or None
             order.assigned_user_id = form.assigned_user_id.data or None
             order.expected_date = form.expected_date.data
@@ -10304,7 +10366,8 @@ def order_edit(order_id):
         if form.order_date.data:
             order.created_at = datetime.combine(form.order_date.data, time.min)
         order.lead_id = form.lead_id.data or None
-        order.customer_id = form.customer_id.data or None
+        if not _apply_order_customer_id_change(order, form.customer_id.data or None):
+            return _render_order_form(form, 'Редактирование заказа')
         order.item_id = form.item_id.data
         order.warehouse_id = form.warehouse_id.data or None
         order.assigned_user_id = form.assigned_user_id.data or None
