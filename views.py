@@ -3397,11 +3397,11 @@ def api_customers_search():
     })
 
 @main_bp.route('/customers/new', methods=['GET', 'POST'])
-@role_required('manager')
+@role_required('manager', 'director')
 def customer_create():
+    return_to, order_id = _customer_order_context_from_request()
+    _ensure_customer_order_edit_access(return_to, order_id)
     form = CustomerForm()
-    return_to = request.args.get('return_to', '').strip()
-    order_id = request.args.get('order_id', type=int)
 
     if form.validate_on_submit():
         idem_key, duplicate = _reserve_idempotency_key()
@@ -3458,23 +3458,37 @@ def customer_create():
         return _customer_return_redirect(customer, return_to, order_id)
 
     back_url = _customer_back_url(return_to, order_id)
-    return render_template('customer_form.html', form=form, title='Новый клиент', back_url=back_url)
+    return render_template(
+        'customer_form.html',
+        form=form,
+        title='Новый клиент',
+        back_url=back_url,
+        return_to=return_to,
+        order_id=order_id,
+    )
 
 
 @main_bp.route('/customers/<int:customer_id>/edit', methods=['GET', 'POST'])
-@role_required('manager')
+@role_required('manager', 'director')
 def customer_edit(customer_id):
+    return_to, order_id = _customer_order_context_from_request()
+    _ensure_customer_order_edit_access(return_to, order_id)
     customer = Customer.query.get_or_404(customer_id)
     form = CustomerForm(obj=customer)
-    return_to = request.args.get('return_to', '').strip()
-    order_id = request.args.get('order_id', type=int)
 
     if form.validate_on_submit():
         duplicate_customer = _find_duplicate_customer_from_form(form, exclude_id=customer.id)
         if duplicate_customer:
             flash('Другой клиент уже использует этот ИИН/БИН или телефон.', 'danger')
             back_url = _customer_back_url(return_to, order_id)
-            return render_template('customer_form.html', form=form, title='Редактирование клиента', back_url=back_url)
+            return render_template(
+                'customer_form.html',
+                form=form,
+                title='Редактирование клиента',
+                back_url=back_url,
+                return_to=return_to,
+                order_id=order_id,
+            )
 
         form.populate_obj(customer)
 
@@ -3525,7 +3539,14 @@ def customer_edit(customer_id):
         return _customer_return_redirect(customer, return_to, order_id)
 
     back_url = _customer_back_url(return_to, order_id)
-    return render_template('customer_form.html', form=form, title='Редактирование клиента', back_url=back_url)
+    return render_template(
+        'customer_form.html',
+        form=form,
+        title='Редактирование клиента',
+        back_url=back_url,
+        return_to=return_to,
+        order_id=order_id,
+    )
 
 
 @main_bp.route('/customers/<int:customer_id>/delete')
@@ -3592,12 +3613,28 @@ def _customer_back_url(return_to: str, order_id: int | None = None) -> str:
     return url_for('main.customers_list')
 
 
+def _customer_order_context_from_request() -> tuple[str, int | None]:
+    return_to = (request.values.get('return_to') or '').strip()
+    order_id = request.values.get('order_id', type=int)
+    return return_to, order_id
+
+
+def _ensure_customer_order_edit_access(return_to: str, order_id: int | None) -> CustomerOrder | None:
+    _block_production_commercial_access()
+    if return_to == 'order_edit' and order_id:
+        order = CustomerOrder.query.get_or_404(order_id)
+        _ensure_can_manage_order(order)
+        return order
+    return None
+
+
 def _attach_customer_to_order(order_id: int | None, customer: Customer | None) -> CustomerOrder | None:
     if not order_id or not customer:
         return None
     order = CustomerOrder.query.get(order_id)
     if not order:
         return None
+    _ensure_can_manage_order(order)
     order.customer_id = customer.id
     db.session.commit()
     return order

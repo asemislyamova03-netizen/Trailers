@@ -7,6 +7,12 @@
 
 <form method="post">
     {{ form.hidden_tag() }}
+    {% if return_to %}
+    <input type="hidden" name="return_to" value="{{ return_to }}">
+    {% endif %}
+    {% if order_id %}
+    <input type="hidden" name="order_id" value="{{ order_id }}">
+    {% endif %}
 
     <div class="mb-3">
         {{ form.customer_type.label(class="form-label") }}
