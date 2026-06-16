@@ -6693,6 +6693,206 @@ def _order_needs_transfer(order: CustomerOrder, trailers: list[Trailer]) -> bool
     return False
 
 
+def _build_order_action_panel(order: CustomerOrder, order_line_rows: list[dict], can_manage: bool) -> dict:
+    """Build read-only action panel view-model for order_detail."""
+    status = (order.status or '').lower()
+    is_closed = order.is_shipped or status in ('shipped', 'customer_shipped', 'cancelled', 'canceled')
+    is_shipped = order.is_shipped or status in ('shipped', 'customer_shipped')
+    is_cancelled = status in ('cancelled', 'canceled')
+    order_url = url_for('main.order_detail', order_id=order.id)
+
+    def _action(
+        code: str,
+        label: str,
+        *,
+        category: str,
+        priority: int,
+        url: str | None = None,
+        enabled: bool = True,
+        reason: str = '',
+        hint: str = '',
+    ) -> dict:
+        return {
+            'code': code,
+            'label': label,
+            'category': category,
+            'priority': priority,
+            'url': url or order_url,
+            'enabled': enabled,
+            'reason': reason,
+            'hint': hint,
+            'is_link': bool(url),
+        }
+
+    actions: list[dict] = []
+    if not can_manage:
+        return {
+            'summary': 'Действия недоступны: нет прав на управление заказом.',
+            'actions': [],
+        }
+
+    close_reason = 'заказ отгружен' if is_shipped else ('заказ отменён' if is_cancelled else '')
+    customer_blockers = _order_customer_change_blockers(order)
+    realization_blockers = _realization_create_blockers(order)
+    document_blockers = _order_lines_document_blockers(order)
+    has_contract = bool(SalesContract.query.filter_by(order_id=order.id).first())
+    draft_realization = (
+        SalesRealization.query
+        .filter_by(order_id=order.id, status='draft')
+        .first()
+    )
+
+    current_trailer_warehouse = order.trailer.warehouse if order.trailer and order.trailer.warehouse else None
+    needs_transfer = bool(
+        order.trailer and order.warehouse and current_trailer_warehouse
+        and current_trailer_warehouse.id != order.warehouse.id
+    )
+    has_shortage = any((row.get('shortage_qty') or 0) > 0 for row in order_line_rows)
+    has_config_action = any(
+        (row.get('config_change') or {}).get('show_link') or (row.get('config_change') or {}).get('show_disabled')
+        for row in order_line_rows
+    )
+    assign_unit = next((row.get('vin_assign_unit') for row in order_line_rows if row.get('vin_assign_unit')), None)
+
+    actions.append(_action(
+        'edit_header',
+        'Редактировать шапку / заменить клиента',
+        category='order',
+        priority=10,
+        url=url_for('main.order_edit', order_id=order.id),
+        enabled=not is_closed,
+        reason=close_reason,
+    ))
+    actions.append(_action(
+        'replace_customer',
+        'Заменить клиента через шапку',
+        category='order',
+        priority=20,
+        url=f"{url_for('main.order_edit', order_id=order.id)}#customer_search",
+        enabled=(not customer_blockers and not is_closed),
+        reason='; '.join(customer_blockers) if customer_blockers else close_reason,
+    ))
+    actions.append(_action(
+        'source_picker',
+        'Выбрать источник / подобрать прицеп',
+        category='line',
+        priority=30,
+        url=f"{order_url}#overview-tab",
+        enabled=not is_closed,
+        reason=close_reason,
+    ))
+
+    has_needs = any(row.get('supply_need') for row in order_line_rows)
+    actions.append(_action(
+        'production_need',
+        'Создать или проверить потребность в производство',
+        category='production',
+        priority=40,
+        url=f"{order_url}#movement-tab",
+        enabled=(not is_closed and (has_shortage or has_needs)),
+        reason=(close_reason or 'по строкам нет дефицита в производстве'),
+    ))
+    actions.append(_action(
+        'config_change',
+        'Комплектация по строке заказа',
+        category='production',
+        priority=50,
+        url=f"{order_url}#overview-tab",
+        enabled=(not is_closed and has_config_action),
+        reason=(close_reason or 'для текущих строк комплектация недоступна'),
+    ))
+    actions.append(_action(
+        'assign_vin',
+        'Присвоить VIN выпущенной единице',
+        category='vin',
+        priority=60,
+        url=url_for('main.logistics_assign_vin', unit_id=assign_unit.id) if assign_unit else f"{order_url}#overview-tab",
+        enabled=bool(assign_unit) and not is_shipped and not is_cancelled,
+        reason=(close_reason or 'нет выпущенной единицы без VIN'),
+    ))
+    actions.append(_action(
+        'transfer',
+        'Перемещение на склад выдачи',
+        category='movement',
+        priority=70,
+        url=f"{order_url}#overview-tab",
+        enabled=(not is_closed and needs_transfer),
+        reason=(close_reason or 'перемещение не требуется'),
+    ))
+
+    docs_enabled = (
+        not is_closed
+        and not order.documents_issued
+        and has_contract
+        and float(order.price or 0) > 0
+        and order.remaining_amount <= 0
+        and not document_blockers
+    )
+    docs_reason_parts = []
+    if close_reason:
+        docs_reason_parts.append(close_reason)
+    elif order.documents_issued:
+        docs_reason_parts.append('документы уже выданы')
+    elif not has_contract:
+        docs_reason_parts.append('сначала создайте договор')
+    elif float(order.price or 0) <= 0:
+        docs_reason_parts.append('сумма заказа должна быть больше 0')
+    elif order.remaining_amount > 0:
+        docs_reason_parts.append('заказ оплачен не полностью')
+    if document_blockers:
+        docs_reason_parts.extend(document_blockers)
+    actions.append(_action(
+        'issue_documents',
+        'Выдать документы',
+        category='documents',
+        priority=80,
+        url=f"{order_url}#documents-tab",
+        enabled=docs_enabled,
+        reason='; '.join(docs_reason_parts),
+    ))
+
+    if draft_realization:
+        actions.append(_action(
+            'open_realization',
+            'Открыть черновик реализации',
+            category='realization',
+            priority=90,
+            url=url_for('main.sales_realization_detail', realization_id=draft_realization.id),
+            enabled=not is_cancelled,
+            reason='заказ отменён' if is_cancelled else '',
+        ))
+    else:
+        actions.append(_action(
+            'create_realization',
+            'Создать реализацию',
+            category='realization',
+            priority=90,
+            url=f"{order_url}#documents-tab",
+            enabled=(not realization_blockers and not is_closed),
+            reason='; '.join(realization_blockers) if realization_blockers else close_reason,
+        ))
+
+    actions.append(_action(
+        'final_status',
+        'Финальный статус отгрузки',
+        category='status',
+        priority=100,
+        url=f"{order_url}#history-tab",
+        enabled=False,
+        reason='заказ отгружен и закрыт' if is_shipped else (
+            'заказ отменён' if is_cancelled else (
+                'ожидается проведение реализации и завершение выдачи'
+            )
+        ),
+    ))
+
+    actions.sort(key=lambda row: row['priority'])
+    return {
+        'summary': 'Заказ закрыт.' if is_closed else 'Выполните шаги сверху вниз для завершения заказа.',
+        'actions': actions,
+    }
+
+
 def _order_list_state(order: CustomerOrder) -> dict:
     line_state = _order_primary_line_state(order)
     trailers = line_state['trailers']
@@ -10233,6 +10433,7 @@ def order_detail(order_id):
         can_manage=can_manage_order(order),
         has_order_lines=bool(order_lines),
         can_configure_primary_line=_order_can_configure_primary_line(order),
+        order_action_panel=_build_order_action_panel(order, order_line_rows, can_manage_order(order)),
     )
 
 

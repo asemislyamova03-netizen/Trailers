@@ -82,6 +82,38 @@
   </div>
 </div>
 
+<div class="app-card p-3 mb-3">
+  <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-2">
+    <div>
+      <h2 class="h5 mb-1">Следующие действия</h2>
+      <div class="text-muted small">{{ order_action_panel.summary }}</div>
+    </div>
+    <a class="btn btn-sm btn-soft" href="{{ url_for('main.order_edit', order_id=order.id) }}">Открыть форму заказа</a>
+  </div>
+  {% if order_action_panel.actions %}
+  <div class="row g-2">
+    {% for action in order_action_panel.actions %}
+    <div class="col-lg-6">
+      <div class="border rounded p-2 h-100 d-flex flex-column gap-1">
+        <div class="small text-muted text-uppercase">{{ action.category }}</div>
+        <div class="fw-semibold">{{ action.label }}</div>
+        {% if action.enabled and action.is_link %}
+          <a class="btn btn-sm btn-orange align-self-start" href="{{ action.url }}">Открыть</a>
+        {% elif action.enabled %}
+          <span class="badge text-bg-success align-self-start">Доступно</span>
+        {% else %}
+          <span class="badge text-bg-secondary align-self-start">Недоступно</span>
+          <div class="small text-muted">{{ action.reason or 'действие сейчас недоступно' }}</div>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="text-muted small">Для вашей роли доступен только просмотр заказа.</div>
+  {% endif %}
+</div>
+
 <ul class="nav nav-tabs mb-3" role="tablist">
   <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#overview-tab" type="button">Обзор</button></li>
   <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#payments-tab" type="button">Оплаты</button></li>
