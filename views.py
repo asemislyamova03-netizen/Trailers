@@ -10143,7 +10143,7 @@ def order_detail(order_id):
             if not vin_link_candidates and not can_create_vin_from_trailer and line.trailer and line.trailer.vin:
                 vin_link_message = 'По прицепу строки нет свободной активной записи VIN-реестра.'
         can_reserve_vin = bool(
-            (current_user.is_admin or current_user.is_director)
+            can_manage_order(order)
             and line.line_type == 'TRAILER'
             and vin_count < (line.quantity or 1)
             and not order.documents_issued
@@ -12210,10 +12210,8 @@ def order_mark_documents_ready(order_id):
 @main_bp.route('/orders/<int:order_id>/reserve-vin', methods=['POST'])
 @login_required
 def order_reserve_vin(order_id):
-    if not (current_user.is_admin or current_user.is_director):
-        abort(403)
     order = CustomerOrder.query.get_or_404(order_id)
-    _ensure_can_access_order(order)
+    _ensure_can_manage_order(order)
     if order.is_shipped or order.documents_issued or order.status in ('cancelled', 'canceled', 'closed', 'done'):
         flash('Нельзя зарезервировать VIN по закрытому или отгруженному заказу.', 'danger')
         return redirect(url_for('main.order_detail', order_id=order.id))
@@ -12258,10 +12256,8 @@ def order_reserve_vin(order_id):
 @main_bp.route('/orders/<int:order_id>/lines/<int:line_id>/reserve-vin', methods=['POST'])
 @login_required
 def order_line_reserve_vin(order_id, line_id):
-    if not (current_user.is_admin or current_user.is_director):
-        abort(403)
     order = CustomerOrder.query.get_or_404(order_id)
-    _ensure_can_access_order(order)
+    _ensure_can_manage_order(order)
     order_line = CustomerOrderLine.query.filter_by(id=line_id, order_id=order.id).first_or_404()
     if order.is_shipped or order.documents_issued or order.status in ('cancelled', 'canceled', 'closed', 'done'):
         flash('Нельзя зарезервировать VIN по закрытому или отгруженному заказу.', 'danger')

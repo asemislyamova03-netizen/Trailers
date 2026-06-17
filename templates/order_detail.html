@@ -345,7 +345,7 @@
                   {% endif %}
                   {% if row.can_reserve_vin %}
                   <div class="border-top pt-2">
-                    <div class="small fw-semibold mb-1">Зарезервировать новый VIN (логист / директор)</div>
+                    <div class="small fw-semibold mb-1">Зарезервировать VIN для заказа</div>
                     <form method="post" action="{{ url_for('main.order_line_reserve_vin', order_id=order.id, line_id=line.id) }}" class="row g-2 align-items-end">
                       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                       <div class="col-md-2">

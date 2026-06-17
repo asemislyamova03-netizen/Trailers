@@ -46,7 +46,7 @@
 <div class="compact-page-header">
   <div>
     <h1>Пополнение складов</h1>
-    <div class="text-muted small">Заявки на производство без клиента. Логист ведёт VIN-реестр, менеджер присваивает VIN выпущенной единице.</div>
+    <div class="text-muted small">Заявки на производство без клиента. Менеджер ведёт заказ и присваивает VIN выпущенной единице через VIN-реестр.</div>
   </div>
   <a href="{{ url_for('main.stock_replenishment_create') }}" class="btn btn-orange btn-sm"><i class="bi bi-plus-lg me-1"></i>Заказать на склад</a>
 </div>
@@ -247,7 +247,7 @@
   <h5 class="mb-3">Производственные заказы — ожидают привязки VIN</h5>
   <div class="small text-muted mb-3">
     Выпущено под заказ клиента. Документы уже выданы. Менеджер / директор должен привязать зарезервированный VIN.
-    Логист НЕ выполняет это действие.
+    Это действие выполняется из заказа, без обязательного участия логиста.
   </div>
   <table class="table table-sm">
     <thead>

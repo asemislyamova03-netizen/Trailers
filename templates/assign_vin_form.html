@@ -16,7 +16,7 @@
     {% if free_vin_diagnostics.serial_only_count or free_vin_diagnostics.modification_hidden_count %}
       <div class="alert alert-light border small">
         {% if free_vin_diagnostics.serial_only_count %}
-          <div>Не показаны VIN без полного номера: {{ free_vin_diagnostics.serial_only_count }}. Логист должен заполнить полный VIN.</div>
+          <div>Не показаны VIN без полного номера: {{ free_vin_diagnostics.serial_only_count }}. Заполните полный VIN в реестре.</div>
         {% endif %}
         {% if expected_modification and free_vin_diagnostics.modification_hidden_count %}
           <div>Не показаны VIN другой модификации: {{ free_vin_diagnostics.modification_hidden_count }}. Для этого выпуска нужна модификация {{ expected_modification }}.</div>
@@ -31,9 +31,9 @@
       {{ form.vin_registry_id(class="form-select") }}
       {% if not vin_options %}
         {% if reserved_vin_row %}
-          <div class="form-text text-danger">Зарезервированный VIN недоступен (уже привязан или аннулирован). Обратитесь к логисту.</div>
+          <div class="form-text text-danger">Зарезервированный VIN недоступен (уже привязан или аннулирован). Проверьте VIN-реестр или обратитесь к ответственному за VIN-реестр.</div>
         {% else %}
-          <div class="form-text text-danger">Нет доступных VIN в реестре для этого заказа и модификации. Логист должен загрузить VIN в реестр.</div>
+          <div class="form-text text-danger">Нет доступных VIN в реестре для этого заказа и модификации. Проверьте VIN-реестр и добавьте VIN по нужной модификации.</div>
         {% endif %}
       {% elif has_context_vins %}
         <div class="form-text text-success">Зарезервированный VIN выбран автоматически. Можно также выбрать свободный VIN из списка.</div>
