@@ -280,6 +280,21 @@ def _can_manage_vin_registry_upload(user=None) -> bool:
     return _is_production_warehouse_manager(user)
 
 
+def _can_view_vin_registry_row(row: VinRegistry, user=None) -> bool:
+    """Read access to a VIN registry row; mirrors vin_registry_list visibility."""
+    user = user or current_user
+    if not user or not getattr(user, 'is_authenticated', False) or not user.is_authenticated:
+        return False
+    if user.is_admin or user.is_director or user.is_logistics:
+        return True
+    if user.is_manager:
+        if _is_production_warehouse_manager(user):
+            return True
+        order = _vin_registry_order(row)
+        return bool(order and order.assigned_user_id == user.id)
+    return False
+
+
 @main_bp.app_template_global('is_production_warehouse_manager')
 def is_production_warehouse_manager_template() -> bool:
     return _is_production_warehouse_manager()
@@ -12537,10 +12552,8 @@ def vin_registry_list():
 @role_required('logistics', 'director', 'manager')
 def vin_registry_detail(vin_id):
     row = VinRegistry.query.get_or_404(vin_id)
-    if current_user.is_manager:
-        order = _vin_registry_order(row)
-        if not order or order.assigned_user_id != current_user.id:
-            abort(403)
+    if not _can_view_vin_registry_row(row):
+        abort(403)
     orders = CustomerOrder.query.filter(
         CustomerOrder.status.notin_(['cancelled', 'canceled', 'closed', 'done', 'shipped']),
         CustomerOrder.documents_issued == False,
