@@ -6526,6 +6526,25 @@ def _order_trailer_catalog_blockers(order: CustomerOrder) -> list[str]:
     return blockers
 
 
+def _order_contract_create_blockers(order: CustomerOrder) -> list[str]:
+    """Blockers for contract creation only (not document issue / realization)."""
+    blockers: list[str] = []
+    if not order:
+        return ['нет заказа']
+    if order.status == 'cancelled':
+        blockers.append('заказ отменён')
+    if order.documents_issued:
+        blockers.append('документы уже выданы')
+    if order.is_shipped:
+        blockers.append('заказ уже отгружен')
+    blockers.extend(_order_trailer_catalog_blockers(order))
+    if not get_order_effective_vin(order):
+        blockers.append('нужен VIN или зарезервированный VIN')
+    if SalesContract.query.filter_by(order_id=order.id).first():
+        blockers.append('договор уже создан')
+    return blockers
+
+
 def _order_lines_document_blockers(order: CustomerOrder) -> list[str]:
     blockers = []
     lines = order.lines.order_by(CustomerOrderLine.line_no.asc(), CustomerOrderLine.id.asc()).all()
@@ -10444,6 +10463,7 @@ def order_detail(order_id):
         order_contract=order_contract,
         order_contract_template=order_contract_template,
         document_blockers=document_blockers,
+        contract_create_blockers=_order_contract_create_blockers(order),
         order_vin_row=order_vin_row,
         future_production_lines=future_production_lines,
         future_produced_unit_rows=future_produced_unit_rows,
