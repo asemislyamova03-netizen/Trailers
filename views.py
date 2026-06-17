@@ -1083,6 +1083,21 @@ def _idempotency_endpoint_key() -> str:
     return f"{request.endpoint or 'unknown'}:{request.path}"[:255]
 
 
+_ORDER_DETAIL_TABS = {'overview', 'payments', 'documents', 'movement', 'history'}
+
+
+def _normalize_order_detail_tab(tab: str | None, default: str = 'overview') -> str:
+    value = (tab or '').strip().lower()
+    return value if value in _ORDER_DETAIL_TABS else default
+
+
+def _redirect_order_detail(order_id: int, tab: str | None = None, default_tab: str = 'overview'):
+    resolved_tab = _normalize_order_detail_tab(tab, default=default_tab)
+    if resolved_tab == 'overview':
+        return redirect(url_for('main.order_detail', order_id=order_id))
+    return redirect(url_for('main.order_detail', order_id=order_id, tab=resolved_tab))
+
+
 def _reserve_idempotency_key():
     token = (request.form.get('form_token') or '').strip()
     if not token or not current_user.is_authenticated:
@@ -1115,13 +1130,15 @@ def _finish_idempotency(key, object_type: str, object_id: int | None = None):
 def _duplicate_redirect(key, fallback_url=None):
     flash('Повторный запрос не выполнен: это действие уже было обработано.', 'warning')
     if key and key.object_type == 'CustomerOrder' and key.object_id:
-        return redirect(url_for('main.order_detail', order_id=key.object_id))
+        requested_tab = request.form.get('tab') or request.args.get('tab')
+        return _redirect_order_detail(key.object_id, requested_tab, default_tab='overview')
     if key and key.object_type == 'Lead' and key.object_id:
         return redirect(url_for('main.lead_detail', lead_id=key.object_id))
     if key and key.object_type == 'SalesContract' and key.object_id:
         contract = SalesContract.query.get(key.object_id)
         if contract and contract.order_id:
-            return redirect(url_for('main.order_detail', order_id=contract.order_id))
+            requested_tab = request.form.get('tab') or request.args.get('tab')
+            return _redirect_order_detail(contract.order_id, requested_tab, default_tab='documents')
         return redirect(url_for('main.contracts_list'))
     if key and key.object_type == 'Customer' and key.object_id:
         customer = Customer.query.get(key.object_id)
@@ -3979,7 +3996,7 @@ def contract_edit(contract_id):
         _block_production_commercial_access()
         flash('Редактирование договора недоступно для вашей роли или после выдачи документов.', 'danger')
         if contract.order_id and can_access_contract(contract):
-            return redirect(url_for('main.order_detail', order_id=contract.order_id))
+            return _redirect_order_detail(contract.order_id, request.args.get('tab'), default_tab='documents')
         abort(403)
     form = SalesContractForm(contract_id=contract.id)
 
@@ -4128,7 +4145,7 @@ def contract_edit(contract_id):
 
         flash('Договор обновлён', 'success')
         if contract.order_id:
-            return redirect(url_for('main.order_detail', order_id=contract.order_id))
+            return _redirect_order_detail(contract.order_id, request.form.get('tab') or request.args.get('tab'), default_tab='documents')
         return redirect(url_for('main.contracts_list'))
 
     return render_template('contract_form.html', form=form, form_title='Редактирование договора')
@@ -4143,7 +4160,7 @@ def contract_delete(contract_id):
 
     if contract.order and (contract.order.documents_issued or contract.order.is_shipped):
         flash('Нельзя удалить договор после выдачи документов или отгрузки.', 'danger')
-        return redirect(url_for('main.order_detail', order_id=contract.order_id))
+        return _redirect_order_detail(contract.order_id, request.form.get('tab') or request.args.get('tab'), default_tab='documents')
 
     db.session.delete(contract)
     db.session.flush()
@@ -4156,7 +4173,7 @@ def contract_delete(contract_id):
     db.session.commit()
     flash('Договор удалён', 'success')
     if order_id:
-        return redirect(url_for('main.order_detail', order_id=order_id))
+        return _redirect_order_detail(order_id, request.form.get('tab') or request.args.get('tab'), default_tab='documents')
     return redirect(url_for('main.contracts_list'))
 
 
@@ -10032,6 +10049,7 @@ def order_detail(order_id):
     _block_production_commercial_access()
     order = CustomerOrder.query.get_or_404(order_id)
     _ensure_can_access_order(order)
+    active_tab = _normalize_order_detail_tab(request.args.get('tab'), default='overview')
     payment_form = OrderPaymentForm()
     payment_form.paid_at.data = date.today()
 
@@ -10411,6 +10429,7 @@ def order_detail(order_id):
     return render_template(
         'order_detail.html',
         order=order,
+        active_tab=active_tab,
         payment_form=payment_form,
         available_stock_trailers=available_stock_trailers,
         other_warehouse_trailers=other_warehouse_trailers,
@@ -11485,21 +11504,22 @@ def sales_realization_post(realization_id):
 def order_contract_create(order_id):
     order = CustomerOrder.query.get_or_404(order_id)
     _ensure_can_manage_order(order)
+    request_tab = request.form.get('tab') or request.args.get('tab')
     if order.status == 'cancelled' or order.documents_issued or order.is_shipped:
         flash('Договор можно создать только до выдачи документов и физической отгрузки.', 'danger')
-        return redirect(url_for('main.order_detail', order_id=order.id))
+        return _redirect_order_detail(order.id, request_tab, default_tab='documents')
     catalog_blockers = _order_trailer_catalog_blockers(order)
     if catalog_blockers:
         flash('Нельзя создать договор: ' + '; '.join(catalog_blockers) + '.', 'danger')
-        return redirect(url_for('main.order_detail', order_id=order.id))
+        return _redirect_order_detail(order.id, request_tab, default_tab='documents')
     effective_vin = get_order_effective_vin(order)
     if not effective_vin:
         flash('Для договора нужен конкретный прицеп/VIN или зарезервированный VIN.', 'danger')
-        return redirect(url_for('main.order_detail', order_id=order.id))
+        return _redirect_order_detail(order.id, request_tab, default_tab='documents')
     existing = SalesContract.query.filter_by(order_id=order.id).first()
     if existing:
         flash('Договор по этому заказу уже создан.', 'warning')
-        return redirect(url_for('main.order_detail', order_id=order.id))
+        return _redirect_order_detail(order.id, request_tab, default_tab='documents')
     trailer_contract = SalesContract.query.filter_by(trailer_id=order.trailer_id).first() if order.trailer_id else None
     if trailer_contract:
         stale_contract_relinked = False
@@ -11509,7 +11529,7 @@ def order_contract_create(order_id):
             if linked_order_still_uses_trailer and _order_has_issued_documents_or_shipment(linked_order):
                 linked_number = linked_order.order_number if linked_order else trailer_contract.order_id
                 flash(f'На этот прицеп уже существует договор по заказу {linked_number}; по нему уже есть документы или отгрузка.', 'danger')
-                return redirect(url_for('main.order_detail', order_id=order.id))
+                return _redirect_order_detail(order.id, request_tab, default_tab='documents')
             if linked_order_still_uses_trailer:
                 _cancel_order_active_reservations(linked_order, order.trailer_id, f'Прицеп перенесён в заказ {order.order_number}')
                 linked_order.trailer_id = None
@@ -11532,7 +11552,7 @@ def order_contract_create(order_id):
                 if replacement_trailer_contract:
                     replacement_number = linked_order.order_number if linked_order else trailer_contract.order_id
                     flash(f'Договор заказа {replacement_number} нельзя перенести на его текущий прицеп: на нём уже есть другой договор.', 'danger')
-                    return redirect(url_for('main.order_detail', order_id=order.id))
+                    return _redirect_order_detail(order.id, request_tab, default_tab='documents')
                 trailer_contract.trailer_id = linked_order.trailer_id
                 trailer_contract.customer_id = linked_order.customer_id
                 trailer_contract.price = linked_order.price
@@ -11568,11 +11588,11 @@ def order_contract_create(order_id):
                 trailer_contract.trailer_id = None
         if trailer_contract.order_id == order.id:
             flash('Договор по этому заказу уже создан.', 'warning')
-            return redirect(url_for('main.order_detail', order_id=order.id))
+            return _redirect_order_detail(order.id, request_tab, default_tab='documents')
         trailer_contract.trailer_id = None
     idem_key, duplicate = _reserve_idempotency_key()
     if duplicate:
-        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
+        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id, tab='documents'))
     contract = SalesContract(
         contract_number=get_next_contract_number(),
         contract_date=date.today(),
@@ -11604,9 +11624,9 @@ def order_contract_create(order_id):
             flash('Договор по этому заказу уже создан.', 'warning')
         else:
             flash('Не удалось создать договор: конфликт номера, прицепа или заказа.', 'danger')
-        return redirect(url_for('main.order_detail', order_id=order.id))
+        return _redirect_order_detail(order.id, request_tab, default_tab='documents')
     flash('Договор создан из заказа. Прицеп не переведен в SOLD этим действием.', 'success')
-    return redirect(url_for('main.order_detail', order_id=order.id))
+    return _redirect_order_detail(order.id, request_tab, default_tab='documents')
 
 
 @main_bp.route('/orders/<int:order_id>/ship', methods=['POST'])
@@ -12148,24 +12168,25 @@ def order_create_production_need(order_id):
 
 def _mark_order_document(order: CustomerOrder, status: str, event_type: str, message: str):
     _ensure_can_manage_order(order)
+    request_tab = request.form.get('tab') or request.args.get('tab')
     if status == 'documents_issued':
         abort(400)
     if order.documents_issued or order.is_shipped:
         flash('Документальный статус уже закрыт юридической продажей или физической отгрузкой.', 'warning')
-        return redirect(url_for('main.order_detail', order_id=order.id))
+        return _redirect_order_detail(order.id, request_tab, default_tab='documents')
     if order.document_status == status:
         flash('Это действие уже отмечено.', 'warning')
-        return redirect(url_for('main.order_detail', order_id=order.id))
+        return _redirect_order_detail(order.id, request_tab, default_tab='documents')
     idem_key, duplicate = _reserve_idempotency_key()
     if duplicate:
-        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
+        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id, tab='documents'))
     old_status = order.document_status
     order.document_status = status
     add_order_event(order, event_type, old_value=old_status, new_value=status)
     _finish_idempotency(idem_key, 'CustomerOrder', order.id)
     db.session.commit()
     flash(message, 'success')
-    return redirect(url_for('main.order_detail', order_id=order.id))
+    return _redirect_order_detail(order.id, request_tab, default_tab='documents')
 
 
 @main_bp.route('/orders/<int:order_id>/mark-invoice-sent', methods=['POST'])
@@ -12736,32 +12757,33 @@ def vin_registry_admin_delete(vin_id):
 def order_issue_documents(order_id):
     order = CustomerOrder.query.get_or_404(order_id)
     _ensure_can_manage_order(order)
+    request_tab = request.form.get('tab') or request.args.get('tab')
     if order.documents_issued:
         flash('Документы по этому заказу уже выданы.', 'warning')
-        return redirect(url_for('main.order_detail', order_id=order.id))
+        return _redirect_order_detail(order.id, request_tab, default_tab='documents')
     if order.status == 'cancelled':
         flash('Нельзя выдать документы по отменённому заказу.', 'danger')
-        return redirect(url_for('main.order_detail', order_id=order.id))
+        return _redirect_order_detail(order.id, request_tab, default_tab='documents')
     if order.is_shipped:
         flash('Заказ уже физически отгружен.', 'warning')
-        return redirect(url_for('main.order_detail', order_id=order.id))
+        return _redirect_order_detail(order.id, request_tab, default_tab='documents')
     document_blockers = _order_lines_document_blockers(order)
     if document_blockers:
         flash('Нельзя выдать документы: ' + '; '.join(document_blockers) + '.', 'danger')
-        return redirect(url_for('main.order_detail', order_id=order.id))
+        return _redirect_order_detail(order.id, request_tab, default_tab='documents')
     contract = SalesContract.query.filter_by(order_id=order.id).first()
     if not contract:
         flash('Сначала создайте договор.', 'danger')
-        return redirect(url_for('main.order_detail', order_id=order.id))
+        return _redirect_order_detail(order.id, request_tab, default_tab='documents')
     if float(order.price or 0) <= 0:
         flash('Нельзя выдать документы: сумма заказа должна быть больше 0.', 'danger')
-        return redirect(url_for('main.order_detail', order_id=order.id))
+        return _redirect_order_detail(order.id, request_tab, default_tab='documents')
     if order.remaining_amount > 0:
         flash('Нельзя выдать документы: заказ оплачен не полностью.', 'danger')
-        return redirect(url_for('main.order_detail', order_id=order.id))
+        return _redirect_order_detail(order.id, request_tab, default_tab='documents')
     idem_key, duplicate = _reserve_idempotency_key()
     if duplicate:
-        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id))
+        return _duplicate_redirect(idem_key, url_for('main.order_detail', order_id=order.id, tab='documents'))
 
     old_document_status = order.document_status
     old_order_status = order.status
@@ -12810,7 +12832,7 @@ def order_issue_documents(order_id):
     if vin_was_reserved:
         flash('VIN зарезервирован, но ещё не подтверждён производством. Проверьте, что производство нанесёт именно этот VIN.', 'warning')
     flash('Документы выданы. Позиции заказа юридически проданы, но ещё не отгружены клиенту.', 'success')
-    return redirect(url_for('main.order_detail', order_id=order.id))
+    return _redirect_order_detail(order.id, request_tab, default_tab='documents')
 
 
 @main_bp.route('/orders/<int:order_id>/comment', methods=['POST'])

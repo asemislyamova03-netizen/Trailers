@@ -2,6 +2,7 @@
 {% block title %}Заказ {{ order.order_number }}{% endblock %}
 
 {% block content %}
+{% set active_tab_key = active_tab or 'overview' %}
 <div class="compact-page-header">
   <div>
     <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
@@ -115,15 +116,15 @@
 </div>
 
 <ul class="nav nav-tabs mb-3" role="tablist">
-  <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#overview-tab" type="button">Обзор</button></li>
-  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#payments-tab" type="button">Оплаты</button></li>
-  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#documents-tab" type="button">Документы</button></li>
-  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#movement-tab" type="button">Движение</button></li>
-  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#history-tab" type="button">История</button></li>
+  <li class="nav-item"><button class="nav-link {% if active_tab_key == 'overview' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#overview-tab" type="button">Обзор</button></li>
+  <li class="nav-item"><button class="nav-link {% if active_tab_key == 'payments' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#payments-tab" type="button">Оплаты</button></li>
+  <li class="nav-item"><button class="nav-link {% if active_tab_key == 'documents' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#documents-tab" type="button">Документы</button></li>
+  <li class="nav-item"><button class="nav-link {% if active_tab_key == 'movement' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#movement-tab" type="button">Движение</button></li>
+  <li class="nav-item"><button class="nav-link {% if active_tab_key == 'history' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#history-tab" type="button">История</button></li>
 </ul>
 
 <div class="tab-content">
-  <div class="tab-pane fade show active" id="overview-tab">
+  <div class="tab-pane fade {% if active_tab_key == 'overview' %}show active{% endif %}" id="overview-tab">
     <div class="row g-4">
       <div class="col-xl-4">
         <div class="app-card p-4 h-100">
@@ -615,7 +616,7 @@
     </div>
   </div>
 
-  <div class="tab-pane fade" id="payments-tab">
+  <div class="tab-pane fade {% if active_tab_key == 'payments' %}show active{% endif %}" id="payments-tab">
     <div class="app-card">
       <div class="card-header d-flex justify-content-between align-items-center"><span>Оплаты</span>{% if can_manage %}<button class="btn btn-sm btn-orange" data-bs-toggle="modal" data-bs-target="#paymentModal">Добавить оплату</button>{% endif %}</div>
       <div class="table-responsive"><table class="table table-hover align-middle">
@@ -627,7 +628,7 @@
     </div>
   </div>
 
-  <div class="tab-pane fade" id="documents-tab">
+  <div class="tab-pane fade {% if active_tab_key == 'documents' %}show active{% endif %}" id="documents-tab">
     <div class="row g-4">
       <div class="col-lg-6">
         <div class="app-card p-4">
@@ -660,12 +661,12 @@
               </div>
               <div class="d-flex flex-wrap gap-2">
                 {% if can_manage_contract(order_contract) %}
-                <a class="btn btn-sm btn-soft" href="{{ url_for('main.contract_edit', contract_id=order_contract.id) }}">Изменить</a>
+                <a class="btn btn-sm btn-soft" href="{{ url_for('main.contract_edit', contract_id=order_contract.id, tab='documents') }}">Изменить</a>
                 {% endif %}
                 <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.contract_print', contract_id=order_contract.id) }}" target="_blank">Печать</a>
                 <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.contract_pdf', contract_id=order_contract.id) }}" target="_blank">PDF</a>
                 {% if can_manage_contract(order_contract) %}
-                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('main.contract_sign', contract_id=order_contract.id) }}">Подписать через eGov QR</a>
+                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('main.contract_sign', contract_id=order_contract.id, tab='documents') }}">Подписать через eGov QR</a>
                 {% endif %}
                 {% if order_contract.sigex_last_status == 'done' %}
                 <a class="btn btn-sm btn-outline-success" href="{{ url_for('main.contract_sigex_ddc', contract_id=order_contract.id) }}" target="_blank">Открыть DDC</a>
@@ -673,6 +674,7 @@
                 {% if can_manage_contract(order_contract) %}
                 <form method="post" action="{{ url_for('main.contract_delete', contract_id=order_contract.id) }}">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="tab" value="documents">
                   <button class="btn btn-sm btn-outline-danger" onclick="return confirm('Удалить договор?');">Удалить</button>
                 </form>
                 {% endif %}
@@ -687,11 +689,11 @@
           {% if can_manage and order.status != 'cancelled' %}
           {% if not order.documents_issued and not order.is_shipped %}
           <div class="d-flex flex-wrap gap-2">
-            <form method="post" action="{{ url_for('main.order_mark_invoice_sent', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-soft">Счёт отправлен</button></form>
-            <form method="post" action="{{ url_for('main.order_mark_contract_ready', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-soft">Договор готов</button></form>
-            <form method="post" action="{{ url_for('main.order_mark_documents_ready', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-soft">Документы готовы</button></form>
-            <form method="post" action="{{ url_for('main.order_issue_documents', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-orange" {% if not order_contract or order.remaining_amount > 0 or document_blockers %}disabled{% endif %}>Документы выданы</button></form>
-            {% if not document_blockers and not order_contract %}<form method="post" action="{{ url_for('main.order_contract_create', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-outline-primary">Создать договор</button></form>{% endif %}
+            <form method="post" action="{{ url_for('main.order_mark_invoice_sent', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="tab" value="documents"><button class="btn btn-sm btn-soft">Счёт отправлен</button></form>
+            <form method="post" action="{{ url_for('main.order_mark_contract_ready', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="tab" value="documents"><button class="btn btn-sm btn-soft">Договор готов</button></form>
+            <form method="post" action="{{ url_for('main.order_mark_documents_ready', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="tab" value="documents"><button class="btn btn-sm btn-soft">Документы готовы</button></form>
+            <form method="post" action="{{ url_for('main.order_issue_documents', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="tab" value="documents"><button class="btn btn-sm btn-orange" {% if not order_contract or order.remaining_amount > 0 or document_blockers %}disabled{% endif %}>Документы выданы</button></form>
+            {% if not document_blockers and not order_contract %}<form method="post" action="{{ url_for('main.order_contract_create', order_id=order.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="tab" value="documents"><button class="btn btn-sm btn-outline-primary">Создать договор</button></form>{% endif %}
           </div>
           {% if not order_contract %}<div class="text-muted small mt-2">Для выдачи документов сначала создайте договор.</div>{% endif %}
           {% if document_blockers %}<div class="text-muted small mt-2">Для документов: {{ document_blockers|join('; ') }}.</div>{% endif %}
@@ -706,7 +708,7 @@
     </div>
   </div>
 
-  <div class="tab-pane fade" id="movement-tab">
+  <div class="tab-pane fade {% if active_tab_key == 'movement' %}show active{% endif %}" id="movement-tab">
     <div class="row g-4">
       <div class="col-lg-4"><div class="app-card p-3 h-100"><h3 class="h6">Резервы</h3><table class="table table-sm"><tbody>{% for r in reservations %}<tr><td>{{ r.source_type }}</td><td>{{ r.trailer.vin if r.trailer else '' }}</td><td>{{ r.status }}</td></tr>{% else %}<tr><td class="text-muted">Резервов нет</td></tr>{% endfor %}</tbody></table></div></div>
       <div class="col-lg-4">
@@ -747,7 +749,7 @@
     </div>
   </div>
 
-  <div class="tab-pane fade" id="history-tab">
+  <div class="tab-pane fade {% if active_tab_key == 'history' %}show active{% endif %}" id="history-tab">
     <div class="app-card">
       <div class="card-header">История действий</div>
       <div class="table-responsive"><table class="table table-hover align-middle">
