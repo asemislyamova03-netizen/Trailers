@@ -17,7 +17,7 @@
       {% endif %}
     </div>
   </div>
-  {% if current_user.is_admin or current_user.is_director or current_user.is_logistics %}
+  {% if can_manage_vin_registry_upload() %}
   <button class="btn btn-orange btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#vinUploadCollapse">
     <i class="bi bi-upload me-1"></i>Загрузка VIN
   </button>
@@ -44,7 +44,7 @@
   </form>
 </div>
 
-{% if current_user.is_admin or current_user.is_director or current_user.is_logistics %}
+{% if can_manage_vin_registry_upload() %}
 <div class="collapse {% if upload_active %}show{% endif %} mb-3" id="vinUploadCollapse">
 <div class="app-card p-3">
   <form method="post">

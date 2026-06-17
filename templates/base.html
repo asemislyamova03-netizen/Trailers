@@ -70,6 +70,10 @@
                     {{ nav_item('CRM', 'bi-speedometer2', 'main.manager_workspace', section='crm') }}
                     {{ nav_item('Сделки', 'bi-receipt', 'main.orders_list', section='deals') }}
                     {{ nav_item('Производство', 'bi-tools', 'main.production_workspace', section='production') }}
+                    {% if is_production_warehouse_manager() %}
+                    {{ nav_item('VIN-реестр', 'bi-upc', 'main.vin_registry_list', active=path.startswith('/logistics/vin-registry') and not request.args.get('upload')) }}
+                    {{ nav_item('Загрузка VIN', 'bi-upload', href=url_for('main.vin_registry_list', upload=1), active=(endpoint == 'main.vin_registry_list' and request.args.get('upload'))) }}
+                    {% endif %}
                     {{ nav_item('Наличие', 'bi-box-seam', href=url_for('main.trailers_list', status='IN_STOCK'), section='availability') }}
                     {{ nav_item('Перемещения', 'bi-truck', 'main.stock_movements_list', section='movements') }}
                     {{ nav_tmc_item() }}

@@ -253,6 +253,43 @@ def _default_production_warehouse():
     return warehouses[0]
 
 
+def _user_production_warehouse(user=None) -> Warehouse | None:
+    user = user or current_user
+    if not user or not getattr(user, 'is_authenticated', False) or not user.is_authenticated:
+        return None
+    warehouse = getattr(user, 'warehouse', None)
+    if warehouse is None and getattr(user, 'warehouse_id', None):
+        warehouse = Warehouse.query.get(user.warehouse_id)
+    if warehouse and warehouse.is_active and warehouse.is_production:
+        return warehouse
+    return None
+
+
+def _is_production_warehouse_manager(user=None) -> bool:
+    user = user or current_user
+    return bool(user and getattr(user, 'is_authenticated', False) and user.is_authenticated and user.is_manager and _user_production_warehouse(user))
+
+
+def _can_manage_vin_registry_upload(user=None) -> bool:
+    """Upload/create new VIN rows in registry (not order reserve/assign)."""
+    user = user or current_user
+    if not user or not getattr(user, 'is_authenticated', False) or not user.is_authenticated:
+        return False
+    if user.is_admin or user.is_director or user.is_logistics:
+        return True
+    return _is_production_warehouse_manager(user)
+
+
+@main_bp.app_template_global('is_production_warehouse_manager')
+def is_production_warehouse_manager_template() -> bool:
+    return _is_production_warehouse_manager()
+
+
+@main_bp.app_template_global('can_manage_vin_registry_upload')
+def can_manage_vin_registry_upload_template() -> bool:
+    return _can_manage_vin_registry_upload()
+
+
 def can_receive_movement(movement: StockMovement) -> bool:
     if current_user.is_admin or current_user.is_director:
         return True
@@ -12395,9 +12432,9 @@ def _vin_registry_order(row: VinRegistry) -> CustomerOrder | None:
 @main_bp.route('/logistics/vin-registry', methods=['GET', 'POST'])
 @role_required('logistics', 'director', 'manager')
 def vin_registry_list():
-    if request.method == 'POST' and current_user.is_manager:
-        abort(403)
     if request.method == 'POST':
+        if not _can_manage_vin_registry_upload():
+            abort(403)
         raw = (request.form.get('vin_input') or '').strip()
         source = (request.form.get('source') or 'manual').strip() or 'manual'
         errors = []
@@ -12445,7 +12482,7 @@ def vin_registry_list():
     q = (request.args.get('q') or '').strip()
     category = (request.args.get('category') or ('light_trailer' if current_user.is_manager else 'all')).strip()
     query = VinRegistry.query
-    if current_user.is_manager:
+    if current_user.is_manager and not _is_production_warehouse_manager():
         manager_order_ids = CustomerOrder.query.with_entities(CustomerOrder.id).filter(CustomerOrder.assigned_user_id == current_user.id)
         manager_order_line_ids = (
             CustomerOrderLine.query
