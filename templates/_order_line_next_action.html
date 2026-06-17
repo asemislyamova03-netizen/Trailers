@@ -1,0 +1,39 @@
+{# Line-level next action (B2.1) — view-model only, links to existing forms/routes #}
+{% set line = row.line %}
+{% set stage = row.stage %}
+{% set next_action = row.next_action %}
+<div class="line-next-action" data-testid="line-next-action" data-line-id="{{ line.id }}">
+  {% if stage %}
+  <span class="badge text-bg-light border mb-1">{{ stage.label }}</span>
+  {% if stage.details %}
+  <div class="small text-muted mb-1">{{ stage.details }}</div>
+  {% endif %}
+  {% endif %}
+  {% if next_action %}
+  <div class="fw-semibold small">{{ next_action.label }}</div>
+  {% if next_action.enabled and next_action.is_link and next_action.href %}
+  <a class="btn btn-sm btn-orange mt-1" href="{{ next_action.href }}">Перейти</a>
+  {% elif next_action.informational %}
+  <span class="badge text-bg-info mt-1">Ожидание</span>
+  {% if next_action.reason %}
+  <div class="small text-muted mt-1">{{ next_action.reason }}</div>
+  {% endif %}
+  {% else %}
+  <span class="badge text-bg-secondary mt-1">Недоступно</span>
+  {% if next_action.reason %}
+  <div class="small text-muted mt-1">{{ next_action.reason }}</div>
+  {% endif %}
+  {% endif %}
+  {% endif %}
+  {% if row.secondary_actions %}
+  <div class="d-flex flex-wrap gap-1 mt-2">
+    {% for action in row.secondary_actions %}
+      {% if action.enabled and action.href %}
+      <a class="btn btn-sm btn-soft" href="{{ action.href }}">{{ action.label }}</a>
+      {% else %}
+      <span class="btn btn-sm btn-soft disabled" title="{{ action.reason }}">{{ action.label }}</span>
+      {% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>

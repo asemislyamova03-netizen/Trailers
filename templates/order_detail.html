@@ -178,7 +178,7 @@
       </div>
       <div class="table-responsive">
         <table class="table table-sm align-middle">
-          <thead><tr><th>№</th><th>Артикул / наименование</th><th>Исполнение</th><th>Кол-во</th><th>VIN</th><th>Производство</th><th>Статус</th><th class="text-end">Сумма</th><th></th></tr></thead>
+          <thead><tr><th>№</th><th>Артикул / наименование</th><th>Исполнение</th><th>Кол-во</th><th>VIN</th><th>Производство</th><th>Следующий шаг</th><th>Статус</th><th class="text-end">Сумма</th><th></th></tr></thead>
           <tbody>
           {% for row in order_line_rows %}
             {% set line = row.line %}
@@ -211,11 +211,18 @@
               <td>
                 <div>{{ row.production_qty }}/{{ line.quantity or 1 }} шт.</div>
                 {% if can_manage and row.shortage_qty > 0 and not order.documents_issued and not order.is_shipped %}
-                <form method="post" action="{{ url_for('main.order_line_create_missing_production', order_id=order.id, line_id=line.id) }}" class="mt-1">
+                <form id="line-{{ line.id }}-create-need" method="post" action="{{ url_for('main.order_line_create_missing_production', order_id=order.id, line_id=line.id) }}" class="mt-1">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                   <input type="hidden" name="form_token" value="{{ form_token() }}">
                   <button class="btn btn-sm btn-outline-primary">{% if row.production_qty > 0 %}Дозаказать {{ row.shortage_qty }} шт.{% else %}Создать потребность{% endif %}</button>
                 </form>
+                {% endif %}
+              </td>
+              <td class="line-next-action-cell">
+                {% if (line.line_type or '')|upper == 'TRAILER' %}
+                  {% include '_order_line_next_action.html' %}
+                {% else %}
+                  <span class="text-muted small">—</span>
                 {% endif %}
               </td>
               <td><span class="badge text-bg-{{ line.status|status_badge_class }}">{{ line.status|status_label }}</span></td>
@@ -226,7 +233,7 @@
                 {% endif %}
                 {% if can_manage and not order.documents_issued and not order.is_shipped and order.status != 'cancelled' %}
                   {% if row.trailer and order.warehouse and row.trailer.warehouse_id and row.trailer.warehouse_id != order.warehouse_id %}
-                    <form method="post" action="{{ url_for('main.order_request_transfer', order_id=order.id) }}" class="mb-1">
+                    <form id="line-{{ line.id }}-transfer" method="post" action="{{ url_for('main.order_request_transfer', order_id=order.id) }}" class="mb-1">
                       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                       <input type="hidden" name="trailer_id" value="{{ row.trailer.id }}">
                       <input type="hidden" name="order_line_id" value="{{ line.id }}">
@@ -248,7 +255,7 @@
             {% if can_manage and not order.documents_issued and not order.is_shipped and order.status != 'cancelled' %}
             <tr>
               <td></td>
-              <td colspan="8">
+              <td colspan="9" id="line-{{ line.id }}-actions">
                 <div class="d-flex flex-column gap-2">
                   <form method="post" action="{{ url_for('main.order_line_update', order_id=order.id, line_id=line.id) }}" class="row g-2 align-items-end">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -274,7 +281,7 @@
                   </form>
 
                   {% if row.vin_link_candidates or row.can_create_vin_from_trailer or row.vin_link_message %}
-                  <div class="border-top pt-2">
+                  <div id="line-{{ line.id }}-link-vin" class="border-top pt-2">
                     <div class="small fw-semibold mb-1">VIN строки для реализации</div>
                     {% if row.vin_link_candidates %}
                     <form method="post" action="{{ url_for('main.order_line_link_vin', order_id=order.id, line_id=line.id) }}" class="row g-2 align-items-end">
@@ -315,10 +322,11 @@
                     </div>
                   </div>
                   {% endif %}
-                  {% if row.attachable_produced_units %}
-                  <div class="border-top pt-2">
+                  {% if row.attachable_produced_units or row.attachable_ready_trailers %}
+                  <div id="line-{{ line.id }}-attach" class="border-top pt-2">
+                    {% if row.attachable_produced_units %}
                     <div class="small fw-semibold mb-1">Выпуск без VIN под эту позицию</div>
-                    <div class="d-flex flex-wrap gap-2">
+                    <div class="d-flex flex-wrap gap-2 mb-2">
                       {% for attach in row.attachable_produced_units %}
                       <form method="post" action="{{ url_for('main.order_line_attach_produced_unit', order_id=order.id, line_id=line.id, unit_id=attach.unit.id) }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -327,10 +335,8 @@
                       </form>
                       {% endfor %}
                     </div>
-                  </div>
-                  {% endif %}
-                  {% if row.attachable_ready_trailers %}
-                  <div class="border-top pt-2">
+                    {% endif %}
+                    {% if row.attachable_ready_trailers %}
                     <div class="small fw-semibold mb-1">Готовый VIN на складе выпуска</div>
                     <div class="d-flex flex-wrap gap-2">
                       {% for attach in row.attachable_ready_trailers %}
@@ -341,10 +347,11 @@
                       </form>
                       {% endfor %}
                     </div>
+                    {% endif %}
                   </div>
                   {% endif %}
                   {% if row.can_reserve_vin %}
-                  <div class="border-top pt-2">
+                  <div id="line-{{ line.id }}-reserve-vin" class="border-top pt-2">
                     <div class="small fw-semibold mb-1">Зарезервировать VIN для заказа</div>
                     <form method="post" action="{{ url_for('main.order_line_reserve_vin', order_id=order.id, line_id=line.id) }}" class="row g-2 align-items-end">
                       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -366,7 +373,7 @@
 
                   {% if row.can_change_source %}
                     {% if (line.fulfillment_source or '') == 'production' %}
-                    <form method="post" action="{{ url_for('main.order_line_source_to_stock', order_id=order.id, line_id=line.id) }}" class="row g-2 align-items-end border-top pt-2">
+                    <form id="line-{{ line.id }}-source" method="post" action="{{ url_for('main.order_line_source_to_stock', order_id=order.id, line_id=line.id) }}" class="row g-2 align-items-end border-top pt-2">
                       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                       <div class="col-md-5">
                         <label class="form-label small mb-1">Изменить источник на наличие</label>
@@ -386,7 +393,7 @@
                       </div>
                     </form>
                     {% elif (line.fulfillment_source or '') in ['stock', 'other_warehouse', 'transit'] %}
-                    <form method="post" action="{{ url_for('main.order_line_source_to_production', order_id=order.id, line_id=line.id) }}" class="row g-2 align-items-end border-top pt-2">
+                    <form id="line-{{ line.id }}-source" method="post" action="{{ url_for('main.order_line_source_to_production', order_id=order.id, line_id=line.id) }}" class="row g-2 align-items-end border-top pt-2">
                       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                       <div class="col-md-4">
                         <label class="form-label small mb-1">Изменить источник на производство</label>
@@ -417,7 +424,7 @@
             </tr>
             {% endif %}
           {% else %}
-            <tr><td colspan="9" class="text-muted">Позиции ещё не созданы.</td></tr>
+            <tr><td colspan="10" class="text-muted">Позиции ещё не созданы.</td></tr>
           {% endfor %}
           </tbody>
         </table>

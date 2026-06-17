@@ -6981,6 +6981,404 @@ def _build_order_action_panel(order: CustomerOrder, order_line_rows: list[dict],
     }
 
 
+def _line_next_action_item(
+    code: str,
+    label: str,
+    *,
+    category: str = 'line',
+    enabled: bool = True,
+    reason: str = '',
+    url: str | None = None,
+    anchor: str | None = None,
+    informational: bool = False,
+) -> dict:
+    href = url
+    if not href and anchor:
+        href = f'#{anchor}'
+    return {
+        'code': code,
+        'label': label,
+        'category': category,
+        'enabled': enabled,
+        'reason': reason,
+        'url': url,
+        'anchor': anchor,
+        'href': href,
+        'is_link': bool(href) and enabled and not informational,
+        'informational': informational,
+    }
+
+
+def _order_line_is_closed(order: CustomerOrder, line: CustomerOrderLine) -> tuple[bool, str]:
+    status = (order.status or '').lower()
+    if status in ('cancelled', 'canceled'):
+        return True, 'заказ отменён'
+    if order.is_shipped or status in ('shipped', 'customer_shipped'):
+        return True, 'заказ отгружен'
+    if getattr(line, 'status', None) == 'shipped':
+        return True, 'позиция отгружена'
+    return False, ''
+
+
+def _order_line_needs_transfer(order: CustomerOrder, row: dict) -> bool:
+    line = row['line']
+    trailer = row.get('trailer') or getattr(line, 'trailer', None)
+    return bool(
+        trailer
+        and order.warehouse
+        and trailer.warehouse_id
+        and trailer.warehouse_id != order.warehouse.id
+    )
+
+
+def _order_line_source_unset(line: CustomerOrderLine) -> bool:
+    return (line.fulfillment_source or '').lower() in ('', 'later', 'none')
+
+
+def _build_order_line_stage(order: CustomerOrder, row: dict) -> dict:
+    line = row['line']
+    if (line.line_type or '').upper() != 'TRAILER':
+        return {'code': 'non_trailer', 'label': 'Не прицеп', 'details': ''}
+
+    closed, close_reason = _order_line_is_closed(order, line)
+    if closed:
+        return {'code': 'closed', 'label': 'Завершено', 'details': close_reason}
+
+    if _trailer_line_catalog_blockers(line):
+        return {'code': 'no_catalog', 'label': 'Нет номенклатуры', 'details': 'заполните item / артикул / наименование'}
+
+    if _order_line_source_unset(line):
+        return {'code': 'no_source', 'label': 'Источник не выбран', 'details': ''}
+
+    if row.get('vin_assign_unit'):
+        return {'code': 'produced_no_vin', 'label': 'Выпущено без VIN', 'details': f"единица #{row['vin_assign_unit'].id}"}
+
+    if row.get('attachable_produced_units') or row.get('attachable_ready_trailers'):
+        return {'code': 'attach_pending', 'label': 'Нужно закрепление', 'details': 'выпуск или готовый VIN на складе'}
+
+    if (row.get('shortage_qty') or 0) > 0:
+        return {'code': 'need_production', 'label': 'Нужна потребность', 'details': f"дефицит {row['shortage_qty']} шт."}
+
+    if row.get('supply_need') or (row.get('production_qty') or 0) > 0:
+        need = row.get('supply_need')
+        details = f"потребность #{need.id}" if need else f"{row.get('production_qty', 0)}/{line.quantity or 1} в производстве"
+        return {'code': 'in_production', 'label': 'В производстве', 'details': details}
+
+    vin_rows = row.get('vin_rows') or []
+    if vin_rows and all(v.status == 'reserved' for v in vin_rows):
+        return {'code': 'vin_reserved', 'label': 'VIN зарезервирован', 'details': vin_rows[0].vin_full or vin_rows[0].serial7 or ''}
+
+    if vin_rows and any(v.status in ('assigned', 'confirmed') for v in vin_rows):
+        return {'code': 'vin_assigned', 'label': 'VIN присвоен', 'details': vin_rows[0].vin_full or vin_rows[0].serial7 or ''}
+
+    if _order_line_needs_transfer(order, row):
+        return {'code': 'needs_transfer', 'label': 'Нужно перемещение', 'details': 'прицеп не на складе выдачи'}
+
+    config_change = row.get('config_change') or {}
+    if config_change.get('show_link') or config_change.get('show_disabled'):
+        return {'code': 'needs_config', 'label': 'Комплектация', 'details': config_change.get('block_message') or ''}
+
+    if (row.get('vin_count') or 0) >= (line.quantity or 1):
+        return {'code': 'vin_ready', 'label': 'VIN по строке готов', 'details': 'можно переходить к договору и документам'}
+
+    return {'code': 'in_progress', 'label': 'В работе', 'details': ''}
+
+
+def _build_order_line_next_action(
+    order: CustomerOrder,
+    row: dict,
+    *,
+    can_manage: bool,
+    has_contract: bool,
+    contract_create_blockers: list[str],
+    document_blockers: list[str],
+    realization_blockers: list[str],
+) -> dict:
+    line = row['line']
+    line_anchor = f'line-{line.id}-actions'
+    order_url = url_for('main.order_detail', order_id=order.id)
+
+    if (line.line_type or '').upper() != 'TRAILER':
+        return _line_next_action_item(
+            'non_trailer',
+            'Не прицеп',
+            enabled=False,
+            informational=True,
+            reason='для этой позиции нет VIN/производственного контура',
+        )
+
+    closed, close_reason = _order_line_is_closed(order, line)
+    if closed:
+        return _line_next_action_item('completed', 'Завершено', enabled=False, reason=close_reason, informational=True)
+
+    if not can_manage:
+        return _line_next_action_item('view_only', 'Только просмотр', enabled=False, reason='нет прав на управление заказом')
+
+    catalog_blockers = _trailer_line_catalog_blockers(line)
+    if catalog_blockers:
+        return _line_next_action_item(
+            'fill_catalog',
+            'Заполнить номенклатуру',
+            category='catalog',
+            url=url_for('main.order_edit', order_id=order.id),
+            reason='; '.join(catalog_blockers),
+        )
+
+    if _order_line_source_unset(line):
+        return _line_next_action_item(
+            'pick_source',
+            'Выбрать источник',
+            category='source',
+            anchor=line_anchor,
+            reason='укажите наличие или производство для позиции',
+        )
+
+    vin_assign_unit = row.get('vin_assign_unit')
+    if vin_assign_unit:
+        return _line_next_action_item(
+            'assign_vin',
+            'Присвоить VIN',
+            category='vin',
+            url=url_for('main.logistics_assign_vin', unit_id=vin_assign_unit.id),
+        )
+
+    if row.get('attachable_produced_units'):
+        return _line_next_action_item(
+            'attach_unit',
+            'Закрепить выпуск',
+            category='production',
+            anchor=f'line-{line.id}-attach',
+        )
+    if row.get('attachable_ready_trailers'):
+        return _line_next_action_item(
+            'attach_trailer',
+            'Закрепить готовый VIN',
+            category='vin',
+            anchor=f'line-{line.id}-attach',
+        )
+
+    if (row.get('shortage_qty') or 0) > 0 and not order.documents_issued and not order.is_shipped:
+        return _line_next_action_item(
+            'create_need',
+            'Создать потребность',
+            category='production',
+            anchor=f'line-{line.id}-create-need',
+        )
+
+    if (row.get('supply_need') or (row.get('production_qty') or 0) > 0) and (row.get('shortage_qty') or 0) <= 0:
+        pipeline_notes = _line_production_pipeline_blockers(line)
+        return _line_next_action_item(
+            'wait_production',
+            'Ждать выпуск',
+            category='production',
+            enabled=False,
+            informational=True,
+            reason=pipeline_notes[0] if pipeline_notes else 'ожидается выпуск на производстве',
+        )
+
+    if row.get('can_reserve_vin'):
+        return _line_next_action_item(
+            'reserve_vin',
+            'Зарезервировать VIN',
+            category='vin',
+            anchor=f'line-{line.id}-reserve-vin',
+        )
+
+    if row.get('vin_link_candidates') or row.get('can_create_vin_from_trailer'):
+        return _line_next_action_item(
+            'link_vin',
+            'Привязать VIN',
+            category='vin',
+            anchor=f'line-{line.id}-link-vin',
+            reason=row.get('vin_link_message') or '',
+        )
+
+    if _order_line_needs_transfer(order, row) and not order.documents_issued and not order.is_shipped:
+        return _line_next_action_item(
+            'transfer',
+            'Создать перемещение',
+            category='movement',
+            anchor=f'line-{line.id}-transfer',
+        )
+
+    config_change = row.get('config_change') or {}
+    if config_change.get('show_link') and config_change.get('url'):
+        return _line_next_action_item(
+            'configuration',
+            'Комплектация',
+            category='production',
+            url=config_change['url'],
+        )
+    if config_change.get('show_disabled'):
+        return _line_next_action_item(
+            'configuration',
+            'Комплектация',
+            category='production',
+            enabled=False,
+            reason=config_change.get('block_message') or 'комплектация сейчас недоступна',
+        )
+
+    vin_complete = (row.get('vin_count') or 0) >= (line.quantity or 1)
+    if vin_complete and not has_contract and not contract_create_blockers:
+        return _line_next_action_item(
+            'ready_contract',
+            'Готово к договору',
+            category='documents',
+            url=f'{order_url}?tab=documents#documents-tab',
+        )
+    if vin_complete and not has_contract and contract_create_blockers:
+        return _line_next_action_item(
+            'ready_contract',
+            'Готово к договору',
+            category='documents',
+            enabled=False,
+            url=f'{order_url}?tab=documents#documents-tab',
+            reason='; '.join(contract_create_blockers),
+        )
+
+    if has_contract and not order.documents_issued:
+        if document_blockers:
+            return _line_next_action_item(
+                'issue_documents',
+                'Выдать документы',
+                category='documents',
+                enabled=False,
+                url=f'{order_url}?tab=documents#documents-tab',
+                reason='; '.join(document_blockers),
+            )
+        return _line_next_action_item(
+            'issue_documents',
+            'Выдать документы',
+            category='documents',
+            url=f'{order_url}?tab=documents#documents-tab',
+        )
+
+    if order.documents_issued and realization_blockers:
+        return _line_next_action_item(
+            'create_realization',
+            'Создать реализацию',
+            category='realization',
+            enabled=False,
+            url=f'{order_url}?tab=documents#documents-tab',
+            reason='; '.join(realization_blockers),
+        )
+    if order.documents_issued and not realization_blockers:
+        return _line_next_action_item(
+            'ready_realization',
+            'Готово к реализации',
+            category='realization',
+            url=f'{order_url}?tab=documents#documents-tab',
+        )
+
+    reasons: list[str] = []
+    if row.get('source_change_message'):
+        reasons.append(row['source_change_message'])
+    if row.get('vin_link_message'):
+        reasons.append(row['vin_link_message'])
+    return _line_next_action_item(
+        'review_line',
+        'Проверить позицию',
+        enabled=False,
+        reason='; '.join(reasons) if reasons else 'дополнительных шагов по строке не требуется',
+        informational=True,
+    )
+
+
+def _build_order_line_secondary_actions(
+    order: CustomerOrder,
+    row: dict,
+    *,
+    can_manage: bool,
+    primary: dict,
+) -> list[dict]:
+    if not can_manage or (row['line'].line_type or '').upper() != 'TRAILER':
+        return []
+
+    primary_code = primary.get('code')
+    secondary: list[dict] = []
+    line = row['line']
+
+    if primary_code != 'pick_source' and row.get('can_change_source'):
+        secondary.append(_line_next_action_item(
+            'change_source',
+            'Сменить источник',
+            category='source',
+            anchor=f'line-{line.id}-source',
+        ))
+    elif primary_code != 'pick_source' and row.get('source_change_message'):
+        secondary.append(_line_next_action_item(
+            'change_source',
+            'Сменить источник',
+            category='source',
+            enabled=False,
+            reason=row['source_change_message'],
+        ))
+
+    if primary_code != 'reserve_vin' and row.get('can_reserve_vin'):
+        secondary.append(_line_next_action_item(
+            'reserve_vin',
+            'Зарезервировать VIN',
+            category='vin',
+            anchor=f'line-{line.id}-reserve-vin',
+        ))
+
+    config_change = row.get('config_change') or {}
+    if primary_code != 'configuration' and config_change.get('show_link') and config_change.get('url'):
+        secondary.append(_line_next_action_item(
+            'configuration',
+            'Комплектация',
+            category='production',
+            url=config_change['url'],
+        ))
+
+    if row.get('can_delete'):
+        secondary.append(_line_next_action_item(
+            'delete_line',
+            'Удалить позицию',
+            category='line',
+            anchor=f'line-{line.id}-actions',
+        ))
+    elif row.get('delete_message'):
+        secondary.append(_line_next_action_item(
+            'delete_line',
+            'Удалить позицию',
+            category='line',
+            enabled=False,
+            reason=row['delete_message'],
+        ))
+
+    return secondary[:4]
+
+
+def _enrich_order_line_rows_actions(
+    order: CustomerOrder,
+    order_line_rows: list[dict],
+    *,
+    can_manage: bool,
+    has_contract: bool,
+    contract_create_blockers: list[str],
+    document_blockers: list[str],
+    realization_blockers: list[str],
+) -> None:
+    for row in order_line_rows:
+        row['stage'] = _build_order_line_stage(order, row)
+        row['next_action'] = _build_order_line_next_action(
+            order,
+            row,
+            can_manage=can_manage,
+            has_contract=has_contract,
+            contract_create_blockers=contract_create_blockers,
+            document_blockers=document_blockers,
+            realization_blockers=realization_blockers,
+        )
+        row['secondary_actions'] = _build_order_line_secondary_actions(
+            order,
+            row,
+            can_manage=can_manage,
+            primary=row['next_action'],
+        )
+
+
 def _order_list_state(order: CustomerOrder) -> dict:
     line_state = _order_primary_line_state(order)
     trailers = line_state['trailers']
@@ -10344,6 +10742,18 @@ def order_detail(order_id):
     order_contract = SalesContract.query.filter_by(order_id=order.id).first()
     order_contract_template = _contract_template_for_contract(order_contract)
     document_blockers = _order_lines_document_blockers(order)
+    contract_create_blockers = _order_contract_create_blockers(order)
+    realization_blockers = _realization_create_blockers(order)
+    can_manage = can_manage_order(order)
+    _enrich_order_line_rows_actions(
+        order,
+        order_line_rows,
+        can_manage=can_manage,
+        has_contract=bool(order_contract),
+        contract_create_blockers=contract_create_blockers,
+        document_blockers=document_blockers,
+        realization_blockers=realization_blockers,
+    )
     order_vin_row = _active_vin_registry_for_order(order.id)
     future_production_lines = []
     future_produced_unit_rows = []
