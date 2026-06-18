@@ -3868,6 +3868,7 @@ def _build_contract_context(contract_id: int) -> dict:
     full_mass_kg  = getattr(item, 'full_mass_kg', None)
 
     modification_code = _extract_modification_from_vin(effective_vin) if effective_vin else None
+    manufacture_year = _manufacture_year_from_vin(effective_vin)
 
     otts = None
     if modification_code:
@@ -3901,6 +3902,7 @@ def _build_contract_context(contract_id: int) -> dict:
         full_mass_kg=full_mass_kg,
         warehouse_name=warehouse_name,  # <-- это используешь в шаблоне
         effective_vin=effective_vin,
+        manufacture_year=manufacture_year,
         contract_lines=contract_lines,
         contract_template=contract_template,
         contract_template_name=_contract_template_render_name(contract_template),
@@ -8119,6 +8121,23 @@ def _validate_trailer_vin(raw: str | None, exclude_trailer_id: int | None = None
                 'Используйте действие «Привязать VIN» вместо прямого редактирования.'
             )
     return vin, None
+
+
+_VIN_YEAR_CODE_TO_YEAR = {
+    'A': 2010, 'B': 2011, 'C': 2012, 'D': 2013, 'E': 2014,
+    'F': 2015, 'G': 2016, 'H': 2017, 'J': 2018, 'K': 2019,
+    'L': 2020, 'M': 2021, 'N': 2022, 'P': 2023, 'R': 2024,
+    'S': 2025, 'T': 2026, 'V': 2027, 'W': 2028, 'X': 2029,
+    'Y': 2030,
+}
+
+
+def _manufacture_year_from_vin(vin: str | None) -> int | None:
+    """Год выпуска по 10-му символу VIN (ISO 3779, цикл 2010–2030)."""
+    vin = (vin or '').strip().upper()
+    if len(vin) < 10:
+        return None
+    return _VIN_YEAR_CODE_TO_YEAR.get(vin[9:10])
 
 
 def _parse_vin_full(vin_full: str) -> tuple[dict | None, str | None]:

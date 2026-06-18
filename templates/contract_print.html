@@ -34,7 +34,7 @@
   {# --------- Общие переменные --------- #}
   {% set contract_number = contract.contract_number or contract.id %}
   {% set contract_date_str = contract.contract_date.strftime('%d.%m.%Y') if contract.contract_date else '' %}
-  {% set year_str = contract.contract_date.year if contract.contract_date else '' %}
+  {% set year_str = manufacture_year if manufacture_year else '' %}
   {% set city = warehouse_name or 'Кокшетау' %}
 
   {# Реквизиты продавца #}
