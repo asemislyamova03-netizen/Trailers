@@ -1,6 +1,6 @@
 # models.py
 from datetime import datetime, date
-from sqlalchemy import Enum, Numeric
+from sqlalchemy import Enum, Index, Numeric, text
 from extensions import db
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -59,6 +59,7 @@ class Warehouse(db.Model):
     can_ship_to_customer = db.Column(db.Boolean, nullable=False, default=True, index=True)
     primary_product_category = db.Column(db.String(40), nullable=True, index=True)
     product_category_scope = db.Column(db.String(80), nullable=True, index=True)
+    shopfloor_posting_mode = db.Column(db.String(30), nullable=False, default='legacy_plus_one', index=True)
 
     trailers = db.relationship('Trailer', back_populates='warehouse')
 
@@ -80,6 +81,8 @@ class WarehouseStorageArea(db.Model):
     is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
     sort_order = db.Column(db.Integer, nullable=False, default=0)
     comment = db.Column(db.Text, nullable=True)
+    product_category = db.Column(db.String(40), nullable=True, index=True)
+    shopfloor_posting_mode = db.Column(db.String(30), nullable=False, default='legacy_plus_one', index=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -420,6 +423,9 @@ class InventoryOperation(db.Model):
     customer_order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=True, index=True)
     customer_order_line_id = db.Column(db.Integer, db.ForeignKey('customer_order_line.id'), nullable=True, index=True)
     workshop_id = db.Column(db.Integer, db.ForeignKey('production_workshop.id'), nullable=True, index=True)
+    shift_id = db.Column(db.Integer, db.ForeignKey('production_shift.id'), nullable=True, index=True)
+    shift_output_id = db.Column(db.Integer, db.ForeignKey('production_shift_output.id'), nullable=True, index=True)
+    shift_material_id = db.Column(db.Integer, db.ForeignKey('production_shift_material.id'), nullable=True, index=True)
     supplier_id = db.Column(db.Integer, db.ForeignKey('supplier.id'), nullable=True, index=True)
     receipt_plan_id = db.Column(db.Integer, db.ForeignKey('inventory_receipt_plan.id'), nullable=True, index=True)
     created_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
@@ -437,9 +443,39 @@ class InventoryOperation(db.Model):
     customer_order = db.relationship('CustomerOrder', backref='inventory_operations')
     customer_order_line = db.relationship('CustomerOrderLine', backref='inventory_operations')
     workshop = db.relationship('ProductionWorkshop', backref='inventory_operations')
+    shift = db.relationship('ProductionShift', foreign_keys=[shift_id], backref='inventory_operations')
+    shift_output = db.relationship('ProductionShiftOutput', foreign_keys=[shift_output_id], backref='inventory_operations')
+    shift_material = db.relationship('ProductionShiftMaterial', foreign_keys=[shift_material_id], backref='inventory_operations')
     supplier = db.relationship('Supplier', backref='inventory_operations')
     receipt_plan = db.relationship('InventoryReceiptPlan', backref='inventory_operations')
     created_by_user = db.relationship('User', foreign_keys=[created_by_user_id])
+
+    __table_args__ = (
+        Index(
+            'uq_inv_op_posted_issue_shift_material',
+            'shift_material_id',
+            unique=True,
+            sqlite_where=text(
+                "operation_type = 'production_issue' AND status = 'posted' AND shift_material_id IS NOT NULL"
+            ),
+        ),
+        Index(
+            'uq_inv_op_posted_shortage_shift_material',
+            'shift_material_id',
+            unique=True,
+            sqlite_where=text(
+                "operation_type = 'production_shortage' AND status = 'posted' AND shift_material_id IS NOT NULL"
+            ),
+        ),
+        Index(
+            'uq_inv_op_posted_receipt_shift_output',
+            'shift_output_id',
+            unique=True,
+            sqlite_where=text(
+                "operation_type = 'production_output_receipt' AND status = 'posted' AND shift_output_id IS NOT NULL"
+            ),
+        ),
+    )
 
 
 class InventoryOperationLine(db.Model):
@@ -1081,14 +1117,23 @@ class ProductionShift(db.Model):
     planned_date = db.Column(db.Date, nullable=True, index=True)
     started_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
     ended_at = db.Column(db.DateTime, nullable=True, index=True)
+    hours_fact = db.Column(db.Numeric(10, 2), nullable=True)
+    direction_warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=True, index=True)
+    direction_area_id = db.Column(db.Integer, db.ForeignKey('warehouse_storage_area.id'), nullable=True, index=True)
     status = db.Column(db.String(30), nullable=False, default='open', index=True)
+    posted_at = db.Column(db.DateTime, nullable=True, index=True)
+    posted_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    senior_shortage_confirmed = db.Column(db.Boolean, nullable=False, default=False)
     note = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     employee = db.relationship('ProductionEmployee', backref='shifts')
-    user = db.relationship('User', backref='production_shifts')
+    user = db.relationship('User', foreign_keys=[user_id], backref='production_shifts')
+    posted_by_user = db.relationship('User', foreign_keys=[posted_by_user_id])
     workshop = db.relationship('ProductionWorkshop', backref='shifts')
+    direction_warehouse = db.relationship('Warehouse', foreign_keys=[direction_warehouse_id], backref='production_shifts')
+    direction_area = db.relationship('WarehouseStorageArea', foreign_keys=[direction_area_id], backref='production_shifts')
 
 
 class ProductionShiftOutput(db.Model):
@@ -1101,6 +1146,7 @@ class ProductionShiftOutput(db.Model):
     item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=True, index=True)
     order_line_id = db.Column(db.Integer, db.ForeignKey('customer_order_line.id'), nullable=True, index=True)
     production_request_line_id = db.Column(db.Integer, db.ForeignKey('production_request_line.id'), nullable=True, index=True)
+    replenishment_request_line_id = db.Column(db.Integer, db.ForeignKey('production_request_line.id'), nullable=True, index=True)
     output_type = db.Column(db.String(60), nullable=False, default='other', index=True)
     quantity = db.Column(db.Numeric(12, 3), nullable=False, default=0)
     defect_quantity = db.Column(db.Numeric(12, 3), nullable=False, default=0)
@@ -1114,7 +1160,35 @@ class ProductionShiftOutput(db.Model):
     workshop = db.relationship('ProductionWorkshop', backref='outputs')
     item = db.relationship('Item', backref='production_outputs')
     order_line = db.relationship('CustomerOrderLine', backref='production_outputs')
-    production_request_line = db.relationship('ProductionRequestLine', backref='shift_outputs')
+    production_request_line = db.relationship(
+        'ProductionRequestLine',
+        foreign_keys=[production_request_line_id],
+        backref='shift_outputs',
+    )
+    replenishment_request_line = db.relationship(
+        'ProductionRequestLine',
+        foreign_keys=[replenishment_request_line_id],
+        backref='shift_replenishment_outputs',
+    )
+
+
+class ProductionShiftMaterial(db.Model):
+    __tablename__ = 'production_shift_material'
+
+    id = db.Column(db.Integer, primary_key=True)
+    shift_id = db.Column(db.Integer, db.ForeignKey('production_shift.id'), nullable=False, index=True)
+    item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=False, index=True)
+    qty_fact = db.Column(db.Numeric(12, 3), nullable=False, default=0)
+    qty_issued = db.Column(db.Numeric(12, 3), nullable=False, default=0)
+    qty_shortage = db.Column(db.Numeric(12, 3), nullable=False, default=0)
+    unit = db.Column(db.String(20), nullable=False, default='шт')
+    shortage_status = db.Column(db.String(30), nullable=False, default='none', index=True)
+    status = db.Column(db.String(30), nullable=False, default='draft', index=True)
+    note = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    shift = db.relationship('ProductionShift', backref=db.backref('materials', lazy='dynamic', cascade='all, delete-orphan'))
+    item = db.relationship('Item', backref='shift_materials')
 
 
 class CustomerOrderLine(db.Model):
@@ -1374,6 +1448,8 @@ class ProducedUnit(db.Model):
     target_warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=True, index=True)
     order_id = db.Column(db.Integer, db.ForeignKey('customer_order.id'), nullable=True, index=True)
     trailer_id = db.Column(db.Integer, db.ForeignKey('trailer.id'), nullable=True, index=True)
+    shift_output_id = db.Column(db.Integer, db.ForeignKey('production_shift_output.id'), nullable=True, index=True)
+    unit_seq = db.Column(db.Integer, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
     produced_at = db.Column(db.DateTime, nullable=True)
     status = db.Column(db.String(30), nullable=False, default='produced_no_vin', index=True)
@@ -1386,6 +1462,11 @@ class ProducedUnit(db.Model):
     target_warehouse = db.relationship('Warehouse', backref='produced_units')
     order = db.relationship('CustomerOrder', backref='produced_units')
     trailer = db.relationship('Trailer', backref='produced_unit', uselist=False)
+    shift_output = db.relationship('ProductionShiftOutput', backref=db.backref('produced_units', lazy='dynamic'))
+
+    __table_args__ = (
+        db.UniqueConstraint('shift_output_id', 'unit_seq', name='uq_produced_unit_shift_output_seq'),
+    )
 
 
 class ItemProductionRoute(db.Model):

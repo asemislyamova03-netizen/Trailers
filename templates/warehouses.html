@@ -24,7 +24,8 @@
                         <th>Производственный</th>
                         <th>Продажи</th>
                         <th>Категория</th>
-                        {% if current_user.is_admin %}<th></th>{% endif %}
+                        <th>Режим цеха</th>
+                        {% if current_user.is_admin or current_user.is_director %}<th></th>{% endif %}
                     </tr>
                     </thead>
                     <tbody>
@@ -36,18 +37,44 @@
                             <td>{% if w.is_production %}<span class="badge text-bg-warning">Склад выпуска</span>{% else %}<span class="text-muted">Нет</span>{% endif %}</td>
                             <td>{% if w.can_sell %}<span class="badge text-bg-success">Можно</span>{% else %}<span class="badge text-bg-secondary">Нет</span>{% endif %}</td>
                             <td>{{ w.primary_product_category or '' }}</td>
-                            {% if current_user.is_admin %}
+                            <td>
+                              {% set direction_areas = w.storage_areas|selectattr('product_category')|list %}
+                              {% if w.is_production and direction_areas %}
+                                {% for area in direction_areas if area.product_category in ['light_trailer', 'cargo_trailer'] %}
+                                  <div class="small">{{ area.name }}: {{ 'учёт открыт, только смена' if area.shopfloor_posting_mode == 'shift_only' else 'учёт не открыт, работает +1' }}</div>
+                                {% endfor %}
+                              {% else %}
+                                <span class="text-muted">—</span>
+                              {% endif %}
+                            </td>
+                            {% if current_user.is_admin or current_user.is_director %}
                             <td class="text-end">
-                                <form method="post" action="{{ url_for('main.warehouse_set_production_flag', warehouse_id=w.id) }}">
+                                {% if current_user.is_admin %}
+                                <form method="post" action="{{ url_for('main.warehouse_set_production_flag', warehouse_id=w.id) }}" class="d-inline">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <input type="hidden" name="is_production" value="{{ '0' if w.is_production else '1' }}">
                                     <button class="btn btn-sm btn-soft">{{ 'Снять признак' if w.is_production else 'Сделать складом выпуска' }}</button>
                                 </form>
+                                {% endif %}
+                                {% if current_user.is_director or current_user.is_admin %}
+                                  {% for area in w.storage_areas if area.product_category in ['light_trailer', 'cargo_trailer'] %}
+                                <form method="post" action="{{ url_for('main.warehouse_set_shopfloor_mode', area_id=area.id) }}" class="d-inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    {% if area.shopfloor_posting_mode == 'shift_only' %}
+                                    <input type="hidden" name="shopfloor_posting_mode" value="legacy_plus_one">
+                                    <button class="btn btn-sm btn-soft">{{ area.name }}: вернуть +1</button>
+                                    {% else %}
+                                    <input type="hidden" name="shopfloor_posting_mode" value="shift_only">
+                                    <button class="btn btn-sm btn-soft">{{ area.name }}: открыть учёт</button>
+                                    {% endif %}
+                                </form>
+                                  {% endfor %}
+                                {% endif %}
                             </td>
                             {% endif %}
                         </tr>
                     {% else %}
-                        <tr><td colspan="{{ 7 if current_user.is_admin else 6 }}" class="text-muted p-3">Складов нет</td></tr>
+                        <tr><td colspan="8" class="text-muted p-3">Складов нет</td></tr>
                     {% endfor %}
                     </tbody>
                 </table>

@@ -14,7 +14,7 @@ from flask_login import (
 )
 
 from extensions import db
-from models import Trailer, Item, ProductCategory, Warehouse, Customer, SalesContract, SalesContractLine, SalesRealization, SalesRealizationLine, ContractTemplate, User, OTTS, Lead, LeadMessage, CustomerOrder, CustomerOrderLine, OrderPayment, OrderEvent, Reservation, SupplyNeed, ProductionRequest, ProductionRequestLine, ProducedUnit, StockMovement, IdempotencyKey, VinRegistry, VinRegistryEvent, InventoryTransaction, InventoryBalance, InventoryOperation, InventoryOperationLine, WarehouseStorageArea, ItemBillOfMaterials, ItemBillOfMaterialsLine, Supplier, InventoryReceiptPlan, InventoryReceiptPlanLine, ProductionEmployee, ProductionShift, ProductionShiftOutput, ProductionWorkshop
+from models import Trailer, Item, ProductCategory, Warehouse, Customer, SalesContract, SalesContractLine, SalesRealization, SalesRealizationLine, ContractTemplate, User, OTTS, Lead, LeadMessage, CustomerOrder, CustomerOrderLine, OrderPayment, OrderEvent, Reservation, SupplyNeed, ProductionRequest, ProductionRequestLine, ProducedUnit, StockMovement, IdempotencyKey, VinRegistry, VinRegistryEvent, InventoryTransaction, InventoryBalance, InventoryOperation, InventoryOperationLine, WarehouseStorageArea, ItemBillOfMaterials, ItemBillOfMaterialsLine, Supplier, InventoryReceiptPlan, InventoryReceiptPlanLine, ProductionEmployee, ProductionShift, ProductionShiftOutput, ProductionShiftMaterial, ProductionWorkshop
 from models import (
     TrailerAllowedOption, TrailerBoardHeight, TrailerBoardPriceMatrix, TrailerBodyExecution, TrailerBodySize,
     TrailerDimensionMatrix, TrailerHubOption, TrailerHubPriceMatrix, TrailerOtssModificationMatrix,
@@ -46,6 +46,16 @@ from inventory_service import (
     reverse_production_consumption,
 )
 from inventory_units import format_inventory_quantity, normalize_unit, quantity_input_step
+from shift_posting import (
+    MODE_SHIFT_ONLY,
+    ShiftAlreadyPosted,
+    ShiftPostingError,
+    close_shift_shortage,
+    list_direction_areas,
+    plus_one_blocked_reason,
+    post_shift,
+    set_direction_shopfloor_mode,
+)
 from collections import defaultdict
 import sqlalchemy as sa
 from sqlalchemy import and_, or_
@@ -2329,6 +2339,22 @@ def warehouse_set_production_flag(warehouse_id):
     warehouse.is_production = request.form.get('is_production') == '1'
     db.session.commit()
     flash('Признак производственного склада обновлён', 'success')
+    return redirect(url_for('main.warehouses_list'))
+
+
+@main_bp.route('/warehouses/direction-areas/<int:area_id>/shopfloor-mode', methods=['POST'])
+@role_required('director')
+def warehouse_set_shopfloor_mode(area_id):
+    area = WarehouseStorageArea.query.get_or_404(area_id)
+    mode = (request.form.get('shopfloor_posting_mode') or '').strip()
+    try:
+        set_direction_shopfloor_mode(area, mode)
+    except ShiftPostingError as exc:
+        flash(str(exc), 'danger')
+        return redirect(url_for('main.warehouses_list'))
+    db.session.commit()
+    label = 'учёт открыт, только смена' if mode == MODE_SHIFT_ONLY else 'учёт не открыт, работает +1'
+    flash(f'Режим направления «{area.name}»: {label}. Остатки не переносятся.', 'success')
     return redirect(url_for('main.warehouses_list'))
 
 # ========= ОТТС =========
@@ -14521,6 +14547,11 @@ def production_workspace():
     workshops = []
     workshop_quick_actions = []
     shift_output_items = []
+    shift_material_items = []
+    direction_areas = []
+    open_shift_outputs = []
+    open_shift_materials = []
+    in_work_trailer_lines = []
     performance_rows = []
     performance_totals = {}
     selected_month = (request.args.get('month') or '').strip()
@@ -14565,6 +14596,27 @@ def production_workspace():
             Item.query.filter(Item.is_active == True, Item.item_type.in_(('TRAILER', 'COMPONENT')))
             .order_by(Item.name.asc())
             .limit(300)
+            .all()
+        )
+        shift_material_items = (
+            Item.query.filter(Item.is_active == True, Item.item_type == 'COMPONENT')
+            .order_by(Item.name.asc())
+            .limit(300)
+            .all()
+        )
+        direction_areas = list_direction_areas()
+        if my_open_shift:
+            open_shift_outputs = my_open_shift.outputs.order_by(ProductionShiftOutput.id.asc()).all()
+            open_shift_materials = my_open_shift.materials.order_by(ProductionShiftMaterial.id.asc()).all()
+        in_work_trailer_lines = (
+            ProductionRequestLine.query
+            .join(Item, Item.id == ProductionRequestLine.item_id)
+            .filter(
+                Item.item_type == 'TRAILER',
+                ~ProductionRequestLine.status.in_(['ready', 'closed', 'cancelled', 'CANCELLED']),
+            )
+            .order_by(ProductionRequestLine.id.desc())
+            .limit(100)
             .all()
         )
     elif active_tab == 'performance':
@@ -14678,6 +14730,7 @@ def production_workspace():
         lines = sorted(lines, key=_production_line_sort_key)
 
     line_material_shortages = _production_line_material_shortages(lines) if lines else {}
+    line_plus_one_blocked = {line.id: plus_one_blocked_reason(line) for line in lines} if lines else {}
 
     today_units = (
         ProducedUnit.query
@@ -14706,11 +14759,17 @@ def production_workspace():
         material_balances=material_balances,
         material_balance_groups=material_balance_groups,
         line_material_shortages=line_material_shortages,
+        line_plus_one_blocked=line_plus_one_blocked,
         my_open_shift=my_open_shift,
         my_recent_shifts=my_recent_shifts,
         workshops=workshops,
         workshop_quick_actions=workshop_quick_actions,
         shift_output_items=shift_output_items,
+        shift_material_items=shift_material_items,
+        direction_areas=direction_areas,
+        open_shift_outputs=open_shift_outputs,
+        open_shift_materials=open_shift_materials,
+        in_work_trailer_lines=in_work_trailer_lines,
         performance_rows=performance_rows,
         performance_totals=performance_totals,
         selected_month=selected_month,
@@ -14749,6 +14808,11 @@ def production_line_produce_one(line_id):
         flash('По этой позиции уже выпущено нужное количество', 'warning')
         return redirect(url_for('main.production_workspace', tab='in_work'))
 
+    plus_one_reason = plus_one_blocked_reason(line)
+    if plus_one_reason:
+        flash(plus_one_reason, 'warning')
+        return redirect(url_for('main.production_workspace', tab='in_work'))
+
     finished_wh_id = line.production_request.target_warehouse_id if line.production_request else None
     material_wh_id = resolve_material_warehouse_id(finished_wh_id)
     if line.item_id and get_active_bom(line.item_id):
@@ -14759,6 +14823,7 @@ def production_line_produce_one(line_id):
             finished_item_id=line.item_id,
             material_warehouse_id=material_wh_id,
             units_count=1,
+            storage_area_id=None,
         )
         if shortages:
             flash(str(InsufficientInventoryError(shortages)), 'danger')
@@ -14794,6 +14859,7 @@ def production_line_produce_one(line_id):
             produced_unit_id=produced_unit.id,
             created_by_user_id=current_user.id,
             units_count=1,
+            storage_area_id=None,
         )
     except (InsufficientInventoryError, ValueError) as exc:
         if idem_key:
@@ -14925,6 +14991,12 @@ def production_shift_open():
 
     work_area = (request.form.get('work_area') or '').strip() or (workshop.code.lower() if workshop else 'production')
     note = (request.form.get('note') or '').strip() or None
+    direction_area_id = request.form.get('direction_area_id', type=int) or None
+    direction_warehouse_id = None
+    if direction_area_id:
+        direction_area = WarehouseStorageArea.query.get(direction_area_id)
+        if direction_area:
+            direction_warehouse_id = direction_area.warehouse_id
     shift = ProductionShift(
         employee_id=employee.id,
         user_id=current_user.id,
@@ -14934,6 +15006,8 @@ def production_shift_open():
         started_at=datetime.utcnow(),
         status='open',
         note=note,
+        direction_warehouse_id=direction_warehouse_id,
+        direction_area_id=direction_area_id,
     )
     db.session.add(shift)
     db.session.commit()
@@ -14948,6 +15022,9 @@ def production_shift_close(shift_id):
     employee = _get_or_create_production_employee(current_user, commit=True)
     if shift.employee_id != employee.id and not (current_user.is_admin or current_user.is_director):
         flash('Можно закрыть только свою смену.', 'danger')
+        return redirect(url_for('main.production_workspace', tab='shifts'))
+    if shift.status == 'posted':
+        flash('Смена уже проведена.', 'warning')
         return redirect(url_for('main.production_workspace', tab='shifts'))
     if shift.status != 'open':
         flash('Смена уже закрыта.', 'warning')
@@ -14976,6 +15053,7 @@ def production_shift_add_output(shift_id):
         return redirect(url_for('main.production_workspace', tab='shifts'))
 
     item_id = request.form.get('item_id', type=int) or None
+    production_request_line_id = request.form.get('production_request_line_id', type=int) or None
     quantity = Decimal(str(request.form.get('quantity') or '0'))
     defect_quantity = Decimal(str(request.form.get('defect_quantity') or '0'))
     unit = normalize_unit((request.form.get('unit') or 'шт').strip() or 'шт')
@@ -14993,6 +15071,7 @@ def production_shift_add_output(shift_id):
         employee_id=shift.employee_id,
         workshop_id=shift.workshop_id,
         item_id=item_id,
+        production_request_line_id=production_request_line_id,
         output_type=output_type[:60],
         quantity=quantity,
         defect_quantity=defect_quantity,
@@ -15003,6 +15082,117 @@ def production_shift_add_output(shift_id):
     db.session.add(row)
     db.session.commit()
     flash('Выпуск по смене сохранён.', 'success')
+    return redirect(url_for('main.production_workspace', tab='shifts'))
+
+
+@main_bp.route('/production/shifts/<int:shift_id>/material', methods=['POST'])
+@role_required('production', 'director', 'manager', 'laser_operator', 'bending_operator')
+def production_shift_add_material(shift_id):
+    shift = ProductionShift.query.get_or_404(shift_id)
+    employee = _get_or_create_production_employee(current_user, commit=True)
+    if shift.employee_id != employee.id and not (current_user.is_admin or current_user.is_director):
+        flash('Добавлять материалы можно только в свою смену.', 'danger')
+        return redirect(url_for('main.production_workspace', tab='shifts'))
+    if shift.status != 'open':
+        flash('Смена закрыта, добавлять материалы нельзя.', 'warning')
+        return redirect(url_for('main.production_workspace', tab='shifts'))
+    item_id = request.form.get('item_id', type=int) or None
+    item = Item.query.get(item_id) if item_id else None
+    if not item or item.item_type != 'COMPONENT':
+        flash('Выберите материал (COMPONENT).', 'danger')
+        return redirect(url_for('main.production_workspace', tab='shifts'))
+    qty_fact = Decimal(str(request.form.get('qty_fact') or '0'))
+    if qty_fact <= 0:
+        flash('Укажите фактический расход больше нуля.', 'danger')
+        return redirect(url_for('main.production_workspace', tab='shifts'))
+    row = ProductionShiftMaterial(
+        shift_id=shift.id,
+        item_id=item.id,
+        qty_fact=qty_fact,
+        unit=normalize_unit((request.form.get('unit') or item.unit or 'шт').strip() or 'шт'),
+        note=(request.form.get('note') or '').strip() or None,
+        status='draft',
+    )
+    db.session.add(row)
+    db.session.commit()
+    flash('Факт материала сохранён.', 'success')
+    return redirect(url_for('main.production_workspace', tab='shifts'))
+
+
+@main_bp.route('/production/shifts/<int:shift_id>/post', methods=['POST'])
+@role_required('production', 'director', 'manager', 'laser_operator', 'bending_operator')
+def production_shift_post(shift_id):
+    shift = ProductionShift.query.get_or_404(shift_id)
+    employee = _get_or_create_production_employee(current_user, commit=True)
+    if shift.employee_id != employee.id and not (current_user.is_admin or current_user.is_director):
+        flash('Провести можно только свою смену.', 'danger')
+        return redirect(url_for('main.production_workspace', tab='shifts'))
+    if shift.status == 'posted':
+        flash('Смена уже проведена. Повторных движений нет.', 'warning')
+        return redirect(url_for('main.production_workspace', tab='shifts'))
+
+    idem_key, duplicate = _reserve_idempotency_key()
+    if duplicate:
+        return _duplicate_redirect(idem_key, url_for('main.production_workspace', tab='shifts'))
+
+    senior_confirmed = request.form.get('senior_shortage_confirmed') == '1'
+    actor_is_senior = bool(current_user.is_admin)
+    hours_raw = (request.form.get('hours_fact') or '').strip()
+    hours_fact = hours_raw if hours_raw else None
+    direction_area_id = request.form.get('direction_area_id', type=int) or shift.direction_area_id
+    try:
+        result = post_shift(
+            shift=shift,
+            direction_area_id=direction_area_id,
+            hours_fact=hours_fact,
+            senior_confirmed=senior_confirmed,
+            actor_is_senior=actor_is_senior,
+            created_by_user_id=current_user.id,
+        )
+        _finish_idempotency(idem_key, 'ProductionShift', shift.id)
+        db.session.commit()
+    except ShiftAlreadyPosted:
+        if idem_key:
+            db.session.rollback()
+        flash('Смена уже проведена. Повторных движений нет.', 'warning')
+        return redirect(url_for('main.production_workspace', tab='shifts'))
+    except (ShiftPostingError, IntegrityError, ValueError) as exc:
+        db.session.rollback()
+        refreshed = ProductionShift.query.get(shift_id)
+        if refreshed and refreshed.status == 'posted':
+            flash('Смена уже проведена. Повторных движений нет.', 'warning')
+            return redirect(url_for('main.production_workspace', tab='shifts'))
+        flash(str(exc) if not isinstance(exc, IntegrityError) else 'Повторное проведение отклонено.', 'danger')
+        return redirect(url_for('main.production_workspace', tab='shifts'))
+    flash(
+        f'Смена #{shift.id} проведена: единиц {result["units_created"]}, '
+        f'приходов деталей {result["receipt_ops"]}, списаний {result["issued_ops"]}, '
+        f'недостач {result["shortage_ops"]}.',
+        'success',
+    )
+    return redirect(url_for('main.production_workspace', tab='shifts'))
+
+
+@main_bp.route('/production/shifts/materials/<int:material_id>/close-shortage', methods=['POST'])
+@role_required('admin')
+def production_shift_close_shortage(material_id):
+    try:
+        material = close_shift_shortage(material_id=material_id, user_id=current_user.id)
+        extra = InventoryOperation.query.filter_by(
+            shift_material_id=material.id,
+            operation_type='production_issue',
+            status='posted',
+        ).count()
+        if extra > 1:
+            db.session.rollback()
+            flash('Закрытие недостачи не создаёт второе списание.', 'danger')
+            return redirect(url_for('main.production_workspace', tab='shifts'))
+        db.session.commit()
+    except ShiftPostingError as exc:
+        db.session.rollback()
+        flash(str(exc), 'danger')
+        return redirect(url_for('main.production_workspace', tab='shifts'))
+    flash('Недостача закрыта инвентаризацией без повторного списания.', 'success')
     return redirect(url_for('main.production_workspace', tab='shifts'))
 
 

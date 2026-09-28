@@ -139,6 +139,18 @@
           <option value="{{ w.id }}">{{ w.name }}</option>
           {% endfor %}
         </select>
+        <label class="form-label">Направление учёта ТМЦ</label>
+        <select name="direction_area_id" class="form-select form-select-sm mb-2">
+          <option value="">— легковые / грузовые —</option>
+          {% for area in direction_areas %}
+          <option value="{{ area.id }}">{{ area.warehouse.name if area.warehouse else '' }} · {{ area.name }} {% if area.shopfloor_posting_mode == 'shift_only' and area.is_active %}(учёт открыт){% else %}(учёт не открыт, смена недоступна){% endif %}</option>
+          {% endfor %}
+        </select>
+        {% if not direction_areas %}
+        <div class="small text-warning mb-2">Зон направления ещё нет. До открытия учёта работает прежний +1 с общего остатка завода.</div>
+        {% else %}
+        <div class="small text-muted mb-2">До открытия учёта направления кнопка +1 списывает общий остаток. Смену с зоны провести нельзя.</div>
+        {% endif %}
         <input name="work_area" class="form-control form-control-sm mb-2" placeholder="Код участка (опционально)">
         <textarea name="note" class="form-control form-control-sm mb-2" rows="2" placeholder="Комментарий"></textarea>
         <button class="btn btn-sm btn-primary-app">Открыть смену</button>
@@ -166,9 +178,98 @@
           <div class="col-md-2"><label class="form-label">Брак</label><input type="number" name="defect_quantity" step="0.001" min="0" class="form-control form-control-sm"></div>
           <div class="col-md-2"><label class="form-label">Ед.</label><input name="unit" value="шт" class="form-control form-control-sm"></div>
           <div class="col-md-2"><label class="form-label">Тип</label><input name="output_type" value="other" class="form-control form-control-sm"></div>
+          <div class="col-md-4">
+            <label class="form-label">Заявка (если есть)</label>
+            <select name="production_request_line_id" class="form-select form-select-sm">
+              <option value="">— сверх плана / без заявки —</option>
+              {% for line in in_work_trailer_lines %}
+              <option value="{{ line.id }}">{{ line.production_request.request_number if line.production_request else line.id }} · {{ line.item.article if line.item else line.id }}</option>
+              {% endfor %}
+            </select>
+          </div>
           <div class="col-12"><input name="note" class="form-control form-control-sm" placeholder="Комментарий"></div>
           <div class="col-12"><button class="btn btn-sm btn-success">Добавить выпуск</button></div>
         </div>
+      </form>
+      <div class="table-responsive mt-3">
+        <table class="table table-sm mb-0">
+          <thead><tr><th>Номенклатура</th><th>Годные</th><th>Брак</th><th>Заявка</th></tr></thead>
+          <tbody>
+            {% for row in open_shift_outputs %}
+            <tr>
+              <td>{{ row.item.article if row.item else '—' }} {{ row.item.name if row.item else '' }}</td>
+              <td>{{ row.quantity }}</td>
+              <td>{{ row.defect_quantity }}</td>
+              <td>{{ row.production_request_line_id or 'сверх плана' }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="text-muted">Выпуска ещё нет</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <form method="post" action="{{ url_for('main.production_shift_add_material', shift_id=my_open_shift.id) }}" class="mt-3">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="fw-semibold mb-2">Факт материалов</div>
+        <div class="row g-2 align-items-end">
+          <div class="col-md-5">
+            <select name="item_id" class="form-select form-select-sm">
+              <option value="">— материал —</option>
+              {% for item in shift_material_items %}
+              <option value="{{ item.id }}">{{ item.article or '—' }} — {{ item.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-2"><input type="number" name="qty_fact" step="0.001" min="0" class="form-control form-control-sm" placeholder="Факт"></div>
+          <div class="col-md-2"><input name="unit" value="шт" class="form-control form-control-sm"></div>
+          <div class="col-md-3"><button class="btn btn-sm btn-soft">Добавить расход</button></div>
+        </div>
+      </form>
+      <div class="table-responsive mt-2">
+        <table class="table table-sm mb-0">
+          <thead><tr><th>Материал</th><th>Факт</th></tr></thead>
+          <tbody>
+            {% for row in open_shift_materials %}
+            <tr><td>{{ row.item.name if row.item else row.item_id }}</td><td>{{ row.qty_fact }} {{ row.unit }}</td></tr>
+            {% else %}
+            <tr><td colspan="2" class="text-muted">Факта ещё нет</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <form method="post" action="{{ url_for('main.production_shift_post', shift_id=my_open_shift.id) }}" class="mt-3 border-top pt-3">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="form_token" value="{{ form_token() }}">
+        <div class="fw-semibold mb-2">Зафиксировать смену</div>
+        <div class="row g-2 align-items-end">
+          <div class="col-md-4">
+            <label class="form-label">Направление учёта ТМЦ</label>
+            <select name="direction_area_id" class="form-select form-select-sm" required>
+              <option value="">— выбрать —</option>
+              {% for area in direction_areas %}
+              <option value="{{ area.id }}" {% if my_open_shift.direction_area_id == area.id %}selected{% endif %} {% if area.shopfloor_posting_mode != 'shift_only' or not area.is_active %}disabled{% endif %}>{{ area.warehouse.name if area.warehouse else '' }} · {{ area.name }} {% if area.shopfloor_posting_mode == 'shift_only' and area.is_active %}(учёт открыт){% else %}(учёт не открыт){% endif %}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">Часы</label>
+            <input name="hours_fact" type="number" step="0.01" min="0" class="form-control form-control-sm" placeholder="авто">
+          </div>
+          {% if current_user.is_admin %}
+          <div class="col-md-4">
+            <div class="form-check mt-4">
+              <input class="form-check-input" type="checkbox" name="senior_shortage_confirmed" value="1" id="seniorShortage{{ my_open_shift.id }}">
+              <label class="form-check-label small" for="seniorShortage{{ my_open_shift.id }}">Admin подтверждает недостачу (только после открытия учёта; не заменяет инвентаризацию)</label>
+            </div>
+          </div>
+          {% endif %}
+          <div class="col-md-2"><button class="btn btn-sm btn-primary-app">Провести</button></div>
+        </div>
+        {% if not direction_areas %}
+        <div class="small text-danger mt-2">Проведение недоступно: нет зон легковые/грузовые.</div>
+        {% else %}
+        <div class="small text-muted mt-2">Провести смену можно только по направлению с открытым учётом. Пустая неактивная зона и зона до открытия блокируют проведение, в том числе для admin.</div>
+        {% endif %}
       </form>
       {% else %}
       <div class="text-muted small">Сначала откройте смену, затем фиксируйте выпуск и брак.</div>
@@ -291,10 +392,15 @@
                   <button class="btn btn-sm btn-primary-app" {% if not current_user.is_production %}disabled{% endif %}>В работу</button>
                 </form>
                 {% endif %}
+                {% set plus_blocked = (line_plus_one_blocked or {}).get(line.id) %}
                 <form method="post" action="{{ url_for('main.production_line_produce_one', line_id=line.id) }}">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <button class="btn btn-sm btn-success" {% if not current_user.is_production or line_material_shortages.get(line.id) %}disabled{% endif %} title="{% if line_material_shortages.get(line.id) %}Сначала приход ТМЦ или поправьте BOM{% else %}Выпустить 1 шт.{% endif %}">+1</button>
+                  <input type="hidden" name="form_token" value="{{ form_token() }}">
+                  <button class="btn btn-sm btn-success" {% if not current_user.is_production or line_material_shortages.get(line.id) %}disabled{% endif %} title="{% if plus_blocked %}{{ plus_blocked }}{% elif line_material_shortages.get(line.id) %}Сначала приход ТМЦ или поправьте BOM{% else %}Выпустить 1 шт.{% endif %}">+1</button>
                 </form>
+                {% if plus_blocked %}
+                <div class="small text-warning">{{ plus_blocked }}</div>
+                {% endif %}
               {% endif %}
               <button class="btn btn-sm btn-soft" type="button" data-bs-toggle="collapse" data-bs-target="#productionComment{{ line.id }}">Комментарий</button>
             </div>
