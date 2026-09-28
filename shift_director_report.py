@@ -6,7 +6,9 @@
 Расход на экран — только строки номенклатуры со своей единицей.
 material_fact_by_zone и legacy_plus_one_issue_qty не показывать:
 это суммы разных Item/unit и они дают ложный итог.
-Брак прицепов и брак деталей считаются раздельно, по единицам измерения.
+Годные детали и брак деталей — тоже строки номенклатуры со своей единицей.
+Общее количество разных Item/unit не считать и не показывать.
+Прицепы и часы остаются отдельными показателями.
 """
 
 from __future__ import annotations
@@ -88,11 +90,11 @@ def _empty_area(work_area: str, direction_code: str, direction_name: str) -> dic
         'hours': Decimal('0'),
         'defect_qty': Decimal('0'),
         'defect_trailer_units': {},
-        'defect_part_units': {},
+        'defect_part_items': {},
         'defect_other_units': {},
         'good_trailers': 0,
         'good_trailer_declared_qty': Decimal('0'),
-        'good_parts': Decimal('0'),
+        'good_part_items': {},
     }
 
 
@@ -114,10 +116,40 @@ def _unit_lines(store: dict[str, Decimal]) -> list[dict]:
     ]
 
 
+def _add_item_qty(store: dict[tuple, dict], item, item_id, unit: str, qty: Decimal) -> None:
+    """Складывать только одну номенклатуру и одну единицу."""
+    if qty == 0:
+        return
+    key = (item_id or 0, unit)
+    group = store.get(key)
+    if group is None:
+        group = {
+            'item_id': item_id,
+            'item_article': (item.article or '') if item else '',
+            'item_name': (item.name or '') if item else '',
+            'unit': unit,
+            'qty': Decimal('0'),
+        }
+        store[key] = group
+    group['qty'] += qty
+
+
+def _item_lines(store: dict[tuple, dict]) -> list[dict]:
+    return [
+        group
+        for group in sorted(
+            store.values(),
+            key=lambda row: (row['item_article'] or '', row['unit'] or '', row['item_id'] or 0),
+        )
+        if group['qty'] != 0
+    ]
+
+
 def _finalize_area(row: dict) -> dict:
     row['defect_trailer_lines'] = _unit_lines(row.pop('defect_trailer_units'))
-    row['defect_part_lines'] = _unit_lines(row.pop('defect_part_units'))
+    row['defect_part_lines'] = _item_lines(row.pop('defect_part_items'))
     row['defect_other_lines'] = _unit_lines(row.pop('defect_other_units'))
+    row['good_part_lines'] = _item_lines(row.pop('good_part_items'))
     return row
 
 
@@ -170,10 +202,10 @@ def build_shift_director_report(
 
     good_trailers = 0
     good_trailer_declared = Decimal('0')
-    good_parts = Decimal('0')
+    good_part_items: dict[tuple, dict] = {}
     defect_qty = Decimal('0')
     defect_trailer_units: dict[str, Decimal] = {}
-    defect_part_units: dict[str, Decimal] = {}
+    defect_part_items: dict[tuple, dict] = {}
     defect_other_units: dict[str, Decimal] = {}
     unexpected_component_units = 0
 
@@ -187,18 +219,16 @@ def build_shift_director_report(
         defect_qty += defect
         item = output.item
         item_type = item.item_type if item else None
-        defect_unit = _measure_unit(output.unit, item.unit if item else None)
+        measure_unit = _measure_unit(output.unit, item.unit if item else None)
         if item_type == 'TRAILER':
-            defect_store = defect_trailer_units
-            area_store = bucket['defect_trailer_units']
+            _add_unit_qty(defect_trailer_units, measure_unit, defect)
+            _add_unit_qty(bucket['defect_trailer_units'], measure_unit, defect)
         elif item_type == 'COMPONENT':
-            defect_store = defect_part_units
-            area_store = bucket['defect_part_units']
+            _add_item_qty(defect_part_items, item, output.item_id, measure_unit, defect)
+            _add_item_qty(bucket['defect_part_items'], item, output.item_id, measure_unit, defect)
         else:
-            defect_store = defect_other_units
-            area_store = bucket['defect_other_units']
-        _add_unit_qty(defect_store, defect_unit, defect)
-        _add_unit_qty(area_store, defect_unit, defect)
+            _add_unit_qty(defect_other_units, measure_unit, defect)
+            _add_unit_qty(bucket['defect_other_units'], measure_unit, defect)
         linked_units = units_by_output.get(output.id, [])
         if item_type == 'TRAILER':
             declared = _d(output.quantity)
@@ -208,8 +238,8 @@ def build_shift_director_report(
             good_trailers += len(linked_units)
         elif item_type == 'COMPONENT':
             good = _d(output.quantity)
-            bucket['good_parts'] += good
-            good_parts += good
+            _add_item_qty(good_part_items, item, output.item_id, measure_unit, good)
+            _add_item_qty(bucket['good_part_items'], item, output.item_id, measure_unit, good)
             unexpected_component_units += len(linked_units)
         else:
             unexpected_component_units += len(linked_units)
@@ -363,10 +393,10 @@ def build_shift_director_report(
             'good_trailers': good_trailers,
             'good_trailer_declared_qty': good_trailer_declared,
             'good_trailer_unit_gap': good_trailer_declared - Decimal(good_trailers),
-            'good_parts': good_parts,
+            'good_part_lines': _item_lines(good_part_items),
             'defect_qty': defect_qty,
             'defect_trailer_lines': _unit_lines(defect_trailer_units),
-            'defect_part_lines': _unit_lines(defect_part_units),
+            'defect_part_lines': _item_lines(defect_part_items),
             'defect_other_lines': _unit_lines(defect_other_units),
             'hours': sum((row['hours'] for row in area_rows), Decimal('0')),
             'legacy_plus_one_trailers': len(legacy_units),

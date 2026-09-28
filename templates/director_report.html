@@ -249,6 +249,7 @@
     </table>
   </div>
   {% elif section == 'shifts' %}
+  <p class="small text-muted mb-2">Годные детали и брак деталей — по каждой номенклатуре и единице. Разные позиции не складываются.</p>
   <div class="table-responsive mb-3">
     <table class="table table-hover align-middle">
       <thead>
@@ -267,7 +268,13 @@
           <td>{{ row.shift_count }}</td>
           <td>{{ row.hours }}</td>
           <td>{{ row.good_trailers }}</td>
-          <td>{{ row.good_parts }}</td>
+          <td>
+            {% for line in row.good_part_lines %}
+              <div>{{ line.item_article }} <span class="text-muted">{{ line.item_name }}</span> {{ line.qty|inventory_qty(line.unit) }}</div>
+            {% else %}
+              <span class="text-muted">0</span>
+            {% endfor %}
+          </td>
           <td>
             {% for line in row.defect_trailer_lines %}
               <div>{{ line.qty|inventory_qty(line.unit) }}</div>
@@ -277,7 +284,7 @@
           </td>
           <td>
             {% for line in row.defect_part_lines %}
-              <div>{{ line.qty|inventory_qty(line.unit) }}</div>
+              <div>{{ line.item_article }} <span class="text-muted">{{ line.item_name }}</span> {{ line.qty|inventory_qty(line.unit) }}</div>
             {% else %}
               <span class="text-muted">0</span>
             {% endfor %}

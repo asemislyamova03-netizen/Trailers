@@ -319,10 +319,20 @@ class ShiftDirectorReportTests(unittest.TestCase):
         self.assertEqual(totals['good_trailers'], 3)
         self.assertEqual(totals['good_trailer_declared_qty'], Decimal('3'))
         self.assertEqual(totals['good_trailer_unit_gap'], Decimal('0'))
-        self.assertEqual(totals['good_parts'], Decimal('5'))
+        self.assertNotIn('good_parts', totals)
+        self.assertEqual(
+            {(line['item_article'], line['unit']): line['qty'] for line in totals['good_part_lines']},
+            {('P', 'шт'): Decimal('5')},
+        )
+        self.assertEqual(totals['good_part_lines'][0]['item_name'], 'Рама 2500')
         self.assertEqual(totals['defect_qty'], Decimal('3'))
         self.assertEqual(totals['defect_trailer_lines'], [{'unit': 'шт', 'qty': Decimal('2')}])
-        self.assertEqual(totals['defect_part_lines'], [{'unit': 'шт', 'qty': Decimal('1')}])
+        self.assertEqual(len(totals['defect_part_lines']), 1)
+        defect_part = totals['defect_part_lines'][0]
+        self.assertEqual(defect_part['item_article'], 'P')
+        self.assertEqual(defect_part['item_name'], 'Рама 2500')
+        self.assertEqual(defect_part['unit'], 'шт')
+        self.assertEqual(defect_part['qty'], Decimal('1'))
         self.assertEqual(totals['defect_other_lines'], [])
         self.assertEqual(totals['hours'], Decimal('12'))
         self.assertEqual(totals['legacy_plus_one_trailers'], 1)
@@ -340,11 +350,14 @@ class ShiftDirectorReportTests(unittest.TestCase):
         light = by_key[('assembly', 'DIR_LIGHT')]
         cargo = by_key[('welding', 'DIR_CARGO')]
         self.assertEqual(light['good_trailers'], 2)
-        self.assertEqual(light['good_parts'], Decimal('5'))
+        self.assertEqual(
+            {(line['item_article'], line['unit']): line['qty'] for line in light['good_part_lines']},
+            {('P', 'шт'): Decimal('5')},
+        )
         self.assertEqual(light['defect_qty'], Decimal('1'))
         self.assertEqual(light['hours'], Decimal('8'))
         self.assertEqual(cargo['good_trailers'], 1)
-        self.assertEqual(cargo['good_parts'], Decimal('0'))
+        self.assertEqual(cargo['good_part_lines'], [])
         self.assertEqual(cargo['defect_qty'], Decimal('2'))
         self.assertEqual(cargo['hours'], Decimal('4'))
         self.assertNotIn(('assembly', 'DIR_LIGHT_CLOSED'), by_key)
@@ -395,7 +408,10 @@ class ShiftDirectorReportTests(unittest.TestCase):
         report = self._report()
         self.assertEqual(report['material_fact_by_zone']['DIR_LIGHT']['qty_fact'], Decimal('12'))
         self.assertEqual(report['totals']['good_trailers'], 2)
-        self.assertEqual(report['totals']['good_parts'], Decimal('5'))
+        self.assertEqual(
+            {(line['item_article'], line['unit']): line['qty'] for line in report['totals']['good_part_lines']},
+            {('P', 'шт'): Decimal('5')},
+        )
 
     def test_sold_from_produced_stays_blocked_when_trailer_matches_realization(self):
         from models import Customer, ProducedUnit, SalesRealization, SalesRealizationLine, Trailer
@@ -551,11 +567,21 @@ class ShiftDirectorReportTests(unittest.TestCase):
             report['totals']['defect_trailer_lines'],
             [{'unit': 'шт', 'qty': Decimal('2')}],
         )
-        part_units = {line['unit']: line['qty'] for line in report['totals']['defect_part_lines']}
-        self.assertEqual(part_units, {'кг': Decimal('4'), 'шт': Decimal('1')})
+        part_lines = {
+            (line['item_article'], line['unit']): line
+            for line in report['totals']['defect_part_lines']
+        }
+        self.assertEqual(part_lines[('SHEET', 'кг')]['qty'], Decimal('4'))
+        self.assertEqual(part_lines[('SHEET', 'кг')]['item_name'], 'Лист кг')
+        self.assertEqual(part_lines[('P', 'шт')]['qty'], Decimal('1'))
+        self.assertEqual(part_lines[('P', 'шт')]['item_name'], 'Рама 2500')
+        self.assertEqual(len(part_lines), 2)
         by_key = {(row['work_area'], row['direction_code']): row for row in report['area_rows']}
-        light_parts = {line['unit']: line['qty'] for line in by_key[('assembly', 'DIR_LIGHT')]['defect_part_lines']}
-        self.assertEqual(light_parts, {'кг': Decimal('4'), 'шт': Decimal('1')})
+        light_parts = {
+            (line['item_article'], line['unit']): line['qty']
+            for line in by_key[('assembly', 'DIR_LIGHT')]['defect_part_lines']
+        }
+        self.assertEqual(light_parts, {('SHEET', 'кг'): Decimal('4'), ('P', 'шт'): Decimal('1')})
         self.assertEqual(by_key[('assembly', 'DIR_LIGHT')]['defect_trailer_lines'], [])
         self.assertEqual(
             by_key[('welding', 'DIR_CARGO')]['defect_trailer_lines'],
@@ -597,11 +623,166 @@ class ShiftDirectorReportTests(unittest.TestCase):
         self.assertEqual(cards['Расход материалов'].group('value').strip(), 'по номенклатуре')
         self.assertNotRegex(cards['Старые +1'].group('caption'), r'\d')
         self.assertEqual(cards['Брак прицепов'].group('value').strip(), '2 шт')
-        self.assertEqual(cards['Брак деталей'].group('value').strip(), '4 кг; 1 шт')
+        self.assertEqual(
+            cards['Брак деталей'].group('value').strip(),
+            'P Рама 2500 1 шт; SHEET Лист кг 4 кг',
+        )
+        self.assertEqual(cards['Годные детали'].group('value').strip(), 'P Рама 2500 5 шт')
         self.assertNotIn('Брак', cards)
         for card in cards.values():
             value = card.group('value')
             caption = card.group('caption')
             for forbidden in ('13', '15', '25'):
-                self.assertNotIn(forbidden, value)
-                self.assertNotIn(forbidden, caption)
+                self.assertNotRegex(value, rf'(?<!\d){forbidden}(?!\d)')
+                self.assertNotRegex(caption, rf'(?<!\d){forbidden}(?!\d)')
+
+    def _post_both(self):
+        self._post(self.light_shift, self.light_area.id, '8')
+        self._post(self.cargo_shift, self.cargo_area.id, '4')
+        self.db.session.commit()
+
+    def _add_component_output(self, article, name, unit, good_qty, defect_qty):
+        from models import Item, ProductionShiftOutput
+
+        item = Item(item_type='COMPONENT', article=article, name=name, unit=unit)
+        self.db.session.add(item)
+        self.db.session.flush()
+        self.db.session.add(ProductionShiftOutput(
+            shift_id=self.light_shift.id,
+            employee_id=self.employee.id,
+            workshop_id=self.workshop.id,
+            item_id=item.id,
+            output_type='component',
+            quantity=good_qty,
+            defect_quantity=defect_qty,
+            unit=unit,
+        ))
+        self.db.session.flush()
+        return item
+
+    def _lines_by_article_unit(self, lines):
+        return {(line['item_article'], line['unit']): line for line in lines}
+
+    def test_two_components_with_different_units_are_not_summed(self):
+        plate = self._add_component_output('SHEET', 'Лист кг', 'кг', Decimal('4'), Decimal('2'))
+        bolt = self._add_component_output('BOLT', 'Крепеж', 'шт', Decimal('3'), Decimal('1'))
+        self._post_both()
+
+        report = self._report()
+        totals = report['totals']
+        self.assertEqual(totals['good_trailers'], 3)
+        self.assertEqual(totals['hours'], Decimal('12'))
+        self.assertEqual(totals['defect_trailer_lines'], [{'unit': 'шт', 'qty': Decimal('2')}])
+        self.assertNotIn('good_parts', totals)
+
+        good = self._lines_by_article_unit(totals['good_part_lines'])
+        self.assertEqual(good[('SHEET', 'кг')]['qty'], Decimal('4'))
+        self.assertEqual(good[('SHEET', 'кг')]['item_id'], plate.id)
+        self.assertEqual(good[('SHEET', 'кг')]['item_name'], 'Лист кг')
+        self.assertEqual(good[('BOLT', 'шт')]['qty'], Decimal('3'))
+        self.assertEqual(good[('BOLT', 'шт')]['item_id'], bolt.id)
+        self.assertEqual(good[('P', 'шт')]['qty'], Decimal('5'))
+        self.assertEqual(len(good), 3)
+        for line in totals['good_part_lines']:
+            self.assertNotIn(line['qty'], (Decimal('7'), Decimal('8'), Decimal('9'), Decimal('12')))
+
+        defects = self._lines_by_article_unit(totals['defect_part_lines'])
+        self.assertEqual(defects[('SHEET', 'кг')]['qty'], Decimal('2'))
+        self.assertEqual(defects[('BOLT', 'шт')]['qty'], Decimal('1'))
+        self.assertEqual(defects[('P', 'шт')]['qty'], Decimal('1'))
+        self.assertEqual(len(defects), 3)
+        for line in totals['defect_part_lines']:
+            self.assertNotEqual(line['qty'], Decimal('7'))
+
+        by_key = {(row['work_area'], row['direction_code']): row for row in report['area_rows']}
+        light_good = self._lines_by_article_unit(by_key[('assembly', 'DIR_LIGHT')]['good_part_lines'])
+        self.assertEqual(light_good[('SHEET', 'кг')]['qty'], Decimal('4'))
+        self.assertEqual(light_good[('BOLT', 'шт')]['qty'], Decimal('3'))
+        self.assertEqual(by_key[('welding', 'DIR_CARGO')]['good_part_lines'], [])
+
+    def test_two_components_with_same_unit_are_not_summed(self):
+        hinge = self._add_component_output('HINGE', 'Петля', 'шт', Decimal('4'), Decimal('6'))
+        latch = self._add_component_output('LATCH', 'Защёлка', 'шт', Decimal('3'), Decimal('2'))
+        self._post_both()
+
+        report = self._report()
+        good = self._lines_by_article_unit(report['totals']['good_part_lines'])
+        self.assertEqual(good[('HINGE', 'шт')]['qty'], Decimal('4'))
+        self.assertEqual(good[('HINGE', 'шт')]['item_name'], 'Петля')
+        self.assertEqual(good[('HINGE', 'шт')]['item_id'], hinge.id)
+        self.assertEqual(good[('LATCH', 'шт')]['qty'], Decimal('3'))
+        self.assertEqual(good[('LATCH', 'шт')]['item_name'], 'Защёлка')
+        self.assertEqual(good[('LATCH', 'шт')]['item_id'], latch.id)
+        self.assertEqual(good[('P', 'шт')]['qty'], Decimal('5'))
+        same_unit = [line for line in report['totals']['good_part_lines'] if line['unit'] == 'шт']
+        self.assertEqual(len(same_unit), 3)
+        for line in same_unit:
+            self.assertNotEqual(line['qty'], Decimal('7'))
+            self.assertNotEqual(line['qty'], Decimal('12'))
+
+        defects = self._lines_by_article_unit(report['totals']['defect_part_lines'])
+        self.assertEqual(defects[('HINGE', 'шт')]['item_name'], 'Петля')
+        self.assertEqual(defects[('HINGE', 'шт')]['qty'], Decimal('6'))
+        self.assertEqual(defects[('LATCH', 'шт')]['item_name'], 'Защёлка')
+        self.assertEqual(defects[('LATCH', 'шт')]['qty'], Decimal('2'))
+        self.assertEqual(defects[('P', 'шт')]['qty'], Decimal('1'))
+        defect_pieces = [line for line in report['totals']['defect_part_lines'] if line['unit'] == 'шт']
+        self.assertEqual(len(defect_pieces), 3)
+        for line in defect_pieces:
+            self.assertNotIn(line['qty'], (Decimal('7'), Decimal('8'), Decimal('9')))
+
+        self.assertEqual(report['totals']['good_trailers'], 3)
+        self.assertEqual(report['totals']['hours'], Decimal('12'))
+        self.assertEqual(report['totals']['defect_trailer_lines'], [{'unit': 'шт', 'qty': Decimal('2')}])
+
+    def test_shifts_page_does_not_sum_good_parts_across_items(self):
+        self._add_component_output('SHEET', 'Лист кг', 'кг', Decimal('4'), Decimal('2'))
+        self._add_component_output('HINGE', 'Петля', 'шт', Decimal('3'), Decimal('6'))
+        self._post_both()
+
+        client = self.app.test_client()
+        with client.session_transaction() as sess:
+            sess['_user_id'] = str(self.director.id)
+            sess['_fresh'] = True
+        response = client.get('/director/reports/shifts')
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('Лист кг', body)
+        self.assertIn('Петля', body)
+        self.assertIn('Рама 2500', body)
+        self.assertIn('4 кг', body)
+        self.assertIn('3 шт', body)
+        self.assertIn('5 шт', body)
+        self.assertIn('2 кг', body)
+        self.assertIn('6 шт', body)
+        self.assertNotIn('7 шт', body)
+        self.assertNotRegex(body, r'<td>\s*12(\.0+)?\s*</td>')
+        self.assertNotRegex(body, r'<td>\s*7(\.0+)?\s*</td>')
+
+        cards = {
+            match.group('title').strip(): match
+            for match in re.finditer(
+                r'<div class="small text-muted">(?P<title>[^<]*)</div>\s*'
+                r'<div class="fw-bold">(?P<value>[^<]*)</div>\s*'
+                r'<div class="small text-muted">(?P<caption>[^<]*)</div>',
+                body,
+            )
+        }
+        self.assertEqual(
+            cards['Годные детали'].group('value').strip(),
+            'HINGE Петля 3 шт; P Рама 2500 5 шт; SHEET Лист кг 4 кг',
+        )
+        self.assertEqual(
+            cards['Брак деталей'].group('value').strip(),
+            'HINGE Петля 6 шт; P Рама 2500 1 шт; SHEET Лист кг 2 кг',
+        )
+        self.assertNotIn('7', cards['Годные детали'].group('value'))
+        self.assertNotIn('8', cards['Годные детали'].group('value'))
+        self.assertNotIn('9', cards['Годные детали'].group('value'))
+        self.assertNotIn('12', cards['Годные детали'].group('value'))
+        self.assertNotIn('7 шт', cards['Брак деталей'].group('value'))
+        self.assertNotIn('8 шт', cards['Брак деталей'].group('value'))
+        self.assertNotIn('9 шт', cards['Брак деталей'].group('value'))
+        self.assertEqual(cards['Брак прицепов'].group('value').strip(), '2 шт')
+        self.assertEqual(cards['Годные прицепы'].group('value').strip(), '3')
+        self.assertRegex(cards['Часы'].group('value'), r'^12(\.0+)?$')

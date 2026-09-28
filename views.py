@@ -16765,11 +16765,35 @@ def director_report(section='sales'):
                 for line in lines
             )
 
+        def _item_measure_text(lines) -> str:
+            if not lines:
+                return '0'
+            parts = []
+            for line in lines:
+                label = ' '.join(
+                    part for part in (
+                        (line.get('item_article') or '').strip(),
+                        (line.get('item_name') or '').strip(),
+                    )
+                    if part
+                )
+                qty_text = format_inventory_quantity(line['qty'], line['unit'])
+                parts.append(f'{label} {qty_text}'.strip() if label else qty_text)
+            return '; '.join(parts)
+
         cards = [
             {'title': 'Годные прицепы', 'value': totals['good_trailers'], 'caption': 'единицы posted-смен, без старых +1'},
-            {'title': 'Годные детали', 'value': totals['good_parts'], 'caption': 'COMPONENT posted-смен, брак не входит'},
+            {
+                'title': 'Годные детали',
+                'value': _item_measure_text(totals['good_part_lines']),
+                'caption': 'каждая деталь со своей единицей; общей суммы разных позиций нет',
+            },
             {'title': 'Брак прицепов', 'value': _measure_text(totals['defect_trailer_lines']), 'caption': 'только прицепы, без деталей'},
-            {'title': 'Брак деталей', 'value': _measure_text(totals['defect_part_lines']), 'caption': 'только детали, без прицепов'},
+            {
+                'title': 'Брак деталей',
+                'value': _item_measure_text(totals['defect_part_lines']),
+                'caption': 'каждая деталь со своей единицей, без прицепов',
+            },
             {'title': 'Часы', 'value': totals['hours'], 'caption': 'hours_fact только posted-смен'},
             {'title': 'Расход материалов', 'value': 'по номенклатуре', 'caption': 'факт, списание и недостача с единицей; общей суммы разных позиций нет'},
             {'title': 'Старые +1', 'value': totals['legacy_plus_one_trailers'], 'caption': 'выпуск отдельно; списание по номенклатуре с единицей, без общей суммы'},
