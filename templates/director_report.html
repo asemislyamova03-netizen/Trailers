@@ -248,6 +248,47 @@
       </tbody>
     </table>
   </div>
+  {% elif section == 'shifts' %}
+  <div class="table-responsive mb-3">
+    <table class="table table-hover align-middle">
+      <thead><tr><th>Участок</th><th>Направление</th><th>Смен</th><th>Часы</th><th>Годные прицепы</th><th>Годные детали</th><th>Брак</th></tr></thead>
+      <tbody>
+      {% for row in rows %}
+        <tr>
+          <td class="fw-semibold">{{ row.work_area or '—' }}</td>
+          <td>{{ row.direction_code }} <span class="text-muted">{{ row.direction_name }}</span></td>
+          <td>{{ row.shift_count }}</td>
+          <td>{{ row.hours }}</td>
+          <td>{{ row.good_trailers }}</td>
+          <td>{{ row.good_parts }}</td>
+          <td>{{ row.defect_qty }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7" class="text-muted p-4">Нет проведённых смен за период</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <h2 class="h6">Фактический расход материалов по зонам</h2>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead><tr><th>Зона</th><th>Номенклатура</th><th>Факт</th><th>Списано с книги</th><th>Недостача</th><th>Строк</th></tr></thead>
+      <tbody>
+      {% for row in analytics_rows %}
+        <tr>
+          <td class="fw-semibold">{{ row.direction_code }}</td>
+          <td>{{ row.item_article }} <span class="text-muted">{{ row.item_name }}</span></td>
+          <td>{{ row.qty_fact }}</td>
+          <td>{{ row.qty_issued }}</td>
+          <td>{{ row.qty_shortage }}</td>
+          <td>{{ row.line_count }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="text-muted p-4">Нет проведённого факта материалов</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
   {% elif section == 'production' %}
   <div class="table-responsive">
     <table class="table table-hover align-middle">

@@ -46,6 +46,7 @@ from inventory_service import (
     reverse_production_consumption,
 )
 from inventory_units import format_inventory_quantity, normalize_unit, quantity_input_step
+from shift_director_report import build_shift_director_report
 from shift_posting import (
     MODE_SHIFT_ONLY,
     ShiftAlreadyPosted,
@@ -16081,6 +16082,7 @@ def director_report(section='sales'):
         'turnover': 'Оборачиваемость',
         'stock': 'Остатки по складам',
         'production': 'Производство',
+        'shifts': 'Смены',
         'movements': 'Перемещения',
         'problems': 'Проблемные заказы',
         'line-links': 'Связи строк',
@@ -16746,6 +16748,26 @@ def director_report(section='sales'):
                 {'title': 'Оборачиваемость', 'value': round((total_sold / total_stock) if total_stock else 0, 2), 'caption': 'продано / остаток'},
                 {'title': 'Период', 'value': period_days, 'caption': 'дней'},
             ]
+
+    elif section == 'shifts':
+        shift_report = build_shift_director_report(period_start=period_start, period_end=period_end)
+        totals = shift_report['totals']
+        light_fact = shift_report['material_fact_by_zone']['DIR_LIGHT']['qty_fact']
+        cargo_fact = shift_report['material_fact_by_zone']['DIR_CARGO']['qty_fact']
+        sold = shift_report['sold_from_produced']
+        report_warning = sold['reason'] + ' ' + sold['proposal']
+        cards = [
+            {'title': 'Годные прицепы', 'value': totals['good_trailers'], 'caption': 'единицы posted-смен, без старых +1'},
+            {'title': 'Годные детали', 'value': totals['good_parts'], 'caption': 'COMPONENT posted-смен, брак не входит'},
+            {'title': 'Брак', 'value': totals['defect_qty'], 'caption': 'по участкам и направлениям'},
+            {'title': 'Часы', 'value': totals['hours'], 'caption': 'hours_fact только posted-смен'},
+            {'title': 'Факт DIR_LIGHT', 'value': light_fact, 'caption': 'qty_fact, не списание книги'},
+            {'title': 'Факт DIR_CARGO', 'value': cargo_fact, 'caption': 'qty_fact, не списание книги'},
+            {'title': 'Старые +1', 'value': totals['legacy_plus_one_trailers'], 'caption': f"выпуск отдельно; списание {totals['legacy_plus_one_issue_qty']}"},
+            {'title': 'Продано из выпущенных', 'value': sold['status'], 'caption': 'показатель не посчитан'},
+        ]
+        rows = shift_report['area_rows']
+        analytics_rows = shift_report['material_rows']
 
     elif section == 'production':
         query = ProducedUnit.query.outerjoin(ProductionRequestLine, ProductionRequestLine.id == ProducedUnit.production_request_line_id).outerjoin(ProductionRequest, ProductionRequest.id == ProductionRequestLine.production_request_id)
