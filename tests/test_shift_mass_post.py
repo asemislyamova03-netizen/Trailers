@@ -853,12 +853,15 @@ class ShiftMassPostTests(unittest.TestCase):
 
     def test_director_cannot_switch_shopfloor_mode(self):
         """Finding 1: режим зоны — только admin; director получает отказ, mode не меняется."""
+        from flask import g
         from models import WarehouseStorageArea
         from shift_posting import MODE_LEGACY, MODE_SHIFT_ONLY, plus_one_blocked_reason
 
         self.assertEqual(self.light_area.shopfloor_posting_mode, MODE_LEGACY)
         self.assertIsNone(plus_one_blocked_reason(self.pr_line))
 
+        # Shared app_context from setUp keeps g._login_user across test_client requests.
+        g.pop('_login_user', None)
         client = self.app.test_client()
         with client.session_transaction() as sess:
             sess['_user_id'] = str(self.director.id)
@@ -869,19 +872,24 @@ class ShiftMassPostTests(unittest.TestCase):
             follow_redirects=False,
         )
         self.assertEqual(rv.status_code, 302)
+        # admin_required → / ; role_required would redirect to role_home
+        self.assertEqual(rv.headers.get('Location'), '/')
         area = WarehouseStorageArea.query.get(self.light_area.id)
         self.assertEqual(area.shopfloor_posting_mode, MODE_LEGACY)
         self.assertIsNone(plus_one_blocked_reason(self.pr_line))
 
-        with client.session_transaction() as sess:
+        g.pop('_login_user', None)
+        admin_client = self.app.test_client()
+        with admin_client.session_transaction() as sess:
             sess['_user_id'] = str(self.admin.id)
             sess['_fresh'] = True
-        rv_admin = client.post(
+        rv_admin = admin_client.post(
             f'/warehouses/direction-areas/{self.light_area.id}/shopfloor-mode',
             data={'shopfloor_posting_mode': MODE_SHIFT_ONLY},
             follow_redirects=False,
         )
         self.assertEqual(rv_admin.status_code, 302)
+        self.assertEqual(rv_admin.headers.get('Location'), '/warehouses')
         area = WarehouseStorageArea.query.get(self.light_area.id)
         self.assertEqual(area.shopfloor_posting_mode, MODE_SHIFT_ONLY)
 
