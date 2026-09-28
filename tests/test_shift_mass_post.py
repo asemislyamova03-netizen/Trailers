@@ -851,6 +851,195 @@ class ShiftMassPostTests(unittest.TestCase):
         self.assertEqual(_qty(self.factory.id, self.sheet.id, self.light_area.id), before_light)
         self.assertEqual(_qty(self.factory.id, self.sheet.id, self.cargo_area.id), before_cargo)
 
+    def _new_shift(self):
+        from models import ProductionShift
+
+        shift = ProductionShift(
+            employee_id=self.employee.id,
+            user_id=self.admin.id,
+            workshop_id=self.workshop.id,
+            work_area='assembly',
+            status='open',
+            direction_warehouse_id=self.factory.id,
+            direction_area_id=self.light_area.id,
+        )
+        self.db.session.add(shift)
+        self.db.session.flush()
+        return shift
+
+    def test_director_cannot_switch_shopfloor_mode_admin_can(self):
+        from flask_login import login_user
+        from models import WarehouseStorageArea
+        from shift_posting import MODE_LEGACY, MODE_SHIFT_ONLY
+        from views import warehouse_set_shopfloor_mode
+
+        self.assertEqual(self.light_area.shopfloor_posting_mode, MODE_LEGACY)
+        with self.app.test_request_context(
+            f'/warehouses/direction-areas/{self.light_area.id}/shopfloor-mode',
+            method='POST',
+            data={'shopfloor_posting_mode': MODE_SHIFT_ONLY},
+        ):
+            login_user(self.director, force=True)
+            rv = warehouse_set_shopfloor_mode(self.light_area.id)
+        self.assertEqual(rv.status_code, 302)
+        self.assertEqual(rv.location, '/')
+        self.db.session.expire_all()
+        self.assertEqual(WarehouseStorageArea.query.get(self.light_area.id).shopfloor_posting_mode, MODE_LEGACY)
+
+        with self.app.test_request_context(
+            f'/warehouses/direction-areas/{self.light_area.id}/shopfloor-mode',
+            method='POST',
+            data={'shopfloor_posting_mode': MODE_SHIFT_ONLY},
+        ):
+            login_user(self.admin, force=True)
+            rv = warehouse_set_shopfloor_mode(self.light_area.id)
+        self.assertEqual(rv.status_code, 302)
+        self.assertIn('/warehouses', rv.location)
+        self.db.session.expire_all()
+        self.assertEqual(WarehouseStorageArea.query.get(self.light_area.id).shopfloor_posting_mode, MODE_SHIFT_ONLY)
+
+    def test_split_material_lines_need_aggregated_shortage_confirm(self):
+        from models import ProductionShift, ProductionShiftMaterial
+        from shift_posting import ShiftPostingError
+
+        shift = self._new_shift()
+        self.db.session.add(ProductionShiftMaterial(
+            shift_id=shift.id, item_id=self.sheet.id, qty_fact=Decimal('6'), unit='шт'
+        ))
+        self.db.session.add(ProductionShiftMaterial(
+            shift_id=shift.id, item_id=self.sheet.id, qty_fact=Decimal('6'), unit='шт'
+        ))
+        self.db.session.commit()
+        with self.assertRaises(ShiftPostingError) as ctx:
+            self._post(shift=shift, senior=False)
+        self.assertIn('нехватка', str(ctx.exception).lower())
+        self.db.session.rollback()
+        self.assertEqual(_qty(self.factory.id, self.sheet.id, self.light_area.id), Decimal('8'))
+        self.assertEqual(ProductionShift.query.get(shift.id).status, 'open')
+
+        self._post(shift=shift, senior=True, actor_senior=True)
+        self.db.session.commit()
+        self.assertEqual(ProductionShift.query.get(shift.id).status, 'posted')
+        self.assertEqual(_qty(self.factory.id, self.sheet.id, self.light_area.id), Decimal('0'))
+
+    def test_output_without_item_is_rejected(self):
+        from models import ProducedUnit, ProductionShift, ProductionShiftOutput
+        from shift_posting import ShiftPostingError
+
+        shift = self._new_shift()
+        self.db.session.add(ProductionShiftOutput(
+            shift_id=shift.id,
+            employee_id=self.employee.id,
+            workshop_id=self.workshop.id,
+            item_id=None,
+            output_type='trailer',
+            quantity=Decimal('1'),
+            defect_quantity=Decimal('0'),
+        ))
+        self.db.session.commit()
+        with self.assertRaises(ShiftPostingError) as ctx:
+            self._post(shift=shift, senior=False)
+        self.assertIn('без номенклатуры', str(ctx.exception).lower())
+        self.db.session.rollback()
+        self.assertEqual(ProductionShift.query.get(shift.id).status, 'open')
+        self.assertEqual(ProducedUnit.query.filter_by(shift_output_id=shift.outputs.first().id).count(), 0)
+
+    def test_trailer_and_request_line_must_match_shift_direction(self):
+        from models import (
+            ProducedUnit,
+            ProductionRequest,
+            ProductionRequestLine,
+            ProductionShift,
+            ProductionShiftOutput,
+            SupplyNeed,
+        )
+        from shift_posting import ShiftPostingError
+
+        shift = self._new_shift()
+        self.db.session.add(ProductionShiftOutput(
+            shift_id=shift.id,
+            employee_id=self.employee.id,
+            workshop_id=self.workshop.id,
+            item_id=self.cargo_item.id,
+            output_type='trailer',
+            quantity=Decimal('1'),
+            defect_quantity=Decimal('0'),
+        ))
+        self.db.session.commit()
+        with self.assertRaises(ShiftPostingError) as ctx:
+            self._post(shift=shift, senior=False)
+        self.assertIn('не соответствует направлению', str(ctx.exception))
+        self.db.session.rollback()
+        self.assertEqual(ProductionShift.query.get(shift.id).status, 'open')
+        self.assertEqual(ProducedUnit.query.count(), 0)
+
+        cargo_need = SupplyNeed(
+            need_type='STOCK_REPLENISHMENT',
+            status='IN_PRODUCTION',
+            item_id=self.cargo_item.id,
+            warehouse_id=self.cargo_sales.id,
+            quantity=1,
+        )
+        cargo_pr = ProductionRequest(request_number='PR-CARGO', status='in_progress', target_warehouse_id=self.cargo_sales.id)
+        self.db.session.add_all([cargo_need, cargo_pr])
+        self.db.session.flush()
+        cargo_line = ProductionRequestLine(
+            production_request_id=cargo_pr.id,
+            supply_need_id=cargo_need.id,
+            item_id=self.cargo_item.id,
+            assembly_warehouse_id=self.factory.id,
+            quantity=1,
+            produced_qty=0,
+            status='in_production',
+        )
+        self.db.session.add(cargo_line)
+        self.db.session.flush()
+        mismatch_shift = self._new_shift()
+        self.db.session.add(ProductionShiftOutput(
+            shift_id=mismatch_shift.id,
+            employee_id=self.employee.id,
+            workshop_id=self.workshop.id,
+            item_id=self.trailer_model.id,
+            production_request_line_id=cargo_line.id,
+            output_type='trailer',
+            quantity=Decimal('1'),
+            defect_quantity=Decimal('0'),
+        ))
+        self.db.session.commit()
+        with self.assertRaises(ShiftPostingError) as ctx:
+            self._post(shift=mismatch_shift, senior=False)
+        message = str(ctx.exception)
+        self.assertTrue(
+            'не соответствует' in message,
+            msg=message,
+        )
+        self.db.session.rollback()
+        self.assertEqual(ProductionShift.query.get(mismatch_shift.id).status, 'open')
+        self.assertEqual(ProducedUnit.query.count(), 0)
+
+    def test_fractional_trailer_qty_rejected(self):
+        from models import ProducedUnit, ProductionShift, ProductionShiftOutput
+        from shift_posting import ShiftPostingError
+
+        shift = self._new_shift()
+        self.db.session.add(ProductionShiftOutput(
+            shift_id=shift.id,
+            employee_id=self.employee.id,
+            workshop_id=self.workshop.id,
+            item_id=self.trailer_model.id,
+            output_type='trailer',
+            quantity=Decimal('1.7'),
+            defect_quantity=Decimal('0'),
+        ))
+        self.db.session.commit()
+        with self.assertRaises(ShiftPostingError) as ctx:
+            self._post(shift=shift, senior=False)
+        self.assertIn('целым', str(ctx.exception).lower())
+        self.db.session.rollback()
+        self.assertEqual(ProductionShift.query.get(shift.id).status, 'open')
+        self.assertEqual(ProducedUnit.query.count(), 0)
+        self.assertEqual(_qty(self.factory.id, self.sheet.id, self.light_area.id), Decimal('8'))
+
 
 if __name__ == '__main__':
     unittest.main()

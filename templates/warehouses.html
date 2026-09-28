@@ -25,7 +25,7 @@
                         <th>Продажи</th>
                         <th>Категория</th>
                         <th>Режим цеха</th>
-                        {% if current_user.is_admin or current_user.is_director %}<th></th>{% endif %}
+                        {% if current_user.is_admin %}<th></th>{% endif %}
                     </tr>
                     </thead>
                     <tbody>
@@ -47,16 +47,13 @@
                                 <span class="text-muted">—</span>
                               {% endif %}
                             </td>
-                            {% if current_user.is_admin or current_user.is_director %}
+                            {% if current_user.is_admin %}
                             <td class="text-end">
-                                {% if current_user.is_admin %}
                                 <form method="post" action="{{ url_for('main.warehouse_set_production_flag', warehouse_id=w.id) }}" class="d-inline">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <input type="hidden" name="is_production" value="{{ '0' if w.is_production else '1' }}">
                                     <button class="btn btn-sm btn-soft">{{ 'Снять признак' if w.is_production else 'Сделать складом выпуска' }}</button>
                                 </form>
-                                {% endif %}
-                                {% if current_user.is_director or current_user.is_admin %}
                                   {% for area in w.storage_areas if area.product_category in ['light_trailer', 'cargo_trailer'] %}
                                 <form method="post" action="{{ url_for('main.warehouse_set_shopfloor_mode', area_id=area.id) }}" class="d-inline">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -69,7 +66,6 @@
                                     {% endif %}
                                 </form>
                                   {% endfor %}
-                                {% endif %}
                             </td>
                             {% endif %}
                         </tr>

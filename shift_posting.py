@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime
 from decimal import Decimal
 
@@ -323,6 +324,56 @@ def _good_qty(output: ProductionShiftOutput) -> int:
     return max(qty, 0)
 
 
+def _item_direction_code(item: Item | None) -> str | None:
+    category = getattr(item, 'product_category', None) if item else None
+    code = getattr(category, 'code', None) if category else None
+    return code if code in DIRECTION_CATEGORIES else None
+
+
+def _require_whole_trailer_qty(value) -> int:
+    qty = _as_decimal(value)
+    if qty < 0:
+        raise ShiftPostingError('Количество готовых прицепов не может быть отрицательным.')
+    if qty != qty.to_integral_value():
+        raise ShiftPostingError(
+            'Количество готовых прицепов должно быть целым. Дробное значение не округляю и не провожу.'
+        )
+    return int(qty)
+
+
+def _require_output_matches_direction(output: ProductionShiftOutput, direction_code: str) -> Item:
+    item = output.item or (Item.query.get(output.item_id) if output.item_id else None)
+    if not item:
+        raise ShiftPostingError(
+            'Строка выпуска без номенклатуры. Проведение отклонено, строка не пропускается.'
+        )
+    item_dir = _item_direction_code(item)
+    if item.item_type == 'TRAILER':
+        if item_dir != direction_code:
+            raise ShiftPostingError(
+                'Изделие выпуска не соответствует направлению смены. Проведение отклонено.'
+            )
+        _require_whole_trailer_qty(output.quantity)
+    elif item_dir and item_dir != direction_code:
+        raise ShiftPostingError(
+            'Изделие выпуска не соответствует направлению смены. Проведение отклонено.'
+        )
+    if output.production_request_line_id:
+        line = ProductionRequestLine.query.get(output.production_request_line_id)
+        if not line:
+            raise ShiftPostingError('Строка заявки для выпуска не найдена. Проведение отклонено.')
+        if line.item_id != item.id:
+            raise ShiftPostingError(
+                'Строка заявки не соответствует изделию выпуска. Проведение отклонено.'
+            )
+        line_dir = line_direction_code(line)
+        if line_dir != direction_code:
+            raise ShiftPostingError(
+                'Строка заявки не соответствует направлению смены. Проведение отклонено.'
+            )
+    return item
+
+
 def _next_request_number() -> str:
     last = db.session.query(ProductionRequest).order_by(ProductionRequest.id.desc()).first()
     next_id = (last.id + 1) if last else 1
@@ -526,7 +577,8 @@ def post_shift(
     if not materials and not outputs:
         raise ShiftPostingError('Добавьте выпуск или факт материалов перед проведением смены.')
 
-    pending_shortages: list[tuple[ProductionShiftMaterial, Decimal]] = []
+    needed_by_item: dict[int, Decimal] = defaultdict(lambda: Decimal('0'))
+    item_by_id: dict[int, Item] = {}
     for material in materials:
         item = material.item or Item.query.get(material.item_id)
         if not item or item.item_type != 'COMPONENT':
@@ -534,16 +586,21 @@ def post_shift(
         qty_fact = _as_decimal(material.qty_fact)
         if qty_fact < 0:
             raise ShiftPostingError('Факт расхода не может быть отрицательным.')
-        available = warehouse_item_qty(warehouse.id, item.id, area.id)
-        shortage = max(qty_fact - available, Decimal('0'))
+        needed_by_item[item.id] += qty_fact
+        item_by_id[item.id] = item
+
+    for output in outputs:
+        _require_output_matches_direction(output, direction_code)
+
+    pending_shortages: list[tuple[Item, Decimal]] = []
+    for item_id, total_fact in needed_by_item.items():
+        available = warehouse_item_qty(warehouse.id, item_id, area.id)
+        shortage = max(total_fact - available, Decimal('0'))
         if shortage > 0:
-            pending_shortages.append((material, shortage))
+            pending_shortages.append((item_by_id[item_id], shortage))
 
     if pending_shortages and not (senior_confirmed and actor_is_senior):
-        names = ', '.join(
-            f'«{(row[0].item.name if row[0].item else row[0].item_id)}» нехватка {row[1]}'
-            for row in pending_shortages
-        )
+        names = ', '.join(f'«{row[0].name}» нехватка {row[1]}' for row in pending_shortages)
         raise ShiftPostingError(
             'Факт больше книги. Нужно подтверждение старшего (admin) после открытия учёта зоны. '
             'Это не заменяет начальную инвентаризацию. ' + names
@@ -596,10 +653,11 @@ def post_shift(
             raise ShiftPostingError('Отрицательный остаток запрещён.')
 
     for output in outputs:
-        item = output.item
-        if not item:
-            continue
-        good_qty = _good_qty(output)
+        item = _require_output_matches_direction(output, direction_code)
+        if item.item_type == 'TRAILER':
+            good_qty = _require_whole_trailer_qty(output.quantity)
+        else:
+            good_qty = _good_qty(output)
         unit = normalize_unit(output.unit or item.unit)
         if item.item_type == 'COMPONENT':
             if good_qty > 0:

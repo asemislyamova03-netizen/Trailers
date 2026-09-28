@@ -2343,7 +2343,7 @@ def warehouse_set_production_flag(warehouse_id):
 
 
 @main_bp.route('/warehouses/direction-areas/<int:area_id>/shopfloor-mode', methods=['POST'])
-@role_required('director')
+@admin_required
 def warehouse_set_shopfloor_mode(area_id):
     area = WarehouseStorageArea.query.get_or_404(area_id)
     mode = (request.form.get('shopfloor_posting_mode') or '').strip()
