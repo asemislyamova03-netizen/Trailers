@@ -16402,6 +16402,8 @@ def director_report(section='sales'):
     problem_rows = []
     analytics_rows = []
     anomaly_rows = []
+    legacy_issue_rows = []
+    shift_show_other_defect = False
     report_warning = None
 
     def combined_sales_report_records() -> tuple[list[dict], list[dict], str | None]:
@@ -16752,22 +16754,37 @@ def director_report(section='sales'):
     elif section == 'shifts':
         shift_report = build_shift_director_report(period_start=period_start, period_end=period_end)
         totals = shift_report['totals']
-        light_fact = shift_report['material_fact_by_zone']['DIR_LIGHT']['qty_fact']
-        cargo_fact = shift_report['material_fact_by_zone']['DIR_CARGO']['qty_fact']
         sold = shift_report['sold_from_produced']
         report_warning = sold['reason'] + ' ' + sold['proposal']
+
+        def _measure_text(lines) -> str:
+            if not lines:
+                return '0'
+            return '; '.join(
+                format_inventory_quantity(line['qty'], line['unit'])
+                for line in lines
+            )
+
         cards = [
             {'title': 'Годные прицепы', 'value': totals['good_trailers'], 'caption': 'единицы posted-смен, без старых +1'},
             {'title': 'Годные детали', 'value': totals['good_parts'], 'caption': 'COMPONENT posted-смен, брак не входит'},
-            {'title': 'Брак', 'value': totals['defect_qty'], 'caption': 'по участкам и направлениям'},
+            {'title': 'Брак прицепов', 'value': _measure_text(totals['defect_trailer_lines']), 'caption': 'только прицепы, без деталей'},
+            {'title': 'Брак деталей', 'value': _measure_text(totals['defect_part_lines']), 'caption': 'только детали, без прицепов'},
             {'title': 'Часы', 'value': totals['hours'], 'caption': 'hours_fact только posted-смен'},
-            {'title': 'Факт DIR_LIGHT', 'value': light_fact, 'caption': 'qty_fact, не списание книги'},
-            {'title': 'Факт DIR_CARGO', 'value': cargo_fact, 'caption': 'qty_fact, не списание книги'},
-            {'title': 'Старые +1', 'value': totals['legacy_plus_one_trailers'], 'caption': f"выпуск отдельно; списание {totals['legacy_plus_one_issue_qty']}"},
+            {'title': 'Расход материалов', 'value': 'по номенклатуре', 'caption': 'факт, списание и недостача с единицей; общей суммы разных позиций нет'},
+            {'title': 'Старые +1', 'value': totals['legacy_plus_one_trailers'], 'caption': 'выпуск отдельно; списание по номенклатуре с единицей, без общей суммы'},
             {'title': 'Продано из выпущенных', 'value': sold['status'], 'caption': 'показатель не посчитан'},
         ]
+        if totals['defect_other_lines']:
+            cards.insert(4, {
+                'title': 'Брак прочее',
+                'value': _measure_text(totals['defect_other_lines']),
+                'caption': 'не прицеп и не деталь',
+            })
         rows = shift_report['area_rows']
         analytics_rows = shift_report['material_rows']
+        legacy_issue_rows = shift_report['legacy_issue_rows']
+        shift_show_other_defect = any(row['defect_other_lines'] for row in rows)
 
     elif section == 'production':
         query = ProducedUnit.query.outerjoin(ProductionRequestLine, ProductionRequestLine.id == ProducedUnit.production_request_line_id).outerjoin(ProductionRequest, ProductionRequest.id == ProductionRequestLine.production_request_id)
@@ -17051,6 +17068,8 @@ def director_report(section='sales'):
         analytics_rows=analytics_rows,
         chart_data=chart_data,
         anomaly_rows=anomaly_rows,
+        legacy_issue_rows=legacy_issue_rows,
+        shift_show_other_defect=shift_show_other_defect,
         report_warning=report_warning,
         report_query_args=report_query_args,
         report_section_urls=report_section_urls,

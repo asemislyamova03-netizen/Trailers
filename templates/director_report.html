@@ -251,7 +251,14 @@
   {% elif section == 'shifts' %}
   <div class="table-responsive mb-3">
     <table class="table table-hover align-middle">
-      <thead><tr><th>Участок</th><th>Направление</th><th>Смен</th><th>Часы</th><th>Годные прицепы</th><th>Годные детали</th><th>Брак</th></tr></thead>
+      <thead>
+        <tr>
+          <th>Участок</th><th>Направление</th><th>Смен</th><th>Часы</th>
+          <th>Годные прицепы</th><th>Годные детали</th>
+          <th>Брак прицепов</th><th>Брак деталей</th>
+          {% if shift_show_other_defect %}<th>Брак прочее</th>{% endif %}
+        </tr>
+      </thead>
       <tbody>
       {% for row in rows %}
         <tr>
@@ -261,15 +268,38 @@
           <td>{{ row.hours }}</td>
           <td>{{ row.good_trailers }}</td>
           <td>{{ row.good_parts }}</td>
-          <td>{{ row.defect_qty }}</td>
+          <td>
+            {% for line in row.defect_trailer_lines %}
+              <div>{{ line.qty|inventory_qty(line.unit) }}</div>
+            {% else %}
+              <span class="text-muted">0</span>
+            {% endfor %}
+          </td>
+          <td>
+            {% for line in row.defect_part_lines %}
+              <div>{{ line.qty|inventory_qty(line.unit) }}</div>
+            {% else %}
+              <span class="text-muted">0</span>
+            {% endfor %}
+          </td>
+          {% if shift_show_other_defect %}
+          <td>
+            {% for line in row.defect_other_lines %}
+              <div>{{ line.qty|inventory_qty(line.unit) }}</div>
+            {% else %}
+              <span class="text-muted">0</span>
+            {% endfor %}
+          </td>
+          {% endif %}
         </tr>
       {% else %}
-        <tr><td colspan="7" class="text-muted p-4">Нет проведённых смен за период</td></tr>
+        <tr><td colspan="{{ 9 if shift_show_other_defect else 8 }}" class="text-muted p-4">Нет проведённых смен за период</td></tr>
       {% endfor %}
       </tbody>
     </table>
   </div>
   <h2 class="h6">Фактический расход материалов по зонам</h2>
+  <p class="small text-muted mb-2">Каждая строка — одна номенклатура и одна единица. Разные строки не складываются.</p>
   <div class="table-responsive">
     <table class="table table-hover align-middle">
       <thead><tr><th>Зона</th><th>Номенклатура</th><th>Факт</th><th>Списано с книги</th><th>Недостача</th><th>Строк</th></tr></thead>
@@ -278,13 +308,31 @@
         <tr>
           <td class="fw-semibold">{{ row.direction_code }}</td>
           <td>{{ row.item_article }} <span class="text-muted">{{ row.item_name }}</span></td>
-          <td>{{ row.qty_fact }}</td>
-          <td>{{ row.qty_issued }}</td>
-          <td>{{ row.qty_shortage }}</td>
+          <td>{{ row.qty_fact|inventory_qty(row.unit) }}</td>
+          <td>{{ row.qty_issued|inventory_qty(row.unit) }}</td>
+          <td>{{ row.qty_shortage|inventory_qty(row.unit) }}</td>
           <td>{{ row.line_count }}</td>
         </tr>
       {% else %}
         <tr><td colspan="6" class="text-muted p-4">Нет проведённого факта материалов</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <h2 class="h6 mt-3">Старые списания +1 по номенклатуре</h2>
+  <p class="small text-muted mb-2">Количество каждой позиции со своей единицей. Общей суммы нет.</p>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead><tr><th>Номенклатура</th><th>Списано</th><th>Строк</th></tr></thead>
+      <tbody>
+      {% for row in legacy_issue_rows %}
+        <tr>
+          <td class="fw-semibold">{{ row.item_article }} <span class="text-muted">{{ row.item_name }}</span></td>
+          <td>{{ row.quantity|inventory_qty(row.unit) }}</td>
+          <td>{{ row.line_count }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="3" class="text-muted p-4">Нет старых списаний +1</td></tr>
       {% endfor %}
       </tbody>
     </table>

@@ -2,6 +2,11 @@
 
 Не проводит смены, не меняет остатки и не подключается к живому серверу.
 «Продано из выпущенных» не считается: прямой связи единицы выпуска с реализацией нет.
+
+Расход на экран — только строки номенклатуры со своей единицей.
+material_fact_by_zone и legacy_plus_one_issue_qty не показывать:
+это суммы разных Item/unit и они дают ложный итог.
+Брак прицепов и брак деталей считаются раздельно, по единицам измерения.
 """
 
 from __future__ import annotations
@@ -11,6 +16,7 @@ from decimal import Decimal
 
 from sqlalchemy import func
 
+from inventory_units import normalize_unit
 from models import (
     InventoryOperation,
     ProducedUnit,
@@ -81,10 +87,38 @@ def _empty_area(work_area: str, direction_code: str, direction_name: str) -> dic
         'shift_count': 0,
         'hours': Decimal('0'),
         'defect_qty': Decimal('0'),
+        'defect_trailer_units': {},
+        'defect_part_units': {},
+        'defect_other_units': {},
         'good_trailers': 0,
         'good_trailer_declared_qty': Decimal('0'),
         'good_parts': Decimal('0'),
     }
+
+
+def _measure_unit(unit: str | None, item_unit: str | None = None) -> str:
+    return normalize_unit(unit or item_unit)
+
+
+def _add_unit_qty(store: dict[str, Decimal], unit: str, qty: Decimal) -> None:
+    if qty == 0:
+        return
+    store[unit] = store.get(unit, Decimal('0')) + qty
+
+
+def _unit_lines(store: dict[str, Decimal]) -> list[dict]:
+    return [
+        {'unit': unit, 'qty': qty}
+        for unit, qty in sorted(store.items())
+        if qty != 0
+    ]
+
+
+def _finalize_area(row: dict) -> dict:
+    row['defect_trailer_lines'] = _unit_lines(row.pop('defect_trailer_units'))
+    row['defect_part_lines'] = _unit_lines(row.pop('defect_part_units'))
+    row['defect_other_lines'] = _unit_lines(row.pop('defect_other_units'))
+    return row
 
 
 def build_shift_director_report(
@@ -138,6 +172,9 @@ def build_shift_director_report(
     good_trailer_declared = Decimal('0')
     good_parts = Decimal('0')
     defect_qty = Decimal('0')
+    defect_trailer_units: dict[str, Decimal] = {}
+    defect_part_units: dict[str, Decimal] = {}
+    defect_other_units: dict[str, Decimal] = {}
     unexpected_component_units = 0
 
     for output in outputs:
@@ -150,6 +187,18 @@ def build_shift_director_report(
         defect_qty += defect
         item = output.item
         item_type = item.item_type if item else None
+        defect_unit = _measure_unit(output.unit, item.unit if item else None)
+        if item_type == 'TRAILER':
+            defect_store = defect_trailer_units
+            area_store = bucket['defect_trailer_units']
+        elif item_type == 'COMPONENT':
+            defect_store = defect_part_units
+            area_store = bucket['defect_part_units']
+        else:
+            defect_store = defect_other_units
+            area_store = bucket['defect_other_units']
+        _add_unit_qty(defect_store, defect_unit, defect)
+        _add_unit_qty(area_store, defect_unit, defect)
         linked_units = units_by_output.get(output.id, [])
         if item_type == 'TRAILER':
             declared = _d(output.quantity)
@@ -176,9 +225,11 @@ def build_shift_director_report(
             .all()
         )
 
+    # Суммы зоны остаются для проверок одной номенклатуры.
+    # На экран их не выводить: разные Item и единицы дают ложный итог.
     material_fact_by_zone = {code: _empty_zone() for code in DIRECTION_ZONE_CODES}
     other_zone_fact = _empty_zone()
-    material_groups: dict[tuple[str, int], dict] = {}
+    material_groups: dict[tuple[str, int, str], dict] = {}
     for material in materials:
         shift = shifts_by_id.get(material.shift_id)
         if not shift:
@@ -194,7 +245,8 @@ def build_shift_director_report(
         target['qty_issued'] += issued
         target['qty_shortage'] += shortage
         item = material.item
-        group_key = (code, material.item_id)
+        unit = _measure_unit(material.unit, item.unit if item else None)
+        group_key = (code, material.item_id, unit)
         group = material_groups.get(group_key)
         if not group:
             group = {
@@ -202,6 +254,7 @@ def build_shift_director_report(
                 'item_id': material.item_id,
                 'item_article': item.article if item else '',
                 'item_name': item.name if item else '',
+                'unit': unit,
                 'qty_fact': Decimal('0'),
                 'qty_issued': Decimal('0'),
                 'qty_shortage': Decimal('0'),
@@ -224,6 +277,7 @@ def build_shift_director_report(
     overlap_units = 0
     overlap_issue_qty = Decimal('0')
     seen_overlap_units: set[int] = set()
+    legacy_issue_groups: dict[tuple[int, str], dict] = {}
     plus_one_issues = _apply_period(
         InventoryOperation.query.filter(
             InventoryOperation.operation_type == 'production_issue',
@@ -236,18 +290,39 @@ def build_shift_director_report(
         period_end,
     ).all()
     for operation in plus_one_issues:
+        out_lines = []
         qty = Decimal('0')
         for line in operation.lines.all():
-            if (line.direction or 'out') == 'out':
-                qty += _d(line.quantity)
-        unit = operation.produced_unit
-        if unit is not None and unit.shift_output_id:
+            if (line.direction or 'out') != 'out':
+                continue
+            line_qty = _d(line.quantity)
+            qty += line_qty
+            out_lines.append((line, line_qty))
+        produced = operation.produced_unit
+        if produced is not None and produced.shift_output_id:
             overlap_issue_qty += qty
-            if unit.id not in seen_overlap_units:
-                seen_overlap_units.add(unit.id)
+            if produced.id not in seen_overlap_units:
+                seen_overlap_units.add(produced.id)
                 overlap_units += 1
-        else:
-            legacy_issue_qty += qty
+            continue
+        legacy_issue_qty += qty
+        for line, line_qty in out_lines:
+            item = line.item
+            unit = _measure_unit(line.unit, item.unit if item else None)
+            group_key = (line.item_id, unit)
+            group = legacy_issue_groups.get(group_key)
+            if not group:
+                group = {
+                    'item_id': line.item_id,
+                    'item_article': item.article if item else '',
+                    'item_name': item.name if item else '',
+                    'unit': unit,
+                    'quantity': Decimal('0'),
+                    'line_count': 0,
+                }
+                legacy_issue_groups[group_key] = group
+            group['quantity'] += line_qty
+            group['line_count'] += 1
 
     excluded_closed = _apply_period(
         ProductionShift.query.filter(ProductionShift.status == 'closed'),
@@ -262,13 +337,25 @@ def build_shift_director_report(
         period_end,
     ).count()
 
-    area_rows = sorted(
-        areas.values(),
-        key=lambda row: (row['direction_code'], row['work_area']),
-    )
+    area_rows = [
+        _finalize_area(row)
+        for row in sorted(
+            areas.values(),
+            key=lambda row: (row['direction_code'], row['work_area']),
+        )
+    ]
     material_rows = sorted(
         material_groups.values(),
-        key=lambda row: (row['direction_code'], row['item_article'] or '', row['item_id'] or 0),
+        key=lambda row: (
+            row['direction_code'],
+            row['item_article'] or '',
+            row['unit'] or '',
+            row['item_id'] or 0,
+        ),
+    )
+    legacy_issue_rows = sorted(
+        legacy_issue_groups.values(),
+        key=lambda row: (row['item_article'] or '', row['unit'] or '', row['item_id'] or 0),
     )
     return {
         'sold_from_produced': dict(SOLD_FROM_PRODUCED),
@@ -278,6 +365,9 @@ def build_shift_director_report(
             'good_trailer_unit_gap': good_trailer_declared - Decimal(good_trailers),
             'good_parts': good_parts,
             'defect_qty': defect_qty,
+            'defect_trailer_lines': _unit_lines(defect_trailer_units),
+            'defect_part_lines': _unit_lines(defect_part_units),
+            'defect_other_lines': _unit_lines(defect_other_units),
             'hours': sum((row['hours'] for row in area_rows), Decimal('0')),
             'legacy_plus_one_trailers': len(legacy_units),
             'legacy_plus_one_issue_qty': legacy_issue_qty,
@@ -291,4 +381,5 @@ def build_shift_director_report(
         'material_fact_by_zone': material_fact_by_zone,
         'other_zone_fact': other_zone_fact,
         'material_rows': material_rows,
+        'legacy_issue_rows': legacy_issue_rows,
     }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -320,9 +321,15 @@ class ShiftDirectorReportTests(unittest.TestCase):
         self.assertEqual(totals['good_trailer_unit_gap'], Decimal('0'))
         self.assertEqual(totals['good_parts'], Decimal('5'))
         self.assertEqual(totals['defect_qty'], Decimal('3'))
+        self.assertEqual(totals['defect_trailer_lines'], [{'unit': 'шт', 'qty': Decimal('2')}])
+        self.assertEqual(totals['defect_part_lines'], [{'unit': 'шт', 'qty': Decimal('1')}])
+        self.assertEqual(totals['defect_other_lines'], [])
         self.assertEqual(totals['hours'], Decimal('12'))
         self.assertEqual(totals['legacy_plus_one_trailers'], 1)
         self.assertEqual(totals['legacy_plus_one_issue_qty'], Decimal('7'))
+        self.assertEqual(len(report['legacy_issue_rows']), 1)
+        self.assertEqual(report['legacy_issue_rows'][0]['quantity'], Decimal('7'))
+        self.assertEqual(report['legacy_issue_rows'][0]['unit'], 'шт')
         self.assertEqual(totals['overlap_units'], 0)
         self.assertEqual(totals['excluded_closed_shifts'], 1)
         self.assertEqual(totals['excluded_open_shifts'], 1)
@@ -352,6 +359,10 @@ class ShiftDirectorReportTests(unittest.TestCase):
         self.assertEqual(zones['DIR_CARGO']['qty_shortage'], Decimal('0'))
         self.assertNotEqual(zones['DIR_LIGHT']['qty_fact'], Decimal('19'))
         self.assertEqual(report['other_zone_fact']['qty_fact'], Decimal('0'))
+        light_materials = [row for row in report['material_rows'] if row['direction_code'] == 'DIR_LIGHT']
+        self.assertEqual(len(light_materials), 1)
+        self.assertEqual(light_materials[0]['unit'], 'шт')
+        self.assertEqual(light_materials[0]['qty_fact'], Decimal('12'))
 
     def test_repeat_post_does_not_duplicate_report(self):
         from shift_posting import ShiftAlreadyPosted
@@ -441,3 +452,156 @@ class ShiftDirectorReportTests(unittest.TestCase):
         self.assertIn('DIR_CARGO', body)
         self.assertIn('Продано из выпущенных', body)
         self.assertIn('produced_unit_id', body)
+        self.assertIn('Брак прицепов', body)
+        self.assertIn('Брак деталей', body)
+        self.assertNotIn('Факт DIR_LIGHT', body)
+        self.assertNotIn('Факт DIR_CARGO', body)
+        self.assertNotRegex(body, r'<th>Брак</th>')
+
+    def _seed_mixed_unit_consumption(self):
+        from models import Item, ProductionShiftMaterial, ProductionShiftOutput
+
+        plate = Item(item_type='COMPONENT', article='SHEET', name='Лист кг', unit='кг')
+        bolt = Item(item_type='COMPONENT', article='BOLT', name='Крепеж', unit='шт')
+        self.db.session.add_all([plate, bolt])
+        self.db.session.flush()
+        self.db.session.add(ProductionShiftMaterial(
+            shift_id=self.light_shift.id, item_id=plate.id,
+            qty_fact=Decimal('8'), unit='кг',
+        ))
+        self.db.session.add(ProductionShiftMaterial(
+            shift_id=self.light_shift.id, item_id=bolt.id,
+            qty_fact=Decimal('5'), unit='шт',
+        ))
+        self.db.session.add(ProductionShiftOutput(
+            shift_id=self.light_shift.id, employee_id=self.employee.id, workshop_id=self.workshop.id,
+            item_id=plate.id, output_type='component', quantity=Decimal('0'),
+            defect_quantity=Decimal('4'), unit='кг',
+        ))
+        self.db.session.flush()
+        self._post(self.light_shift, self.light_area.id, '8')
+        self._post(self.cargo_shift, self.cargo_area.id, '4')
+        self.db.session.commit()
+        self._add_legacy_material_lines([
+            (plate, Decimal('9'), 'кг'),
+            (bolt, Decimal('6'), 'шт'),
+        ])
+        return plate, bolt
+
+    def _add_legacy_material_lines(self, lines):
+        from models import InventoryOperation, InventoryOperationLine, ProducedUnit
+
+        unit = ProducedUnit(
+            production_request_line_id=self.pr_line.id,
+            item_id=self.light_item.id,
+            shift_output_id=None,
+            status='produced_no_vin',
+            produced_at=datetime.utcnow(),
+            note='старый +1, разные единицы',
+        )
+        self.db.session.add(unit)
+        self.db.session.flush()
+        operation = InventoryOperation(
+            operation_type='production_issue',
+            status='posted',
+            source_warehouse_id=self.factory.id,
+            source_area_id=self.light_area.id,
+            produced_unit_id=unit.id,
+            shift_material_id=None,
+            posted_at=datetime.utcnow(),
+            comment='Списание по выпуску +1, разные единицы',
+        )
+        self.db.session.add(operation)
+        self.db.session.flush()
+        for item, qty, unit_code in lines:
+            self.db.session.add(InventoryOperationLine(
+                operation_id=operation.id, item_id=item.id,
+                quantity=qty, unit=unit_code, direction='out',
+            ))
+        self.db.session.commit()
+
+    def test_two_materials_with_different_units_stay_separate(self):
+        self._seed_mixed_unit_consumption()
+        report = self._report()
+        light_rows = {
+            (row['item_article'], row['unit']): row
+            for row in report['material_rows']
+            if row['direction_code'] == 'DIR_LIGHT'
+        }
+        plate = light_rows[('SHEET', 'кг')]
+        bolt = light_rows[('BOLT', 'шт')]
+        self.assertEqual(plate['qty_fact'], Decimal('8'))
+        self.assertEqual(plate['qty_issued'], Decimal('0'))
+        self.assertEqual(plate['qty_shortage'], Decimal('8'))
+        self.assertEqual(bolt['qty_fact'], Decimal('5'))
+        self.assertEqual(bolt['qty_issued'], Decimal('0'))
+        self.assertEqual(bolt['qty_shortage'], Decimal('5'))
+        for row in report['material_rows']:
+            self.assertTrue(row['unit'])
+            self.assertNotEqual(row['qty_fact'], Decimal('13'))
+            self.assertNotEqual(row['qty_fact'], Decimal('25'))
+
+        legacy = {(row['item_article'], row['unit']): row for row in report['legacy_issue_rows']}
+        self.assertEqual(legacy[('SHEET', 'кг')]['quantity'], Decimal('9'))
+        self.assertEqual(legacy[('BOLT', 'шт')]['quantity'], Decimal('6'))
+        for row in report['legacy_issue_rows']:
+            self.assertNotEqual(row['quantity'], Decimal('15'))
+
+        self.assertEqual(
+            report['totals']['defect_trailer_lines'],
+            [{'unit': 'шт', 'qty': Decimal('2')}],
+        )
+        part_units = {line['unit']: line['qty'] for line in report['totals']['defect_part_lines']}
+        self.assertEqual(part_units, {'кг': Decimal('4'), 'шт': Decimal('1')})
+        by_key = {(row['work_area'], row['direction_code']): row for row in report['area_rows']}
+        light_parts = {line['unit']: line['qty'] for line in by_key[('assembly', 'DIR_LIGHT')]['defect_part_lines']}
+        self.assertEqual(light_parts, {'кг': Decimal('4'), 'шт': Decimal('1')})
+        self.assertEqual(by_key[('assembly', 'DIR_LIGHT')]['defect_trailer_lines'], [])
+        self.assertEqual(
+            by_key[('welding', 'DIR_CARGO')]['defect_trailer_lines'],
+            [{'unit': 'шт', 'qty': Decimal('2')}],
+        )
+
+    def test_shifts_page_does_not_show_false_quantity_sum(self):
+        self._seed_mixed_unit_consumption()
+        client = self.app.test_client()
+        with client.session_transaction() as sess:
+            sess['_user_id'] = str(self.director.id)
+            sess['_fresh'] = True
+        response = client.get('/director/reports/shifts')
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('8 кг', body)
+        self.assertIn('5 шт', body)
+        self.assertIn('9 кг', body)
+        self.assertIn('6 шт', body)
+        self.assertIn('4 кг', body)
+        self.assertIn('1 шт', body)
+        self.assertIn('Лист кг', body)
+        self.assertIn('Крепеж', body)
+        for forbidden in ('13 кг', '13 шт', '15 кг', '15 шт', '25 кг', '25 шт', '7 кг', '7 шт'):
+            self.assertNotIn(forbidden, body)
+        self.assertNotRegex(body, r'списание\s+\d')
+        self.assertNotIn('Факт DIR_LIGHT', body)
+        self.assertNotIn('Факт DIR_CARGO', body)
+        self.assertNotRegex(body, r'<th>Брак</th>')
+        cards = {
+            match.group('title').strip(): match
+            for match in re.finditer(
+                r'<div class="small text-muted">(?P<title>[^<]*)</div>\s*'
+                r'<div class="fw-bold">(?P<value>[^<]*)</div>\s*'
+                r'<div class="small text-muted">(?P<caption>[^<]*)</div>',
+                body,
+            )
+        }
+        self.assertEqual(cards['Расход материалов'].group('value').strip(), 'по номенклатуре')
+        self.assertNotRegex(cards['Старые +1'].group('caption'), r'\d')
+        self.assertEqual(cards['Брак прицепов'].group('value').strip(), '2 шт')
+        self.assertEqual(cards['Брак деталей'].group('value').strip(), '4 кг; 1 шт')
+        self.assertNotIn('Брак', cards)
+        for card in cards.values():
+            value = card.group('value')
+            caption = card.group('caption')
+            for forbidden in ('13', '15', '25'):
+                self.assertNotIn(forbidden, value)
+                self.assertNotIn(forbidden, caption)
