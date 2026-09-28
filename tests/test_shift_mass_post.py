@@ -851,6 +851,256 @@ class ShiftMassPostTests(unittest.TestCase):
         self.assertEqual(_qty(self.factory.id, self.sheet.id, self.light_area.id), before_light)
         self.assertEqual(_qty(self.factory.id, self.sheet.id, self.cargo_area.id), before_cargo)
 
+    def test_director_cannot_switch_shopfloor_mode(self):
+        """Finding 1: режим зоны — только admin; director получает отказ, mode не меняется."""
+        from models import WarehouseStorageArea
+        from shift_posting import MODE_LEGACY, MODE_SHIFT_ONLY, plus_one_blocked_reason
+
+        self.assertEqual(self.light_area.shopfloor_posting_mode, MODE_LEGACY)
+        self.assertIsNone(plus_one_blocked_reason(self.pr_line))
+
+        client = self.app.test_client()
+        with client.session_transaction() as sess:
+            sess['_user_id'] = str(self.director.id)
+            sess['_fresh'] = True
+        rv = client.post(
+            f'/warehouses/direction-areas/{self.light_area.id}/shopfloor-mode',
+            data={'shopfloor_posting_mode': MODE_SHIFT_ONLY},
+            follow_redirects=False,
+        )
+        self.assertEqual(rv.status_code, 302)
+        area = WarehouseStorageArea.query.get(self.light_area.id)
+        self.assertEqual(area.shopfloor_posting_mode, MODE_LEGACY)
+        self.assertIsNone(plus_one_blocked_reason(self.pr_line))
+
+        with client.session_transaction() as sess:
+            sess['_user_id'] = str(self.admin.id)
+            sess['_fresh'] = True
+        rv_admin = client.post(
+            f'/warehouses/direction-areas/{self.light_area.id}/shopfloor-mode',
+            data={'shopfloor_posting_mode': MODE_SHIFT_ONLY},
+            follow_redirects=False,
+        )
+        self.assertEqual(rv_admin.status_code, 302)
+        area = WarehouseStorageArea.query.get(self.light_area.id)
+        self.assertEqual(area.shopfloor_posting_mode, MODE_SHIFT_ONLY)
+
+    def test_sequential_same_item_shortage_requires_senior(self):
+        """Finding 2: две строки одного COMPONENT 6+6 при книге 8 → нехватка 4 до любых issue."""
+        from models import InventoryOperation, ProductionShift, ProductionShiftMaterial
+        from shift_posting import ShiftPostingError
+
+        for row in list(self.shift.materials.all()):
+            self.db.session.delete(row)
+        for row in list(self.shift.outputs.all()):
+            self.db.session.delete(row)
+        self.db.session.flush()
+        self.db.session.add(ProductionShiftMaterial(
+            shift_id=self.shift.id, item_id=self.sheet.id, qty_fact=Decimal('6'), unit='шт',
+        ))
+        self.db.session.add(ProductionShiftMaterial(
+            shift_id=self.shift.id, item_id=self.sheet.id, qty_fact=Decimal('6'), unit='шт',
+        ))
+        self.db.session.commit()
+
+        with self.assertRaises(ShiftPostingError) as ctx:
+            self._post(senior=False)
+        self.assertIn('нехватка', str(ctx.exception).lower())
+        self.db.session.rollback()
+        self.assertEqual(ProductionShift.query.get(self.shift.id).status, 'open')
+        self.assertEqual(_qty(self.factory.id, self.sheet.id, self.light_area.id), Decimal('8'))
+        self.assertEqual(
+            InventoryOperation.query.filter_by(operation_type='production_issue', status='posted').count(),
+            0,
+        )
+
+        self._post(senior=True, actor_senior=True)
+        self.db.session.commit()
+        self.assertEqual(_qty(self.factory.id, self.sheet.id, self.light_area.id), Decimal('0'))
+        issues = InventoryOperation.query.filter_by(operation_type='production_issue', status='posted').all()
+        shortages = InventoryOperation.query.filter_by(operation_type='production_shortage', status='posted').all()
+        issued_total = sum(
+            sum(Decimal(str(line.quantity)) for line in op.lines.all()) for op in issues
+        )
+        shortage_total = sum(
+            sum(Decimal(str(line.quantity)) for line in op.lines.all()) for op in shortages
+        )
+        self.assertEqual(issued_total, Decimal('8'))
+        self.assertEqual(shortage_total, Decimal('4'))
+        self.assertEqual(len(issues), 2)
+        self.assertEqual(len(shortages), 1)
+
+    def test_output_missing_item_rejected(self):
+        """Finding 3: выпуск без номенклатуры — ShiftPostingError, без ProducedUnit."""
+        from models import ProducedUnit, ProductionShift, ProductionShiftOutput
+        from shift_posting import ShiftPostingError
+
+        for row in list(self.shift.materials.all()):
+            self.db.session.delete(row)
+        for row in list(self.shift.outputs.all()):
+            self.db.session.delete(row)
+        self.db.session.flush()
+        self.db.session.add(ProductionShiftOutput(
+            shift_id=self.shift.id,
+            employee_id=self.employee.id,
+            workshop_id=self.workshop.id,
+            item_id=None,
+            output_type='trailer',
+            quantity=Decimal('1'),
+            defect_quantity=Decimal('0'),
+            unit='шт',
+        ))
+        self.db.session.commit()
+        with self.assertRaises(ShiftPostingError) as ctx:
+            self._post(senior=False)
+        self.assertIn('номенклатур', str(ctx.exception).lower())
+        self.db.session.rollback()
+        self.assertEqual(ProductionShift.query.get(self.shift.id).status, 'open')
+        self.assertEqual(ProducedUnit.query.count(), 0)
+
+    def test_cargo_trailer_on_light_direction_rejected(self):
+        """Finding 3: грузовой TRAILER на DIR_LIGHT — отклонение."""
+        from models import ProducedUnit, ProductionShift, ProductionShiftOutput
+        from shift_posting import ShiftPostingError
+
+        for row in list(self.shift.materials.all()):
+            self.db.session.delete(row)
+        for row in list(self.shift.outputs.all()):
+            self.db.session.delete(row)
+        self.db.session.flush()
+        self.db.session.add(ProductionShiftOutput(
+            shift_id=self.shift.id,
+            employee_id=self.employee.id,
+            workshop_id=self.workshop.id,
+            item_id=self.cargo_item.id,
+            output_type='trailer',
+            quantity=Decimal('1'),
+            defect_quantity=Decimal('0'),
+            unit='шт',
+        ))
+        self.db.session.commit()
+        with self.assertRaises(ShiftPostingError) as ctx:
+            self._post(senior=False)
+        message = str(ctx.exception).lower()
+        self.assertIn('не совпадает', message)
+        self.db.session.rollback()
+        self.assertEqual(ProductionShift.query.get(self.shift.id).status, 'open')
+        self.assertEqual(ProducedUnit.query.count(), 0)
+
+    def test_request_line_wrong_direction_rejected(self):
+        """Finding 3: production_request_line грузового направления на light-смене — отказ."""
+        from models import (
+            ProducedUnit,
+            ProductionRequest,
+            ProductionRequestLine,
+            ProductionShift,
+            ProductionShiftOutput,
+            SupplyNeed,
+        )
+        from shift_posting import ShiftPostingError
+
+        cargo_need = SupplyNeed(
+            need_type='CUSTOMER_ORDER',
+            status='IN_PRODUCTION',
+            item_id=self.cargo_item.id,
+            warehouse_id=self.cargo_sales.id,
+            quantity=1,
+        )
+        self.db.session.add(cargo_need)
+        self.db.session.flush()
+        cargo_pr = ProductionRequest(
+            request_number='PR-CARGO-DIR',
+            status='in_progress',
+            target_warehouse_id=self.cargo_sales.id,
+        )
+        self.db.session.add(cargo_pr)
+        self.db.session.flush()
+        cargo_line = ProductionRequestLine(
+            production_request_id=cargo_pr.id,
+            supply_need_id=cargo_need.id,
+            item_id=self.cargo_item.id,
+            production_workshop_id=self.workshop.id,
+            assembly_warehouse_id=self.factory.id,
+            quantity=1,
+            produced_qty=0,
+            status='in_production',
+        )
+        self.db.session.add(cargo_line)
+        self.db.session.flush()
+
+        for row in list(self.shift.materials.all()):
+            self.db.session.delete(row)
+        for row in list(self.shift.outputs.all()):
+            self.db.session.delete(row)
+        self.db.session.flush()
+        # Light trailer output wired to a cargo request line (item_id mismatch path).
+        self.db.session.add(ProductionShiftOutput(
+            shift_id=self.shift.id,
+            employee_id=self.employee.id,
+            workshop_id=self.workshop.id,
+            item_id=self.trailer_model.id,
+            production_request_line_id=cargo_line.id,
+            output_type='trailer',
+            quantity=Decimal('1'),
+            defect_quantity=Decimal('0'),
+            unit='шт',
+        ))
+        self.db.session.commit()
+        with self.assertRaises(ShiftPostingError) as ctx:
+            self._post(senior=False)
+        message = str(ctx.exception).lower()
+        self.assertTrue('не совпадает' in message or 'заявк' in message)
+        self.db.session.rollback()
+        self.assertEqual(ProductionShift.query.get(self.shift.id).status, 'open')
+        self.assertEqual(ProducedUnit.query.count(), 0)
+
+    def test_fractional_trailer_qty_rejected(self):
+        """Finding 4: TRAILER qty=2.5 → ShiftPostingError без усечения; целое 2 проходит."""
+        from models import ProducedUnit, ProductionShift, ProductionShiftOutput
+        from shift_posting import ShiftPostingError
+
+        for row in list(self.shift.materials.all()):
+            self.db.session.delete(row)
+        for row in list(self.shift.outputs.all()):
+            self.db.session.delete(row)
+        self.db.session.flush()
+        self.db.session.add(ProductionShiftOutput(
+            shift_id=self.shift.id,
+            employee_id=self.employee.id,
+            workshop_id=self.workshop.id,
+            item_id=self.trailer_model.id,
+            output_type='trailer',
+            quantity=Decimal('2.5'),
+            defect_quantity=Decimal('0'),
+            unit='шт',
+        ))
+        self.db.session.commit()
+        with self.assertRaises(ShiftPostingError) as ctx:
+            self._post(senior=False)
+        self.assertIn('цел', str(ctx.exception).lower())
+        self.db.session.rollback()
+        self.assertEqual(ProductionShift.query.get(self.shift.id).status, 'open')
+        self.assertEqual(ProducedUnit.query.count(), 0)
+
+        for row in list(self.shift.outputs.all()):
+            self.db.session.delete(row)
+        self.db.session.flush()
+        self.db.session.add(ProductionShiftOutput(
+            shift_id=self.shift.id,
+            employee_id=self.employee.id,
+            workshop_id=self.workshop.id,
+            item_id=self.trailer_model.id,
+            output_type='trailer',
+            quantity=Decimal('2'),
+            defect_quantity=Decimal('0'),
+            unit='шт',
+        ))
+        self.db.session.commit()
+        self._post(senior=False)
+        self.db.session.commit()
+        self.assertEqual(ProducedUnit.query.count(), 2)
+        self.assertEqual(ProductionShift.query.get(self.shift.id).status, 'posted')
+
 
 if __name__ == '__main__':
     unittest.main()

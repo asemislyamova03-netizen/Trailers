@@ -318,9 +318,25 @@ def _as_decimal(value) -> Decimal:
     return Decimal(str(value or 0))
 
 
-def _good_qty(output: ProductionShiftOutput) -> int:
-    qty = int(_as_decimal(output.quantity))
-    return max(qty, 0)
+def _component_good_qty(output: ProductionShiftOutput) -> Decimal:
+    """COMPONENT good qty as Decimal — без int()-усечения."""
+    qty = _as_decimal(output.quantity)
+    if qty < 0:
+        raise ShiftPostingError('Количество выпуска комплектующих не может быть отрицательным.')
+    return qty
+
+
+def _trailer_unit_count(output: ProductionShiftOutput) -> int:
+    """TRAILER: только целое число единиц. Дробное (2.5) — ошибка, без усечения."""
+    qty = _as_decimal(output.quantity)
+    if qty < 0:
+        raise ShiftPostingError('Количество прицепов не может быть отрицательным.')
+    if qty != qty.to_integral_value():
+        raise ShiftPostingError(
+            f'Количество прицепов должно быть целым числом, получено {qty}. '
+            'Дробное количество не усекается.'
+        )
+    return int(qty)
 
 
 def _next_request_number() -> str:
@@ -526,7 +542,53 @@ def post_shift(
     if not materials and not outputs:
         raise ShiftPostingError('Добавьте выпуск или факт материалов перед проведением смены.')
 
+    # Pre-validate outputs before any issue/receipt (no silent skip).
+    for output in outputs:
+        item = output.item or (Item.query.get(output.item_id) if output.item_id else None)
+        if not item or not output.item_id:
+            raise ShiftPostingError(
+                f'Строка выпуска #{output.id}: не указана номенклатура. Проведение отклонено.'
+            )
+        if item.item_type == 'TRAILER':
+            category = getattr(item, 'product_category', None)
+            item_direction = getattr(category, 'code', None) if category else None
+            if item_direction not in DIRECTION_CATEGORIES:
+                raise ShiftPostingError(
+                    f'Строка выпуска #{output.id}: у прицепа «{item.name}» нет категории направления '
+                    f'(light_trailer/cargo_trailer).'
+                )
+            if item_direction != direction_code:
+                raise ShiftPostingError(
+                    f'Строка выпуска #{output.id}: прицеп «{item.name}» категории «{item_direction}» '
+                    f'не совпадает с направлением смены «{direction_code}».'
+                )
+            # Whole-number check early so fractional trailer qty never reaches unit creation.
+            _trailer_unit_count(output)
+        elif item.item_type == 'COMPONENT':
+            _component_good_qty(output)
+        if output.production_request_line_id:
+            line = ProductionRequestLine.query.get(output.production_request_line_id)
+            if not line:
+                raise ShiftPostingError(
+                    f'Строка выпуска #{output.id}: заявка production_request_line_id='
+                    f'{output.production_request_line_id} не найдена.'
+                )
+            if line.item_id != output.item_id:
+                raise ShiftPostingError(
+                    f'Строка выпуска #{output.id}: номенклатура выпуска не совпадает со строкой заявки '
+                    f'(item_id {output.item_id} ≠ {line.item_id}).'
+                )
+            line_code = line_direction_code(line)
+            if line_code != direction_code:
+                raise ShiftPostingError(
+                    f'Строка выпуска #{output.id}: направление строки заявки «{line_code}» '
+                    f'не совпадает с направлением смены «{direction_code}».'
+                )
+
     pending_shortages: list[tuple[ProductionShiftMaterial, Decimal]] = []
+    # Sequential remaining-available per (warehouse, area, item) so two lines of the same
+    # COMPONENT share one book qty (6+6 against 8 → shortage 4 on the second line).
+    remaining_available: dict[tuple[int, int, int], Decimal] = {}
     for material in materials:
         item = material.item or Item.query.get(material.item_id)
         if not item or item.item_type != 'COMPONENT':
@@ -534,8 +596,12 @@ def post_shift(
         qty_fact = _as_decimal(material.qty_fact)
         if qty_fact < 0:
             raise ShiftPostingError('Факт расхода не может быть отрицательным.')
-        available = warehouse_item_qty(warehouse.id, item.id, area.id)
+        key = (warehouse.id, area.id, item.id)
+        if key not in remaining_available:
+            remaining_available[key] = warehouse_item_qty(warehouse.id, item.id, area.id)
+        available = remaining_available[key]
         shortage = max(qty_fact - available, Decimal('0'))
+        remaining_available[key] = max(available - qty_fact, Decimal('0'))
         if shortage > 0:
             pending_shortages.append((material, shortage))
 
@@ -596,17 +662,15 @@ def post_shift(
             raise ShiftPostingError('Отрицательный остаток запрещён.')
 
     for output in outputs:
-        item = output.item
-        if not item:
-            continue
-        good_qty = _good_qty(output)
+        item = output.item or Item.query.get(output.item_id)
         unit = normalize_unit(output.unit or item.unit)
         if item.item_type == 'COMPONENT':
+            good_qty = _component_good_qty(output)
             if good_qty > 0:
                 apply_shift_component_receipt(
                     warehouse_id=warehouse.id,
                     item_id=item.id,
-                    quantity=Decimal(good_qty),
+                    quantity=good_qty,
                     shift_id=shift.id,
                     shift_output_id=output.id,
                     created_by_user_id=created_by_user_id,
@@ -619,6 +683,7 @@ def post_shift(
         if item.item_type != 'TRAILER':
             output.status = 'posted'
             continue
+        good_qty = _trailer_unit_count(output)
         remaining_on_line = 0
         customer_line = None
         if output.production_request_line_id:
