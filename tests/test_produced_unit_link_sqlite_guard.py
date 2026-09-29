@@ -27,9 +27,10 @@ LIVE_DB = (ROOT / 'trailers.db').resolve()
 MIGRATIONS = str(ROOT / 'migrations')
 HEAD_BEFORE_GUARD = 'b7e2c4a9d815'
 GUARD_REVISION = 'c3f8a1d94e27'
+MATCH_REVISION = 'd8e4b1c67a02'
 # Эти nullable-колонки есть в модели, но не в Alembic. Их добавляет только
 # тестовая база, чтобы ORM смог прочитать уже накатанную цепочку.
-# Миграция триггера их не создаёт и produced_unit_id не заполняет.
+# Ни c3f8a1d94e27, ни d8e4b1c67a02 их не создают и produced_unit_id не заполняют.
 MODEL_DRIFT_COLUMNS = (
     ('item', 'tent_hight_mm', 'INTEGER'),
     ('item', 'has_jockey_wheel', 'BOOLEAN'),
@@ -38,12 +39,26 @@ MODEL_DRIFT_COLUMNS = (
 )
 
 
-def _guard_module():
-    path = ROOT / 'migrations' / 'versions' / 'c3f8a1d94e27_guard_realization_produced_unit_link.py'
-    spec = importlib.util.spec_from_file_location('produced_unit_link_sqlite_guard_migration', path)
+def _load_migration(filename: str, module_name: str):
+    path = ROOT / 'migrations' / 'versions' / filename
+    spec = importlib.util.spec_from_file_location(module_name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _guard_module():
+    return _load_migration(
+        'c3f8a1d94e27_guard_realization_produced_unit_link.py',
+        'produced_unit_link_sqlite_guard_migration',
+    )
+
+
+def _match_module():
+    return _load_migration(
+        'd8e4b1c67a02_guard_posted_realization_unit_match.py',
+        'posted_realization_unit_match_migration',
+    )
 
 
 def _refuse_live(url: str, path: Path) -> None:
@@ -97,7 +112,8 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
             upgrade(directory=MIGRATIONS, revision=HEAD_BEFORE_GUARD)
             cls._insert_preexisting_rows()
             db.session.remove()
-            upgrade(directory=MIGRATIONS, revision=GUARD_REVISION)
+            upgrade(directory=MIGRATIONS, revision=MATCH_REVISION)
+            cls.drift_missing_before_align = cls._missing_drift_columns()
             cls._align_model_drift()
             pragma = db.session.execute(text('PRAGMA foreign_keys')).scalar()
             if int(pragma) != 0:
@@ -134,6 +150,18 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
         cls.db.session.commit()
 
     @classmethod
+    def _missing_drift_columns(cls):
+        missing = []
+        for table, column, _coltype in MODEL_DRIFT_COLUMNS:
+            present = {
+                row[1]
+                for row in cls.db.session.execute(text(f'PRAGMA table_info({table})')).all()
+            }
+            if column not in present:
+                missing.append(f'{table}.{column}')
+        return tuple(missing)
+
+    @classmethod
     def _align_model_drift(cls):
         for table, column, coltype in MODEL_DRIFT_COLUMNS:
             present = {
@@ -162,7 +190,7 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
 
         self.assertEqual(
             self.db.session.execute(text('SELECT version_num FROM alembic_version')).scalar(),
-            GUARD_REVISION,
+            MATCH_REVISION,
         )
         old_null = self._comment_unit('guard-old-null')
         old_orphan = self._comment_unit('guard-old-orphan')
@@ -212,7 +240,7 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
         self.db.session.commit()
 
         self.db.session.remove()
-        upgrade(directory=MIGRATIONS, revision=GUARD_REVISION)
+        upgrade(directory=MIGRATIONS, revision=MATCH_REVISION)
         self.assertEqual(self._trigger_names(), set(self._expected_triggers()))
         self.assertIsNone(self._comment_unit('guard-old-null'))
         self.assertEqual(self._comment_unit('guard-old-orphan'), 919999)
@@ -379,15 +407,19 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
             assign_produced_units_on_post(mismatch)
         self.db.session.rollback()
 
-        self.db.session.execute(text(
-            '''
-            UPDATE sales_realization_line
-            SET produced_unit_id = :foreign_id
-            WHERE id = :line_id
-            '''
-        ), {'foreign_id': foreign_unit.id, 'line_id': self._orm_line(realization).id})
-        self.db.session.commit()
-        self.assertEqual(self._orm_line(realization).produced_unit_id, foreign_unit.id)
+        line_id = self._orm_line(realization).id
+        with self.assertRaises(IntegrityError) as caught:
+            self.db.session.execute(text(
+                '''
+                UPDATE sales_realization_line
+                SET produced_unit_id = :foreign_id
+                WHERE id = :line_id
+                '''
+            ), {'foreign_id': foreign_unit.id, 'line_id': line_id})
+            self.db.session.commit()
+        self.assertIn(_match_module().POSTED_REBIND_MESSAGE, str(caught.exception))
+        self.db.session.rollback()
+        self.assertEqual(self._orm_line(realization).produced_unit_id, own_unit.id)
         self.assertNotEqual(foreign_unit.trailer_id, self._orm_line(realization).trailer_id)
 
     def test_route_post_delete_and_repost_still_work(self):
@@ -457,8 +489,361 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
         self.assertIn('Из выпущенных за период продано на сейчас', body)
         self.assertIn('восстановить нельзя', body)
 
+    def test_model_drift_columns_remain_outside_alembic(self):
+        expected = tuple(f'{table}.{column}' for table, column, _coltype in MODEL_DRIFT_COLUMNS)
+        self.assertEqual(self.drift_missing_before_align, expected)
+        migration_text = (
+            ROOT / 'migrations' / 'versions' / 'd8e4b1c67a02_guard_posted_realization_unit_match.py'
+        ).read_text(encoding='utf-8')
+        for _table, column, _coltype in MODEL_DRIFT_COLUMNS:
+            self.assertNotIn(f"'{column}'", migration_text)
+            self.assertNotIn(f'ADD COLUMN {column}', migration_text)
+        self.assertNotIn('foreign_keys=ON', migration_text)
+        self.assertNotIn('PRAGMA foreign_keys=ON', migration_text)
+        for table, column, _coltype in MODEL_DRIFT_COLUMNS:
+            present = {
+                row[1]
+                for row in self.db.session.execute(text(f'PRAGMA table_info({table})')).all()
+            }
+            self.assertIn(column, present)
+
+    def test_foreign_rebind_and_parent_id_do_not_move_two_directions(self):
+        from shift_director_report import build_shift_director_report
+
+        march_start = datetime(2031, 3, 1, 0, 0, 0)
+        march_end = datetime(2031, 3, 31, 23, 59, 59)
+        october_start = datetime(2031, 10, 1, 0, 0, 0)
+        october_end = datetime(2031, 10, 31, 23, 59, 59)
+        trailer = self._trailer('VIN-GUARD-DIR-A-0001')
+        other = self._trailer('VIN-GUARD-DIR-B-0001', item=self._other_item())
+        own = self._cohort_unit(
+            trailer,
+            posted_at=datetime(2031, 3, 15, 12, 0, 0),
+            direction_code='DIR_COHORT_A',
+            direction_name='Направление A',
+        )
+        foreign = self._cohort_unit(
+            other,
+            posted_at=datetime(2031, 10, 15, 12, 0, 0),
+            direction_code='DIR_COHORT_B',
+            direction_name='Направление B',
+            item=self._other_item(),
+        )
+        sibling = self._cohort_unit(
+            trailer,
+            posted_at=datetime(2031, 10, 16, 12, 0, 0),
+            direction_code='DIR_COHORT_C',
+            direction_name='Направление C',
+        )
+        sale = self._posted_cohort_sale(own, realization_date=date(2031, 10, 20))
+        line_id = self._orm_line(sale).id
+        before = self._period_sold(march_start, march_end, october_start, october_end)
+        self.assertEqual(before['march'], (1, 1))
+        self.assertEqual(before['october'], (0, 2))
+        march_areas = {
+            row['direction_code']: row['good_trailers']
+            for row in build_shift_director_report(
+                period_start=march_start,
+                period_end=march_end,
+            )['area_rows']
+        }
+        self.assertEqual(march_areas.get('DIR_COHORT_A'), 1)
+
+        self._assert_rebind_rejected(line_id, foreign.id)
+        self.assertEqual(self._line_unit(line_id), own.id)
+        self.assertEqual(self._period_sold(march_start, march_end, october_start, october_end), before)
+
+        self._assert_rebind_rejected(line_id, sibling.id)
+        self.assertEqual(self._line_unit(line_id), own.id)
+        self.assertEqual(self._period_sold(march_start, march_end, october_start, october_end), before)
+
+        self._assert_parent_id_rejected(own.id, 830001)
+        self.assertEqual(self._line_unit(line_id), own.id)
+        self.assertIsNotNone(self.db.session.execute(
+            text('SELECT id FROM produced_unit WHERE id = :unit_id'),
+            {'unit_id': own.id},
+        ).scalar())
+        with self.assertRaises(IntegrityError) as deleted:
+            self.db.session.execute(
+                text('DELETE FROM produced_unit WHERE id = :unit_id'),
+                {'unit_id': own.id},
+            )
+            self.db.session.commit()
+        self.assertIn(_guard_module().DELETE_PARENT_MESSAGE, str(deleted.exception))
+        self.db.session.rollback()
+        self.assertEqual(self._period_sold(march_start, march_end, october_start, october_end), before)
+
+        self.db.session.execute(
+            text("UPDATE produced_unit SET note = 'статус выпуска не ключ' WHERE id = :unit_id"),
+            {'unit_id': own.id},
+        )
+        self.db.session.commit()
+        self.assertEqual(self._line_unit(line_id), own.id)
+
+        self._assert_missing_rejected(
+            f'UPDATE sales_realization_line SET produced_unit_id = 839999 WHERE id = {line_id}',
+        )
+        self.assertEqual(self._line_unit(line_id), own.id)
+
+        draft = self._realization(trailer, [{'trailer_id': trailer.id}])
+        draft_line_id = self._orm_line(draft).id
+        self.db.session.execute(
+            text('UPDATE sales_realization_line SET produced_unit_id = :unit_id WHERE id = :line_id'),
+            {'unit_id': foreign.id, 'line_id': draft_line_id},
+        )
+        self.db.session.commit()
+        self.assertEqual(self._line_unit(draft_line_id), foreign.id)
+        self.assertEqual(draft.status, 'draft')
+        self.assertEqual(self._period_sold(march_start, march_end, october_start, october_end), before)
+
+        with self.assertRaises(IntegrityError) as posted:
+            self.db.session.execute(
+                text("UPDATE sales_realization SET status = 'posted' WHERE id = :realization_id"),
+                {'realization_id': draft.id},
+            )
+            self.db.session.commit()
+        self.assertIn(_match_module().POSTED_FOREIGN_UNIT_MESSAGE, str(posted.exception))
+        self.db.session.rollback()
+        self.assertEqual(self.db.session.execute(
+            text('SELECT status FROM sales_realization WHERE id = :realization_id'),
+            {'realization_id': draft.id},
+        ).scalar(), 'draft')
+        self.assertEqual(self._period_sold(march_start, march_end, october_start, october_end), before)
+
+        free = self._unit()
+        self.db.session.commit()
+        renamed = 830002
+        self.db.session.execute(
+            text('UPDATE produced_unit SET id = :new_id WHERE id = :unit_id'),
+            {'new_id': renamed, 'unit_id': free.id},
+        )
+        self.db.session.commit()
+        self.assertIsNone(self.db.session.execute(
+            text('SELECT id FROM produced_unit WHERE id = :unit_id'),
+            {'unit_id': free.id},
+        ).scalar())
+        self.db.session.execute(
+            text('DELETE FROM produced_unit WHERE id = :unit_id'),
+            {'unit_id': renamed},
+        )
+        self.db.session.commit()
+
+    def test_route_post_replaces_draft_foreign_id(self):
+        from models import SalesRealization
+
+        trailer = self._trailer('VIN-GUARD-ROUTE-0002')
+        other = self._trailer('VIN-GUARD-ROUTE-0003', item=self._other_item())
+        unit = self._unit(trailer=trailer)
+        foreign = self._unit(trailer=other, item=self._other_item())
+        self.db.session.commit()
+        order = self._sale_order(trailer)
+        realization = self._draft_realization(order, trailer)
+        line_id = self._orm_line(realization).id
+        self.db.session.execute(
+            text('UPDATE sales_realization_line SET produced_unit_id = :unit_id WHERE id = :line_id'),
+            {'unit_id': foreign.id, 'line_id': line_id},
+        )
+        self.db.session.commit()
+        self.assertEqual(self._line_unit(line_id), foreign.id)
+
+        client = self._client()
+        response = client.post(f'/realizations/{realization.id}/post', follow_redirects=True)
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        stored = SalesRealization.query.get(realization.id)
+        self.assertEqual(stored.status, 'posted', response.get_data(as_text=True))
+        self.assertEqual(self._orm_line(stored).produced_unit_id, unit.id)
+        self.assertEqual(int(self.db.session.execute(text('PRAGMA foreign_keys')).scalar()), 0)
+
+    def test_downgrade_reopens_foreign_rebind_upgrade_keeps_old_rows(self):
+        from flask_migrate import downgrade, upgrade
+
+        trailer = self._trailer('VIN-GUARD-OLD-0001')
+        other = self._trailer('VIN-GUARD-OLD-0002', item=self._other_item())
+        own = self._unit(trailer=trailer)
+        foreign = self._unit(trailer=other, item=self._other_item())
+        self.db.session.commit()
+        posted = self._posted_cohort_sale(own, realization_date=date(2032, 1, 10))
+        line_id = self._orm_line(posted).id
+        null_row = self._realization(trailer, [{'trailer_id': trailer.id}])
+        null_row.status = 'posted'
+        self.db.session.commit()
+        null_line_id = self._orm_line(null_row).id
+        self.assertIsNone(self._line_unit(null_line_id))
+
+        try:
+            self.db.session.remove()
+            downgrade(directory=MIGRATIONS, revision=GUARD_REVISION)
+            self.assertEqual(
+                self.db.session.execute(text('SELECT version_num FROM alembic_version')).scalar(),
+                GUARD_REVISION,
+            )
+            self.assertEqual(self._trigger_names(), set(_guard_module().TRIGGER_NAMES))
+            self.assertEqual(int(self.db.session.execute(text('PRAGMA foreign_keys')).scalar()), 0)
+            self.db.session.execute(
+                text('UPDATE sales_realization_line SET produced_unit_id = :unit_id WHERE id = :line_id'),
+                {'unit_id': foreign.id, 'line_id': line_id},
+            )
+            self.db.session.commit()
+            self.assertEqual(self._line_unit(line_id), foreign.id)
+            self.assertIsNone(self._line_unit(null_line_id))
+            self.assertIsNone(self._comment_unit('guard-old-null'))
+            self.assertEqual(self._comment_unit('guard-old-orphan'), 919999)
+
+            self.db.session.remove()
+            upgrade(directory=MIGRATIONS, revision=MATCH_REVISION)
+            self.assertEqual(self._line_unit(line_id), foreign.id)
+            self.assertIsNone(self._line_unit(null_line_id))
+            self.assertIsNone(self._comment_unit('guard-old-null'))
+            self.assertEqual(self._comment_unit('guard-old-orphan'), 919999)
+            self.assertEqual(self._trigger_names(), set(self._expected_triggers()))
+            self._assert_rebind_rejected(line_id, own.id)
+            self.assertEqual(self._line_unit(line_id), foreign.id)
+            self._assert_parent_id_rejected(foreign.id, 830003)
+            self.assertEqual(int(self.db.session.execute(text('PRAGMA foreign_keys')).scalar()), 0)
+        finally:
+            self.db.session.rollback()
+            self.db.session.remove()
+            current = self.db.session.execute(text('SELECT version_num FROM alembic_version')).scalar()
+            if current != MATCH_REVISION:
+                upgrade(directory=MIGRATIONS, revision=MATCH_REVISION)
+
+    def test_future_alembic_batch_rebuild_is_not_safe(self):
+        import sqlite3
+
+        import sqlalchemy as sa
+        from alembic.operations import Operations
+        from alembic.runtime.migration import MigrationContext
+
+        copy = self._backup_sqlite()
+        engine = sa.create_engine('sqlite:///' + str(copy).replace('\\', '/'))
+        batch_errors = {}
+        try:
+            for table in ('sales_realization_line', 'produced_unit', 'sales_realization'):
+                try:
+                    with engine.begin() as conn:
+                        operation = Operations(MigrationContext.configure(conn))
+                        with operation.batch_alter_table(table) as batch:
+                            batch.add_column(sa.Column('batch_probe', sa.Integer(), nullable=True))
+                    batch_errors[table] = ''
+                except Exception as exc:
+                    batch_errors[table] = f'{type(exc).__name__}: {exc}'
+            with engine.connect() as conn:
+                trigger_names = {
+                    row[0]
+                    for row in conn.execute(sa.text(
+                        "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+                    )).all()
+                }
+                temp_tables = [
+                    row[0]
+                    for row in conn.execute(sa.text(
+                        "SELECT name FROM sqlite_master WHERE type = 'table' "
+                        "AND name LIKE '%alembic_tmp%'"
+                    )).all()
+                ]
+                pragma = int(conn.execute(sa.text('PRAGMA foreign_keys')).scalar())
+        finally:
+            engine.dispose()
+            copy.unlink(missing_ok=True)
+
+        plain = self._backup_sqlite()
+        plain_conn = sqlite3.connect(plain)
+        try:
+            plain_conn.execute('ALTER TABLE sales_realization_line ADD COLUMN plain_probe INTEGER')
+            plain_conn.commit()
+            plain_triggers = {
+                row[0]
+                for row in plain_conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+                )
+            }
+            plain_pragma = int(plain_conn.execute('PRAGMA foreign_keys').fetchone()[0])
+            probe = {
+                row[1]
+                for row in plain_conn.execute('PRAGMA table_info(sales_realization_line)')
+            }
+        finally:
+            plain_conn.close()
+            plain.unlink(missing_ok=True)
+
+        self.assertEqual(plain_triggers, set(self._expected_triggers()))
+        self.assertEqual(plain_pragma, 0)
+        self.assertIn('plain_probe', probe)
+        self.assertEqual(int(self.db.session.execute(text('PRAGMA foreign_keys')).scalar()), 0)
+        lost = set(self._expected_triggers()) - trigger_names
+        report = {
+            'errors': batch_errors,
+            'lost_triggers': sorted(lost),
+            'remaining_triggers': sorted(trigger_names),
+            'temp_tables': temp_tables,
+            'pragma': pragma,
+        }
+        print('BATCH_REBUILD_REPORT ' + repr(report))
+        unsafe = bool(lost or temp_tables or any(batch_errors.values()))
+        self.assertTrue(
+            unsafe,
+            'batch rebuild неожиданно сохранил триггеры: ' + repr(report),
+        )
+        self.batch_rebuild_report = report
+
+    def _backup_sqlite(self) -> Path:
+        import sqlite3
+
+        handle = tempfile.NamedTemporaryFile(suffix='-batch-copy.db', delete=False)
+        handle.close()
+        copy = Path(handle.name)
+        _refuse_live('sqlite:///' + str(copy), copy)
+        self.db.session.commit()
+        source = sqlite3.connect(self.db_path)
+        dest = sqlite3.connect(copy)
+        try:
+            source.backup(dest)
+        finally:
+            dest.close()
+            source.close()
+        return copy
+
+    def _period_sold(self, march_start, march_end, october_start, october_end):
+        from shift_director_report import build_shift_director_report
+
+        march = build_shift_director_report(period_start=march_start, period_end=march_end)
+        october = build_shift_director_report(period_start=october_start, period_end=october_end)
+        return {
+            'march': (
+                march['sold_from_produced']['value'],
+                march['sold_from_produced']['cohort_units'],
+            ),
+            'october': (
+                october['sold_from_produced']['value'],
+                october['sold_from_produced']['cohort_units'],
+            ),
+        }
+
+    def _assert_rebind_rejected(self, line_id: int, unit_id: int):
+        with self.assertRaises(IntegrityError) as caught:
+            self.db.session.execute(
+                text(
+                    'UPDATE sales_realization_line SET produced_unit_id = :unit_id '
+                    'WHERE id = :line_id'
+                ),
+                {'unit_id': unit_id, 'line_id': line_id},
+            )
+            self.db.session.commit()
+        self.assertIn(_match_module().POSTED_REBIND_MESSAGE, str(caught.exception))
+        self.db.session.rollback()
+
+    def _assert_parent_id_rejected(self, unit_id: int, new_id: int):
+        with self.assertRaises(IntegrityError) as caught:
+            self.db.session.execute(
+                text('UPDATE produced_unit SET id = :new_id WHERE id = :unit_id'),
+                {'new_id': new_id, 'unit_id': unit_id},
+            )
+            self.db.session.commit()
+        self.assertIn(_match_module().PARENT_ID_MESSAGE, str(caught.exception))
+        self.db.session.rollback()
+
     def _expected_triggers(self):
-        return _guard_module().TRIGGER_NAMES
+        return tuple(_guard_module().TRIGGER_NAMES) + tuple(_match_module().TRIGGER_NAMES)
 
     def _trigger_names(self):
         rows = self.db.session.execute(text(
@@ -700,7 +1085,15 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
         self.db.session.commit()
         return realization
 
-    def _cohort_unit(self, trailer, posted_at: datetime):
+    def _cohort_unit(
+        self,
+        trailer,
+        posted_at: datetime,
+        *,
+        direction_code: str = 'DIR_LIGHT',
+        direction_name: str = 'Легковое',
+        item=None,
+    ):
         from models import (
             ProductionEmployee,
             ProductionShift,
@@ -709,10 +1102,11 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
         )
 
         self._seed_master()
+        item = item or self.item
         area = WarehouseStorageArea(
             warehouse_id=self.warehouse.id,
-            code='DIR_LIGHT',
-            name='Легковое',
+            code=direction_code,
+            name=direction_name,
             area_type='finished',
         )
         employee = ProductionEmployee(full_name='Сборщик guard')
@@ -732,7 +1126,7 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
         output = ProductionShiftOutput(
             shift_id=shift.id,
             employee_id=employee.id,
-            item_id=self.item.id,
+            item_id=item.id,
             output_type='trailer',
             quantity=Decimal('1'),
             defect_quantity=Decimal('0'),
@@ -741,7 +1135,7 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
         )
         self.db.session.add(output)
         self.db.session.flush()
-        return self._unit(trailer=trailer, shift_output_id=output.id)
+        return self._unit(trailer=trailer, item=item, shift_output_id=output.id)
 
     def _posted_cohort_sale(self, unit, realization_date: date):
         from models import SalesRealization, SalesRealizationLine
