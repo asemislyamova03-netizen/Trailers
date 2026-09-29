@@ -46,6 +46,7 @@ from inventory_service import (
     reverse_production_consumption,
 )
 from inventory_units import format_inventory_quantity, normalize_unit, quantity_input_step
+from realization_unit_link import ProducedUnitLinkError, assign_produced_units_on_post
 from shift_director_report import build_shift_director_report
 from shift_posting import (
     MODE_SHIFT_ONLY,
@@ -11981,6 +11982,22 @@ def sales_realization_delete(realization_id):
     return redirect(url_for('main.order_detail', order_id=order.id) if order else url_for('main.sales_realizations_list'))
 
 
+def _rollback_realization_post(realization_id: int) -> None:
+    """Откатить проведение и убрать ключ с черновика.
+
+    Откат возвращает заранее записанный обходом экрана produced_unit_id.
+    Пока документ черновик, ключ должен остаться пустым, иначе уникальный
+    индекс держит единицу за непроведённой строкой.
+    """
+    db.session.rollback()
+    realization = SalesRealization.query.get(realization_id)
+    if realization is None or realization.status != 'draft':
+        return
+    for line in realization.lines:
+        line.produced_unit_id = None
+    db.session.commit()
+
+
 @main_bp.route('/realizations/<int:realization_id>/post', methods=['POST'])
 @role_required('manager', 'director')
 def sales_realization_post(realization_id):
@@ -12014,15 +12031,25 @@ def sales_realization_post(realization_id):
                     'danger',
                 )
                 return redirect(url_for('main.sales_realization_detail', realization_id=realization.id))
-    realization.status = 'posted'
-    realization.posted_at = datetime.utcnow()
-    realization.posted_by_user_id = current_user.id
-    _apply_realization_shipment_effect(realization)
-    if order:
-        _refresh_order_realization_status(order)
-        shipment_comment = 'Проведена реализация товаров и услуг; заказ закрыт как отгрузка' if order.is_shipped else 'Проведена реализация товаров и услуг; отгружены строки реализации'
-        add_order_event(order, 'realization_posted', new_value=realization.number, comment=shipment_comment)
-    db.session.commit()
+    try:
+        assign_produced_units_on_post(realization)
+        realization.status = 'posted'
+        realization.posted_at = datetime.utcnow()
+        realization.posted_by_user_id = current_user.id
+        _apply_realization_shipment_effect(realization)
+        if order:
+            _refresh_order_realization_status(order)
+            shipment_comment = 'Проведена реализация товаров и услуг; заказ закрыт как отгрузка' if order.is_shipped else 'Проведена реализация товаров и услуг; отгружены строки реализации'
+            add_order_event(order, 'realization_posted', new_value=realization.number, comment=shipment_comment)
+        db.session.commit()
+    except ProducedUnitLinkError as exc:
+        _rollback_realization_post(realization_id)
+        flash(str(exc), 'danger')
+        return redirect(url_for('main.sales_realization_detail', realization_id=realization_id))
+    except IntegrityError:
+        _rollback_realization_post(realization_id)
+        flash('Единица выпуска уже связана с другой строкой реализации. Проведение отменено.', 'danger')
+        return redirect(url_for('main.sales_realization_detail', realization_id=realization_id))
     flash('Реализация проведена, заказ закрыт как отгруженный.' if not order or order.is_shipped else 'Реализация проведена, отгружены строки реализации.', 'success')
     return redirect(url_for('main.sales_realization_detail', realization_id=realization.id))
 

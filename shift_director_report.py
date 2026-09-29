@@ -1,7 +1,8 @@
 """Только чтение: агрегаты директорского отчёта по проведённым сменам.
 
 Не проводит смены, не меняет остатки и не подключается к живому серверу.
-«Продано из выпущенных» не считается: прямой связи единицы выпуска с реализацией нет.
+«Продано из выпущенных» остаётся BLOCKED: ключ строки уже может быть записан,
+но дата периода и срез ещё не выбраны. Число не подставляется.
 
 Материалы, годные детали и брак деталей возвращаются только строками
 одной номенклатуры и одной единицы. Общего количества разных Item или
@@ -30,24 +31,25 @@ SOLD_FROM_PRODUCED = {
     'status': 'BLOCKED',
     'value': None,
     'reason': (
-        'Связи единицы выпуска с реализацией нет. '
-        'У SalesRealizationLine нет produced_unit_id. '
-        'У VinRegistry нет produced_unit_id (колонка снята миграцией e5b8c7d9a012). '
-        'ProducedUnit.trailer_id пустой после проведения смены и не уникален в БД. '
-        'Совпадение trailer_id со строкой реализации — не документ продажи этой единицы.'
+        'Показатель не считается. '
+        'sales_realization_line.produced_unit_id пишется при проведении, '
+        'но HQ ещё не выбрал дату периода (realization_date или posted_at) '
+        'и срез (продано, выпущено или пересечение). '
+        'Исторические строки без ключа не достраиваются. '
+        'Старый +1 в числитель смен не входит. '
+        'Совпадение trailer_id без этого ключа числом не является.'
     ),
     'paths': [
-        'models.py: SalesRealizationLine — trailer_id, order_line_id, vin_registry_id; produced_unit_id нет',
-        'models.py: VinRegistry — produced_unit_id нет',
-        'models.py: ProducedUnit.trailer_id — nullable, без unique',
-        'shift_posting.py: _create_produced_units — trailer_id не заполняется, статус produced_no_vin',
-        'views.py: _attach_produced_unit_to_existing_trailer — trailer_id пишется позже, при VIN',
-        'views.py: _posted_realization_for_trailer — продажа ищется по trailer_id, не по ProducedUnit',
+        'models.py: SalesRealizationLine.produced_unit_id — nullable FK, уникальный, без backfill',
+        'realization_unit_link.py: запись только в проведении, ровно одна подходящая единица',
+        'views.py: sales_realization_post — та же транзакция, при отказе rollback',
+        'docs/ai/research/2026-09-29-sold-from-produced-link-contract.md: дата и срез периода',
     ],
     'proposal': (
-        'Минимально, отдельным решением: nullable sales_realization_line.produced_unit_id. '
-        'Заполнять при проведении реализации только если у этого trailer ровно один ProducedUnit. '
-        'Без backfill и без подстановки числа через trailer_id. Пока колонки нет — показатель не считать.'
+        'Ключ уже пишется при проведении и только если на прицепе ровно одна '
+        'единица vin_assigned с тем же item и quantity=1. '
+        'Ноль единиц остаётся NULL. Две и больше или несовпадение отменяют проведение. '
+        'Число включить только после решения HQ по дате и срезу. Без backfill.'
     ),
 }
 

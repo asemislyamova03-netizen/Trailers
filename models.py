@@ -822,6 +822,12 @@ class SalesRealizationLine(db.Model):
     product_name_snapshot = db.Column(db.String(255), nullable=True)
     vin_full = db.Column(db.String(50), nullable=True, index=True)
     comment = db.Column(db.Text, nullable=True)
+    # Пишется только при проведении. Исторические строки не заполняются.
+    produced_unit_id = db.Column(
+        db.Integer,
+        db.ForeignKey('produced_unit.id', name='fk_sales_realization_line_produced_unit_id'),
+        nullable=True,
+    )
 
     realization = db.relationship('SalesRealization', backref=db.backref('lines', lazy='dynamic', cascade='all, delete-orphan'))
     order_line = db.relationship('CustomerOrderLine', backref='realization_lines')
@@ -830,6 +836,15 @@ class SalesRealizationLine(db.Model):
     item = db.relationship('Item', backref='realization_lines')
     warehouse = db.relationship('Warehouse', backref='realization_lines')
     storage_area = db.relationship('WarehouseStorageArea', backref='realization_lines')
+    produced_unit = db.relationship(
+        'ProducedUnit',
+        foreign_keys=[produced_unit_id],
+        backref=db.backref('realization_lines', lazy='dynamic'),
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint('produced_unit_id', name='uq_sales_realization_line_produced_unit'),
+    )
 
 
 class ContractTemplate(db.Model):
