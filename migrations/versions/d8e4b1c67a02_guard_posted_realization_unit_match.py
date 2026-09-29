@@ -30,10 +30,14 @@ id не ищутся и не чистятся. Четыре колонки мо�
 otts.full_mass_kg) эта миграция не добавляет.
 
 Будущий Alembic batch rebuild таблиц sales_realization,
-sales_realization_line или produced_unit этой миграцией не лечится:
-триггеры сидят на этих таблицах и ссылаются на их имена. История старых
-миграций не переписывается. Вердикт прогона — в тесте
-test_future_alembic_batch_rebuild_is_not_safe.
+sales_realization_line или produced_unit этой миграцией не лечится.
+История старых миграций не переписывается. Простой ADD COLUMN таблицу
+не пересобирает: триггеры остаются, PRAGMA foreign_keys остаётся 0.
+Принудительный batch recreate='always' на копии временной базы падает
+на переименовании _alembic_tmp_* и оставляет эти временные таблицы:
+триггер другой таблицы ссылается на ещё не возвращённое имя
+(main.sales_realization_line, main.produced_unit или main.sales_realization).
+Вердикт: пересборка этих трёх таблиц пока небезопасна.
 """
 
 from alembic import op

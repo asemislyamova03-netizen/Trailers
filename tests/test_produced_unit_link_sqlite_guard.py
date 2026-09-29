@@ -178,7 +178,6 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
         self.ctx = self.app.app_context()
         self.ctx.push()
         self.assertEqual(int(self.db.session.execute(text('PRAGMA foreign_keys')).scalar()), 0)
-        self._vin_serial = 1
 
     def tearDown(self):
         self.db.session.rollback()
@@ -580,9 +579,7 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
         self.db.session.commit()
         self.assertEqual(self._line_unit(line_id), own.id)
 
-        self._assert_missing_rejected(
-            f'UPDATE sales_realization_line SET produced_unit_id = 839999 WHERE id = {line_id}',
-        )
+        self._assert_rebind_rejected(line_id, 839999)
         self.assertEqual(self._line_unit(line_id), own.id)
 
         draft = self._realization(trailer, [{'trailer_id': trailer.id}])
@@ -612,15 +609,16 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
 
         free = self._unit()
         self.db.session.commit()
+        free_id = int(free.id)
         renamed = 830002
         self.db.session.execute(
             text('UPDATE produced_unit SET id = :new_id WHERE id = :unit_id'),
-            {'new_id': renamed, 'unit_id': free.id},
+            {'new_id': renamed, 'unit_id': free_id},
         )
         self.db.session.commit()
         self.assertIsNone(self.db.session.execute(
             text('SELECT id FROM produced_unit WHERE id = :unit_id'),
-            {'unit_id': free.id},
+            {'unit_id': free_id},
         ).scalar())
         self.db.session.execute(
             text('DELETE FROM produced_unit WHERE id = :unit_id'),
@@ -668,6 +666,8 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
         null_row.status = 'posted'
         self.db.session.commit()
         null_line_id = self._orm_line(null_row).id
+        own_id = int(own.id)
+        foreign_id = int(foreign.id)
         self.assertIsNone(self._line_unit(null_line_id))
 
         try:
@@ -681,24 +681,24 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
             self.assertEqual(int(self.db.session.execute(text('PRAGMA foreign_keys')).scalar()), 0)
             self.db.session.execute(
                 text('UPDATE sales_realization_line SET produced_unit_id = :unit_id WHERE id = :line_id'),
-                {'unit_id': foreign.id, 'line_id': line_id},
+                {'unit_id': foreign_id, 'line_id': line_id},
             )
             self.db.session.commit()
-            self.assertEqual(self._line_unit(line_id), foreign.id)
+            self.assertEqual(self._line_unit(line_id), foreign_id)
             self.assertIsNone(self._line_unit(null_line_id))
             self.assertIsNone(self._comment_unit('guard-old-null'))
             self.assertEqual(self._comment_unit('guard-old-orphan'), 919999)
 
             self.db.session.remove()
             upgrade(directory=MIGRATIONS, revision=MATCH_REVISION)
-            self.assertEqual(self._line_unit(line_id), foreign.id)
+            self.assertEqual(self._line_unit(line_id), foreign_id)
             self.assertIsNone(self._line_unit(null_line_id))
             self.assertIsNone(self._comment_unit('guard-old-null'))
             self.assertEqual(self._comment_unit('guard-old-orphan'), 919999)
             self.assertEqual(self._trigger_names(), set(self._expected_triggers()))
-            self._assert_rebind_rejected(line_id, own.id)
-            self.assertEqual(self._line_unit(line_id), foreign.id)
-            self._assert_parent_id_rejected(foreign.id, 830003)
+            self._assert_rebind_rejected(line_id, own_id)
+            self.assertEqual(self._line_unit(line_id), foreign_id)
+            self._assert_parent_id_rejected(foreign_id, 830003)
             self.assertEqual(int(self.db.session.execute(text('PRAGMA foreign_keys')).scalar()), 0)
         finally:
             self.db.session.rollback()
@@ -722,7 +722,7 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
                 try:
                     with engine.begin() as conn:
                         operation = Operations(MigrationContext.configure(conn))
-                        with operation.batch_alter_table(table) as batch:
+                        with operation.batch_alter_table(table, recreate='always') as batch:
                             batch.add_column(sa.Column('batch_probe', sa.Integer(), nullable=True))
                     batch_errors[table] = ''
                 except Exception as exc:
@@ -778,7 +778,6 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
             'temp_tables': temp_tables,
             'pragma': pragma,
         }
-        print('BATCH_REBUILD_REPORT ' + repr(report))
         unsafe = bool(lost or temp_tables or any(batch_errors.values()))
         self.assertTrue(
             unsafe,
@@ -1031,8 +1030,7 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
         )
         self.db.session.add(line)
         self.db.session.flush()
-        serial = f'{self._vin_serial:07d}'
-        self._vin_serial += 1
+        serial = f'{int(trailer.id):07d}'
         self.db.session.add(VinRegistry(
             vin_full=trailer.vin,
             serial7=serial,
