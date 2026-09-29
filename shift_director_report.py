@@ -3,12 +3,11 @@
 Не проводит смены, не меняет остатки и не подключается к живому серверу.
 «Продано из выпущенных» не считается: прямой связи единицы выпуска с реализацией нет.
 
-Расход на экран — только строки номенклатуры со своей единицей.
-material_fact_by_zone и legacy_plus_one_issue_qty не показывать:
-это суммы разных Item/unit и они дают ложный итог.
-Годные детали и брак деталей — тоже строки номенклатуры со своей единицей.
-Общее количество разных Item/unit не считать и не показывать.
-Прицепы и часы остаются отдельными показателями.
+Материалы, годные детали и брак деталей возвращаются только строками
+одной номенклатуры и одной единицы. Общего количества разных Item или
+разных единиц нет: ни в totals, ни по участку, ни по зоне.
+Прицепы (число единиц) и часы остаются отдельными показателями.
+Старые +1 не входят в выпуск и расход posted-смен.
 """
 
 from __future__ import annotations
@@ -26,8 +25,6 @@ from models import (
     ProductionShiftMaterial,
     ProductionShiftOutput,
 )
-
-DIRECTION_ZONE_CODES = ('DIR_LIGHT', 'DIR_CARGO')
 
 SOLD_FROM_PRODUCED = {
     'status': 'BLOCKED',
@@ -73,14 +70,6 @@ def _zone_code(shift: ProductionShift) -> str:
     return code or 'UNKNOWN'
 
 
-def _empty_zone() -> dict:
-    return {
-        'qty_fact': Decimal('0'),
-        'qty_issued': Decimal('0'),
-        'qty_shortage': Decimal('0'),
-    }
-
-
 def _empty_area(work_area: str, direction_code: str, direction_name: str) -> dict:
     return {
         'work_area': work_area,
@@ -88,7 +77,6 @@ def _empty_area(work_area: str, direction_code: str, direction_name: str) -> dic
         'direction_name': direction_name,
         'shift_count': 0,
         'hours': Decimal('0'),
-        'defect_qty': Decimal('0'),
         'defect_trailer_units': {},
         'defect_part_items': {},
         'defect_other_units': {},
@@ -203,7 +191,6 @@ def build_shift_director_report(
     good_trailers = 0
     good_trailer_declared = Decimal('0')
     good_part_items: dict[tuple, dict] = {}
-    defect_qty = Decimal('0')
     defect_trailer_units: dict[str, Decimal] = {}
     defect_part_items: dict[tuple, dict] = {}
     defect_other_units: dict[str, Decimal] = {}
@@ -215,8 +202,6 @@ def build_shift_director_report(
             continue
         bucket = area_bucket(shift)
         defect = _d(output.defect_quantity)
-        bucket['defect_qty'] += defect
-        defect_qty += defect
         item = output.item
         item_type = item.item_type if item else None
         measure_unit = _measure_unit(output.unit, item.unit if item else None)
@@ -255,25 +240,17 @@ def build_shift_director_report(
             .all()
         )
 
-    # Суммы зоны остаются для проверок одной номенклатуры.
-    # На экран их не выводить: разные Item и единицы дают ложный итог.
-    material_fact_by_zone = {code: _empty_zone() for code in DIRECTION_ZONE_CODES}
-    other_zone_fact = _empty_zone()
+    # Расход только по (зона, номенклатура, единица). Суммы зоны нет:
+    # 8 кг и 5 шт нельзя сложить в одно число.
     material_groups: dict[tuple[str, int, str], dict] = {}
     for material in materials:
         shift = shifts_by_id.get(material.shift_id)
         if not shift:
             continue
         code = _zone_code(shift)
-        target = material_fact_by_zone.get(code)
-        if target is None:
-            target = other_zone_fact
         fact = _d(material.qty_fact)
         issued = _d(material.qty_issued)
         shortage = _d(material.qty_shortage)
-        target['qty_fact'] += fact
-        target['qty_issued'] += issued
-        target['qty_shortage'] += shortage
         item = material.item
         unit = _measure_unit(material.unit, item.unit if item else None)
         group_key = (code, material.item_id, unit)
@@ -303,9 +280,7 @@ def build_shift_director_report(
         period_start,
         period_end,
     ).all()
-    legacy_issue_qty = Decimal('0')
     overlap_units = 0
-    overlap_issue_qty = Decimal('0')
     seen_overlap_units: set[int] = set()
     legacy_issue_groups: dict[tuple[int, str], dict] = {}
     plus_one_issues = _apply_period(
@@ -321,21 +296,16 @@ def build_shift_director_report(
     ).all()
     for operation in plus_one_issues:
         out_lines = []
-        qty = Decimal('0')
         for line in operation.lines.all():
             if (line.direction or 'out') != 'out':
                 continue
-            line_qty = _d(line.quantity)
-            qty += line_qty
-            out_lines.append((line, line_qty))
+            out_lines.append((line, _d(line.quantity)))
         produced = operation.produced_unit
         if produced is not None and produced.shift_output_id:
-            overlap_issue_qty += qty
             if produced.id not in seen_overlap_units:
                 seen_overlap_units.add(produced.id)
                 overlap_units += 1
             continue
-        legacy_issue_qty += qty
         for line, line_qty in out_lines:
             item = line.item
             unit = _measure_unit(line.unit, item.unit if item else None)
@@ -394,22 +364,17 @@ def build_shift_director_report(
             'good_trailer_declared_qty': good_trailer_declared,
             'good_trailer_unit_gap': good_trailer_declared - Decimal(good_trailers),
             'good_part_lines': _item_lines(good_part_items),
-            'defect_qty': defect_qty,
             'defect_trailer_lines': _unit_lines(defect_trailer_units),
             'defect_part_lines': _item_lines(defect_part_items),
             'defect_other_lines': _unit_lines(defect_other_units),
             'hours': sum((row['hours'] for row in area_rows), Decimal('0')),
             'legacy_plus_one_trailers': len(legacy_units),
-            'legacy_plus_one_issue_qty': legacy_issue_qty,
             'overlap_units': overlap_units,
-            'overlap_issue_qty': overlap_issue_qty,
             'unexpected_component_units': unexpected_component_units,
             'excluded_closed_shifts': excluded_closed,
             'excluded_open_shifts': excluded_open,
         },
         'area_rows': area_rows,
-        'material_fact_by_zone': material_fact_by_zone,
-        'other_zone_fact': other_zone_fact,
         'material_rows': material_rows,
         'legacy_issue_rows': legacy_issue_rows,
     }

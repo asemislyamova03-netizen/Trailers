@@ -16,6 +16,16 @@ sys.path.insert(0, str(ROOT))
 
 os.environ.setdefault('SIGEX_BASE_URL', 'https://example.invalid')
 
+# Скаляры, которые складывали разные Item или разные единицы.
+_FORBIDDEN_QUANTITY_KEYS = frozenset({
+    'defect_qty',
+    'good_parts',
+    'legacy_plus_one_issue_qty',
+    'overlap_issue_qty',
+    'material_fact_by_zone',
+    'other_zone_fact',
+})
+
 
 class ShiftDirectorReportTests(unittest.TestCase):
     @classmethod
@@ -308,6 +318,28 @@ class ShiftDirectorReportTests(unittest.TestCase):
 
         return build_shift_director_report()
 
+    def _assert_no_mixed_item_quantity(self, report):
+        """В ответе нет общего количества разных номенклатур или единиц."""
+
+        def walk(node, path):
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    self.assertNotIn(key, _FORBIDDEN_QUANTITY_KEYS, path)
+                    if key in ('qty_fact', 'qty_issued', 'qty_shortage', 'quantity'):
+                        self.assertIn('item_id', node, path)
+                        self.assertIsNotNone(node['item_id'], path)
+                        self.assertTrue(node.get('unit'), path)
+                    walk(value, f'{path}.{key}')
+            elif isinstance(node, list):
+                for index, value in enumerate(node):
+                    walk(value, f'{path}[{index}]')
+
+        walk(report, 'report')
+        for row in report['area_rows']:
+            self.assertNotIn('defect_qty', row)
+        self.assertEqual(report['sold_from_produced']['status'], 'BLOCKED')
+        self.assertIsNone(report['sold_from_produced']['value'])
+
     def test_directions_keep_shift_output_apart_from_legacy_and_closed(self):
         self._post(self.light_shift, self.light_area.id, '8')
         self._post(self.cargo_shift, self.cargo_area.id, '4')
@@ -325,7 +357,7 @@ class ShiftDirectorReportTests(unittest.TestCase):
             {('P', 'шт'): Decimal('5')},
         )
         self.assertEqual(totals['good_part_lines'][0]['item_name'], 'Рама 2500')
-        self.assertEqual(totals['defect_qty'], Decimal('3'))
+        self.assertNotIn('defect_qty', totals)
         self.assertEqual(totals['defect_trailer_lines'], [{'unit': 'шт', 'qty': Decimal('2')}])
         self.assertEqual(len(totals['defect_part_lines']), 1)
         defect_part = totals['defect_part_lines'][0]
@@ -336,7 +368,8 @@ class ShiftDirectorReportTests(unittest.TestCase):
         self.assertEqual(totals['defect_other_lines'], [])
         self.assertEqual(totals['hours'], Decimal('12'))
         self.assertEqual(totals['legacy_plus_one_trailers'], 1)
-        self.assertEqual(totals['legacy_plus_one_issue_qty'], Decimal('7'))
+        self.assertNotIn('legacy_plus_one_issue_qty', totals)
+        self.assertNotIn('overlap_issue_qty', totals)
         self.assertEqual(len(report['legacy_issue_rows']), 1)
         self.assertEqual(report['legacy_issue_rows'][0]['quantity'], Decimal('7'))
         self.assertEqual(report['legacy_issue_rows'][0]['unit'], 'шт')
@@ -354,28 +387,39 @@ class ShiftDirectorReportTests(unittest.TestCase):
             {(line['item_article'], line['unit']): line['qty'] for line in light['good_part_lines']},
             {('P', 'шт'): Decimal('5')},
         )
-        self.assertEqual(light['defect_qty'], Decimal('1'))
+        self.assertNotIn('defect_qty', light)
+        self.assertEqual(
+            {(line['item_article'], line['unit']): line['qty'] for line in light['defect_part_lines']},
+            {('P', 'шт'): Decimal('1')},
+        )
+        self.assertEqual(light['defect_trailer_lines'], [])
         self.assertEqual(light['hours'], Decimal('8'))
         self.assertEqual(cargo['good_trailers'], 1)
         self.assertEqual(cargo['good_part_lines'], [])
-        self.assertEqual(cargo['defect_qty'], Decimal('2'))
+        self.assertNotIn('defect_qty', cargo)
+        self.assertEqual(cargo['defect_part_lines'], [])
+        self.assertEqual(cargo['defect_trailer_lines'], [{'unit': 'шт', 'qty': Decimal('2')}])
         self.assertEqual(cargo['hours'], Decimal('4'))
         self.assertNotIn(('assembly', 'DIR_LIGHT_CLOSED'), by_key)
         self.assertNotIn(('paint', 'DIR_LIGHT'), by_key)
 
-        zones = report['material_fact_by_zone']
-        self.assertEqual(zones['DIR_LIGHT']['qty_fact'], Decimal('12'))
-        self.assertEqual(zones['DIR_LIGHT']['qty_issued'], Decimal('8'))
-        self.assertEqual(zones['DIR_LIGHT']['qty_shortage'], Decimal('4'))
-        self.assertEqual(zones['DIR_CARGO']['qty_fact'], Decimal('3'))
-        self.assertEqual(zones['DIR_CARGO']['qty_issued'], Decimal('3'))
-        self.assertEqual(zones['DIR_CARGO']['qty_shortage'], Decimal('0'))
-        self.assertNotEqual(zones['DIR_LIGHT']['qty_fact'], Decimal('19'))
-        self.assertEqual(report['other_zone_fact']['qty_fact'], Decimal('0'))
-        light_materials = [row for row in report['material_rows'] if row['direction_code'] == 'DIR_LIGHT']
-        self.assertEqual(len(light_materials), 1)
-        self.assertEqual(light_materials[0]['unit'], 'шт')
-        self.assertEqual(light_materials[0]['qty_fact'], Decimal('12'))
+        self.assertNotIn('material_fact_by_zone', report)
+        self.assertNotIn('other_zone_fact', report)
+        materials = {
+            (row['direction_code'], row['item_article'], row['unit']): row
+            for row in report['material_rows']
+        }
+        light_sheet = materials[('DIR_LIGHT', 'M', 'шт')]
+        self.assertEqual(light_sheet['item_id'], self.sheet.id)
+        self.assertEqual(light_sheet['qty_fact'], Decimal('12'))
+        self.assertEqual(light_sheet['qty_issued'], Decimal('8'))
+        self.assertEqual(light_sheet['qty_shortage'], Decimal('4'))
+        cargo_sheet = materials[('DIR_CARGO', 'M', 'шт')]
+        self.assertEqual(cargo_sheet['qty_fact'], Decimal('3'))
+        self.assertEqual(cargo_sheet['qty_issued'], Decimal('3'))
+        self.assertEqual(cargo_sheet['qty_shortage'], Decimal('0'))
+        self.assertEqual(len(report['material_rows']), 2)
+        self._assert_no_mixed_item_quantity(report)
 
     def test_repeat_post_does_not_duplicate_report(self):
         from shift_posting import ShiftAlreadyPosted
@@ -389,11 +433,16 @@ class ShiftDirectorReportTests(unittest.TestCase):
         self.db.session.rollback()
         after = self._report()
         self.assertEqual(before['totals'], after['totals'])
-        self.assertEqual(before['material_fact_by_zone'], after['material_fact_by_zone'])
+        self.assertNotIn('material_fact_by_zone', before)
+        self.assertNotIn('material_fact_by_zone', after)
         self.assertEqual(before['area_rows'], after['area_rows'])
         self.assertEqual(before['material_rows'], after['material_rows'])
         self.assertEqual(after['totals']['good_trailers'], 3)
-        self.assertEqual(after['material_fact_by_zone']['DIR_LIGHT']['qty_fact'], Decimal('12'))
+        light = [row for row in after['material_rows'] if row['direction_code'] == 'DIR_LIGHT']
+        self.assertEqual(len(light), 1)
+        self.assertEqual(light[0]['item_id'], self.sheet.id)
+        self.assertEqual(light[0]['qty_fact'], Decimal('12'))
+        self._assert_no_mixed_item_quantity(after)
 
     def test_draft_material_on_posted_shift_is_not_fact(self):
         from models import ProductionShiftMaterial
@@ -406,7 +455,12 @@ class ShiftDirectorReportTests(unittest.TestCase):
         ))
         self.db.session.commit()
         report = self._report()
-        self.assertEqual(report['material_fact_by_zone']['DIR_LIGHT']['qty_fact'], Decimal('12'))
+        light = [row for row in report['material_rows'] if row['direction_code'] == 'DIR_LIGHT']
+        self.assertEqual(len(light), 1)
+        self.assertEqual(light[0]['item_id'], self.sheet.id)
+        self.assertEqual(light[0]['unit'], 'шт')
+        self.assertEqual(light[0]['qty_fact'], Decimal('12'))
+        self.assertNotIn('material_fact_by_zone', report)
         self.assertEqual(report['totals']['good_trailers'], 2)
         self.assertEqual(
             {(line['item_article'], line['unit']): line['qty'] for line in report['totals']['good_part_lines']},
@@ -554,8 +608,14 @@ class ShiftDirectorReportTests(unittest.TestCase):
         self.assertEqual(bolt['qty_shortage'], Decimal('5'))
         for row in report['material_rows']:
             self.assertTrue(row['unit'])
+            self.assertIsNotNone(row['item_id'])
             self.assertNotEqual(row['qty_fact'], Decimal('13'))
             self.assertNotEqual(row['qty_fact'], Decimal('25'))
+        self.assertNotIn('material_fact_by_zone', report)
+        self.assertNotIn('other_zone_fact', report)
+        self.assertNotIn('defect_qty', report['totals'])
+        self.assertNotIn('legacy_plus_one_issue_qty', report['totals'])
+        self._assert_no_mixed_item_quantity(report)
 
         legacy = {(row['item_article'], row['unit']): row for row in report['legacy_issue_rows']}
         self.assertEqual(legacy[('SHEET', 'кг')]['quantity'], Decimal('9'))
@@ -699,10 +759,22 @@ class ShiftDirectorReportTests(unittest.TestCase):
         self.assertEqual(light_good[('SHEET', 'кг')]['qty'], Decimal('4'))
         self.assertEqual(light_good[('BOLT', 'шт')]['qty'], Decimal('3'))
         self.assertEqual(by_key[('welding', 'DIR_CARGO')]['good_part_lines'], [])
+        self.assertNotIn('defect_qty', report['totals'])
+        self.assertNotIn('defect_qty', by_key[('assembly', 'DIR_LIGHT')])
+        self._assert_no_mixed_item_quantity(report)
 
     def test_two_components_with_same_unit_are_not_summed(self):
+        from models import ProductionShiftMaterial
+
         hinge = self._add_component_output('HINGE', 'Петля', 'шт', Decimal('4'), Decimal('6'))
         latch = self._add_component_output('LATCH', 'Защёлка', 'шт', Decimal('3'), Decimal('2'))
+        self.db.session.add(ProductionShiftMaterial(
+            shift_id=self.light_shift.id, item_id=hinge.id, qty_fact=Decimal('4'), unit='шт',
+        ))
+        self.db.session.add(ProductionShiftMaterial(
+            shift_id=self.light_shift.id, item_id=latch.id, qty_fact=Decimal('3'), unit='шт',
+        ))
+        self.db.session.flush()
         self._post_both()
 
         report = self._report()
@@ -734,6 +806,28 @@ class ShiftDirectorReportTests(unittest.TestCase):
         self.assertEqual(report['totals']['good_trailers'], 3)
         self.assertEqual(report['totals']['hours'], Decimal('12'))
         self.assertEqual(report['totals']['defect_trailer_lines'], [{'unit': 'шт', 'qty': Decimal('2')}])
+        self.assertNotIn('defect_qty', report['totals'])
+        for row in report['area_rows']:
+            self.assertNotIn('defect_qty', row)
+
+        light_materials = {
+            (row['item_article'], row['unit']): row
+            for row in report['material_rows']
+            if row['direction_code'] == 'DIR_LIGHT'
+        }
+        self.assertEqual(light_materials[('HINGE', 'шт')]['qty_fact'], Decimal('4'))
+        self.assertEqual(light_materials[('HINGE', 'шт')]['item_id'], hinge.id)
+        self.assertEqual(light_materials[('LATCH', 'шт')]['qty_fact'], Decimal('3'))
+        self.assertEqual(light_materials[('LATCH', 'шт')]['item_id'], latch.id)
+        same_unit_facts = [
+            row['qty_fact'] for row in light_materials.values() if row['unit'] == 'шт'
+        ]
+        self.assertEqual(len(same_unit_facts), 3)
+        for qty in same_unit_facts:
+            self.assertNotEqual(qty, Decimal('7'))
+            self.assertNotEqual(qty, Decimal('19'))
+        self.assertNotIn('material_fact_by_zone', report)
+        self._assert_no_mixed_item_quantity(report)
 
     def test_shifts_page_does_not_sum_good_parts_across_items(self):
         self._add_component_output('SHEET', 'Лист кг', 'кг', Decimal('4'), Decimal('2'))
