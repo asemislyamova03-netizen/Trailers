@@ -313,10 +313,105 @@ class ShiftDirectorReportTests(unittest.TestCase):
         self.db.session.commit()
         return unit
 
-    def _report(self):
+    def _report(self, period_start=None, period_end=None):
         from shift_director_report import build_shift_director_report
 
-        return build_shift_director_report()
+        return build_shift_director_report(period_start=period_start, period_end=period_end)
+
+    def _shifts_page(self, **params):
+        client = self.app.test_client()
+        with client.session_transaction() as sess:
+            sess['_user_id'] = str(self.director.id)
+            sess['_fresh'] = True
+        response = client.get('/director/reports/shifts', query_string=params)
+        self.assertEqual(response.status_code, 200)
+        return response.get_data(as_text=True)
+
+    def _report_cards(self, body):
+        return {
+            match.group('title').strip(): match
+            for match in re.finditer(
+                r'<div class="small text-muted">(?P<title>[^<]*)</div>\s*'
+                r'<div class="fw-bold">(?P<value>[^<]*)</div>\s*'
+                r'<div class="small text-muted">(?P<caption>[^<]*)</div>',
+                body,
+            )
+        }
+
+    def _shift_trailer_units(self, shift):
+        from models import ProducedUnit, ProductionShiftOutput
+
+        output_ids = [
+            output.id
+            for output in ProductionShiftOutput.query.filter_by(shift_id=shift.id).all()
+            if output.item and output.item.item_type == 'TRAILER'
+        ]
+        if not output_ids:
+            return []
+        return (
+            ProducedUnit.query
+            .filter(ProducedUnit.shift_output_id.in_(output_ids))
+            .order_by(ProducedUnit.id)
+            .all()
+        )
+
+    def _posted_sale(
+        self,
+        unit,
+        *,
+        status='posted',
+        inventory_effect='trailer_unit',
+        link=True,
+        realization_date=None,
+        posted_at=None,
+        trailer=None,
+        commit=True,
+    ):
+        from models import Customer, SalesRealization, SalesRealizationLine, Trailer
+
+        if getattr(self, '_sale_customer', None) is None:
+            self._sale_customer = Customer(customer_type='PERSON', name='Покупатель отчёта')
+            self.db.session.add(self._sale_customer)
+            self.db.session.flush()
+        if trailer is None and unit.trailer_id:
+            trailer = Trailer.query.get(unit.trailer_id)
+        if trailer is None:
+            trailer = Trailer(
+                vin=f'VINSALE{unit.id:010d}',
+                item_id=unit.item_id,
+                warehouse_id=self.light_sales.id,
+                status='SOLD' if status == 'posted' else 'IN_STOCK',
+            )
+            self.db.session.add(trailer)
+            self.db.session.flush()
+        if link or unit.trailer_id is None:
+            unit.trailer_id = trailer.id
+        realization = SalesRealization(
+            customer_id=self._sale_customer.id,
+            status=status,
+            realization_date=realization_date or date(2026, 8, 1),
+            posted_at=posted_at if status == 'posted' else None,
+            total_amount=Decimal('0'),
+        )
+        if status == 'posted' and realization.posted_at is None:
+            realization.posted_at = datetime(2026, 8, 1, 12, 0, 0)
+        self.db.session.add(realization)
+        self.db.session.flush()
+        line = SalesRealizationLine(
+            realization_id=realization.id,
+            line_no=1,
+            line_type='trailer' if inventory_effect == 'trailer_unit' else 'component',
+            trailer_id=trailer.id,
+            item_id=unit.item_id,
+            quantity=Decimal('1'),
+            unit='шт',
+            inventory_effect=inventory_effect,
+            produced_unit_id=unit.id if link else None,
+        )
+        self.db.session.add(line)
+        if commit:
+            self.db.session.commit()
+        return realization, line, trailer
 
     def _assert_no_mixed_item_quantity(self, report):
         """В ответе нет общего количества разных номенклатур или единиц."""
@@ -337,8 +432,12 @@ class ShiftDirectorReportTests(unittest.TestCase):
         walk(report, 'report')
         for row in report['area_rows']:
             self.assertNotIn('defect_qty', row)
-        self.assertEqual(report['sold_from_produced']['status'], 'BLOCKED')
-        self.assertIsNone(report['sold_from_produced']['value'])
+        sold = report['sold_from_produced']
+        self.assertEqual(sold['status'], 'SNAPSHOT')
+        self.assertIsInstance(sold['value'], int)
+        self.assertIsNone(sold['sale_date_filter'])
+        self.assertLessEqual(sold['value'], sold['cohort_units'])
+        self.assertNotIn('sold_count', report)
 
     def test_directions_keep_shift_output_apart_from_legacy_and_closed(self):
         self._post(self.light_shift, self.light_area.id, '8')
@@ -376,8 +475,9 @@ class ShiftDirectorReportTests(unittest.TestCase):
         self.assertEqual(totals['overlap_units'], 0)
         self.assertEqual(totals['excluded_closed_shifts'], 1)
         self.assertEqual(totals['excluded_open_shifts'], 1)
-        self.assertEqual(report['sold_from_produced']['status'], 'BLOCKED')
-        self.assertIsNone(report['sold_from_produced']['value'])
+        self.assertEqual(report['sold_from_produced']['status'], 'SNAPSHOT')
+        self.assertEqual(report['sold_from_produced']['value'], 0)
+        self.assertEqual(report['sold_from_produced']['cohort_units'], 3)
 
         by_key = {(row['work_area'], row['direction_code']): row for row in report['area_rows']}
         light = by_key[('assembly', 'DIR_LIGHT')]
@@ -467,66 +567,45 @@ class ShiftDirectorReportTests(unittest.TestCase):
             {('P', 'шт'): Decimal('5')},
         )
 
-    def test_sold_from_produced_stays_blocked_when_trailer_matches_realization(self):
-        from models import Customer, ProducedUnit, SalesRealization, SalesRealizationLine, Trailer
+    def test_trailer_match_without_fk_is_not_sold(self):
+        from models import ProducedUnit
 
         self._post(self.light_shift, self.light_area.id, '8')
         self.db.session.commit()
         unit = ProducedUnit.query.filter(ProducedUnit.shift_output_id.isnot(None)).first()
         self.assertIsNone(unit.trailer_id)
-        customer = Customer(customer_type='PERSON', name='Покупатель')
-        self.db.session.add(customer)
-        self.db.session.flush()
-        trailer = Trailer(
-            vin='VINBLOCKED0000001', item_id=self.light_item.id,
-            warehouse_id=self.light_sales.id, status='SOLD',
-        )
-        self.db.session.add(trailer)
-        self.db.session.flush()
-        unit.trailer_id = trailer.id
-        realization = SalesRealization(
-            customer_id=customer.id, status='posted', realization_date=date.today(),
-            total_amount=Decimal('0'),
-        )
-        self.db.session.add(realization)
-        self.db.session.flush()
-        self.db.session.add(SalesRealizationLine(
-            realization_id=realization.id, line_no=1, line_type='TRAILER',
-            trailer_id=trailer.id, item_id=self.light_item.id,
-            quantity=Decimal('1'), inventory_effect='trailer_unit',
-        ))
-        self.db.session.commit()
+        _realization, line, _trailer = self._posted_sale(unit, link=False)
+        self.assertIsNone(line.produced_unit_id)
+        self.assertEqual(line.trailer_id, unit.trailer_id)
+        self.assertEqual(line.realization.status, 'posted')
 
         report = self._report()
         sold = report['sold_from_produced']
-        self.assertEqual(sold['status'], 'BLOCKED')
-        self.assertIsNone(sold['value'])
-        self.assertIn('produced_unit_id', sold['reason'])
-        self.assertTrue(sold['paths'])
+        self.assertEqual(sold['status'], 'SNAPSHOT')
+        self.assertEqual(sold['value'], 0)
+        self.assertEqual(sold['cohort_units'], 2)
+        self.assertIsNone(sold['sale_date_filter'])
         self.assertNotIn('sold_count', report)
         self.assertEqual(report['totals']['good_trailers'], 2)
 
-    def test_shifts_page_shows_blocked_metric(self):
+    def test_shifts_page_shows_current_sold_label(self):
         self._post(self.light_shift, self.light_area.id, '8')
         self._post(self.cargo_shift, self.cargo_area.id, '4')
         self.db.session.commit()
-        client = self.app.test_client()
-        with client.session_transaction() as sess:
-            sess['_user_id'] = str(self.director.id)
-            sess['_fresh'] = True
-        response = client.get('/director/reports/shifts')
-        self.assertEqual(response.status_code, 200)
-        body = response.get_data(as_text=True)
-        self.assertIn('BLOCKED', body)
+        body = self._shifts_page()
         self.assertIn('DIR_LIGHT', body)
         self.assertIn('DIR_CARGO', body)
-        self.assertIn('Продано из выпущенных', body)
-        self.assertIn('produced_unit_id', body)
+        self.assertIn('Из выпущенных за период продано на сейчас', body)
+        self.assertIn('восстановить нельзя', body)
+        self.assertNotIn('BLOCKED', body)
         self.assertIn('Брак прицепов', body)
         self.assertIn('Брак деталей', body)
         self.assertNotIn('Факт DIR_LIGHT', body)
         self.assertNotIn('Факт DIR_CARGO', body)
         self.assertNotRegex(body, r'<th>Брак</th>')
+        cards = self._report_cards(body)
+        sold = cards['Из выпущенных за период продано на сейчас']
+        self.assertEqual(sold.group('value').strip(), '0')
 
     def _seed_mixed_unit_consumption(self):
         from models import Item, ProductionShiftMaterial, ProductionShiftOutput
@@ -880,3 +959,238 @@ class ShiftDirectorReportTests(unittest.TestCase):
         self.assertEqual(cards['Брак прицепов'].group('value').strip(), '2 шт')
         self.assertEqual(cards['Годные прицепы'].group('value').strip(), '3')
         self.assertRegex(cards['Часы'].group('value'), r'^12(\.0+)?$')
+        self.assertEqual(
+            cards['Из выпущенных за период продано на сейчас'].group('value').strip(),
+            '0',
+        )
+
+    def test_sale_after_production_period_counts_current_cohort(self):
+        self._post(self.light_shift, self.light_area.id, '8')
+        self.db.session.commit()
+        self.light_shift.posted_at = datetime(2026, 1, 15, 12, 0, 0)
+        self.db.session.commit()
+        unit = self._shift_trailer_units(self.light_shift)[0]
+        self._posted_sale(
+            unit,
+            realization_date=date(2026, 8, 20),
+            posted_at=datetime(2026, 8, 20, 9, 0, 0),
+        )
+
+        january = self._report(
+            period_start=datetime(2026, 1, 1, 0, 0, 0),
+            period_end=datetime(2026, 1, 31, 23, 59, 59),
+        )
+        sold = january['sold_from_produced']
+        self.assertEqual(sold['status'], 'SNAPSHOT')
+        self.assertEqual(sold['value'], 1)
+        self.assertEqual(sold['cohort_units'], 2)
+        self.assertIsNone(sold['sale_date_filter'])
+        self.assertEqual(january['totals']['good_trailers'], 2)
+
+        august = self._report(
+            period_start=datetime(2026, 8, 1, 0, 0, 0),
+            period_end=datetime(2026, 8, 31, 23, 59, 59),
+        )
+        self.assertEqual(august['sold_from_produced']['value'], 0)
+        self.assertEqual(august['sold_from_produced']['cohort_units'], 0)
+        self.assertEqual(august['totals']['good_trailers'], 0)
+
+    def test_sale_of_another_cohort_stays_outside_period(self):
+        self._post(self.light_shift, self.light_area.id, '8')
+        self._post(self.cargo_shift, self.cargo_area.id, '4')
+        self.db.session.commit()
+        self.light_shift.posted_at = datetime(2026, 1, 15, 12, 0, 0)
+        self.cargo_shift.posted_at = datetime(2026, 3, 10, 12, 0, 0)
+        self.db.session.commit()
+        light_unit = self._shift_trailer_units(self.light_shift)[0]
+        cargo_unit = self._shift_trailer_units(self.cargo_shift)[0]
+        sale_at = datetime(2026, 9, 1, 8, 0, 0)
+        self._posted_sale(light_unit, realization_date=date(2026, 9, 1), posted_at=sale_at)
+        self._posted_sale(cargo_unit, realization_date=date(2026, 9, 1), posted_at=sale_at)
+
+        january = self._report(
+            period_start=datetime(2026, 1, 1),
+            period_end=datetime(2026, 1, 31, 23, 59, 59),
+        )
+        march = self._report(
+            period_start=datetime(2026, 3, 1),
+            period_end=datetime(2026, 3, 31, 23, 59, 59),
+        )
+        both = self._report(
+            period_start=datetime(2026, 1, 1),
+            period_end=datetime(2026, 3, 31, 23, 59, 59),
+        )
+        self.assertEqual(january['sold_from_produced']['value'], 1)
+        self.assertEqual(january['sold_from_produced']['cohort_units'], 2)
+        self.assertEqual(march['sold_from_produced']['value'], 1)
+        self.assertEqual(march['sold_from_produced']['cohort_units'], 1)
+        self.assertEqual(both['sold_from_produced']['value'], 2)
+        self.assertEqual(both['sold_from_produced']['cohort_units'], 3)
+        self.assertNotEqual(both['sold_from_produced']['value'], 4)
+
+    def test_delete_and_repost_changes_current_snapshot(self):
+        from models import SalesRealization, SalesRealizationLine
+
+        self._post(self.light_shift, self.light_area.id, '8')
+        self.db.session.commit()
+        unit = self._shift_trailer_units(self.light_shift)[0]
+        realization, line, _trailer = self._posted_sale(unit)
+        realization.number = 'R-OLD'
+        self.db.session.commit()
+        realization_id = realization.id
+        old_line_id = line.id
+        self.assertEqual(self._report()['sold_from_produced']['value'], 1)
+
+        SalesRealizationLine.query.filter_by(realization_id=realization_id).delete()
+        self.db.session.delete(realization)
+        self.db.session.commit()
+        self.assertIsNone(SalesRealization.query.get(realization_id))
+        self.assertIsNone(SalesRealizationLine.query.get(old_line_id))
+        self.assertEqual(SalesRealization.query.filter(SalesRealization.cancelled_at.isnot(None)).count(), 0)
+        after_delete = self._report()['sold_from_produced']
+        self.assertEqual(after_delete['value'], 0)
+        self.assertIn('восстановить нельзя', after_delete['limitation'])
+
+        repeat, repeat_line, _trailer = self._posted_sale(unit)
+        self.assertIsNone(SalesRealization.query.filter_by(number='R-OLD').first())
+        self.assertNotEqual(repeat.number, 'R-OLD')
+        self.assertEqual(repeat.status, 'posted')
+        self.assertEqual(repeat_line.produced_unit_id, unit.id)
+        self.assertEqual(self._report()['sold_from_produced']['value'], 1)
+        self.assertEqual(SalesRealizationLine.query.filter_by(produced_unit_id=unit.id).count(), 1)
+
+    def test_draft_null_component_and_legacy_are_not_sold(self):
+        from models import ProducedUnit, ProductionShiftOutput
+
+        self._post(self.light_shift, self.light_area.id, '8')
+        self.db.session.commit()
+        first, second = self._shift_trailer_units(self.light_shift)[:2]
+        self._posted_sale(first, status='draft', link=True)
+        self._posted_sale(second, link=False)
+        component_output = ProductionShiftOutput.query.filter_by(
+            shift_id=self.light_shift.id, item_id=self.frame.id,
+        ).one()
+        component_unit = ProducedUnit(
+            production_request_line_id=self.pr_line.id,
+            item_id=self.frame.id,
+            shift_output_id=component_output.id,
+            status='produced_no_vin',
+            note='деталь',
+        )
+        self.db.session.add(component_unit)
+        self.db.session.flush()
+        self._posted_sale(component_unit, inventory_effect='ship_from_stock', link=True)
+        plus_one = self._add_legacy_plus_one()
+        self._posted_sale(plus_one, link=True)
+
+        sold = self._report()['sold_from_produced']
+        self.assertEqual(sold['value'], 0)
+        self.assertEqual(sold['cohort_units'], 2)
+        self.assertEqual(sold['label'], 'Из выпущенных за период продано на сейчас')
+
+    def test_ambiguous_trailer_without_fk_is_not_counted(self):
+        self._post(self.light_shift, self.light_area.id, '8')
+        self.db.session.commit()
+        first, second = self._shift_trailer_units(self.light_shift)[:2]
+        _realization, line, trailer = self._posted_sale(first, link=False)
+        second.trailer_id = trailer.id
+        self.db.session.commit()
+        self.assertIsNone(line.produced_unit_id)
+        self.assertEqual(first.trailer_id, second.trailer_id)
+        sold = self._report()['sold_from_produced']
+        self.assertEqual(sold['value'], 0)
+        self.assertEqual(sold['cohort_units'], 2)
+
+    def test_sold_units_are_not_double_counted(self):
+        from sqlalchemy.exc import IntegrityError
+
+        self._post(self.light_shift, self.light_area.id, '8')
+        self._post(self.cargo_shift, self.cargo_area.id, '4')
+        self.db.session.commit()
+        light_units = self._shift_trailer_units(self.light_shift)
+        cargo_unit = self._shift_trailer_units(self.cargo_shift)[0]
+        self._posted_sale(light_units[0])
+        self._posted_sale(light_units[1])
+        self._posted_sale(cargo_unit)
+        self._posted_sale(light_units[0], link=False)
+        sold = self._report()['sold_from_produced']
+        self.assertEqual(sold['value'], 3)
+        self.assertEqual(sold['cohort_units'], 3)
+        self.assertNotEqual(sold['value'], 4)
+        self.assertNotEqual(sold['value'], 6)
+
+        with self.assertRaises(IntegrityError):
+            self._posted_sale(light_units[0], link=True)
+        self.db.session.rollback()
+        again = self._report()['sold_from_produced']
+        self.assertEqual(again['value'], 3)
+
+    def test_period_bounds_and_html_label(self):
+        self._post(self.light_shift, self.light_area.id, '8')
+        self._post(self.cargo_shift, self.cargo_area.id, '4')
+        self.db.session.commit()
+        on_start = datetime(2026, 1, 1, 0, 0, 0)
+        on_end = datetime(2026, 1, 31, 23, 59, 59)
+        self.light_shift.posted_at = on_start
+        self.cargo_shift.posted_at = datetime(2026, 2, 1, 0, 0, 0)
+        self.db.session.commit()
+        light_unit = self._shift_trailer_units(self.light_shift)[0]
+        cargo_unit = self._shift_trailer_units(self.cargo_shift)[0]
+        self._posted_sale(
+            light_unit,
+            realization_date=date(2026, 6, 1),
+            posted_at=datetime(2026, 6, 1, 10, 0, 0),
+        )
+        self._posted_sale(
+            cargo_unit,
+            realization_date=date(2026, 6, 2),
+            posted_at=datetime(2026, 6, 2, 10, 0, 0),
+        )
+
+        inside = self._report(period_start=on_start, period_end=on_end)
+        self.assertEqual(inside['sold_from_produced']['value'], 1)
+        self.assertEqual(inside['totals']['good_trailers'], 2)
+        self.light_shift.posted_at = on_end
+        self.db.session.commit()
+        exact_end = self._report(
+            period_start=datetime(2026, 1, 31, 0, 0, 0),
+            period_end=on_end,
+        )
+        self.assertEqual(exact_end['sold_from_produced']['value'], 1)
+        before = self._report(
+            period_start=datetime(2025, 12, 1),
+            period_end=datetime(2025, 12, 31, 23, 59, 59),
+        )
+        self.assertEqual(before['sold_from_produced']['value'], 0)
+        self.assertEqual(before['sold_from_produced']['cohort_units'], 0)
+        after_start = self._report(
+            period_start=datetime(2026, 2, 1, 0, 0, 0),
+            period_end=datetime(2026, 2, 28, 23, 59, 59),
+        )
+        self.assertEqual(after_start['sold_from_produced']['value'], 1)
+        self.assertEqual(after_start['sold_from_produced']['cohort_units'], 1)
+
+        body = self._shifts_page(period='month', date_from='2026-01-01', date_to='2026-01-31')
+        self.assertIn('Из выпущенных за период продано на сейчас', body)
+        self.assertIn('восстановить нельзя', body)
+        self.assertNotIn('BLOCKED', body)
+        cards = self._report_cards(body)
+        self.assertEqual(
+            cards['Из выпущенных за период продано на сейчас'].group('value').strip(),
+            '1',
+        )
+        self.assertIn('восстановить нельзя', cards['Из выпущенных за период продано на сейчас'].group('caption'))
+        self.assertEqual(cards['Годные прицепы'].group('value').strip(), '2')
+
+        outside = self._shifts_page(period='month', date_from='2026-06-01', date_to='2026-06-30')
+        outside_cards = self._report_cards(outside)
+        self.assertEqual(
+            outside_cards['Из выпущенных за период продано на сейчас'].group('value').strip(),
+            '0',
+        )
+        february = self._shifts_page(period='month', date_from='2026-02-01', date_to='2026-02-28')
+        february_cards = self._report_cards(february)
+        self.assertEqual(
+            february_cards['Из выпущенных за период продано на сейчас'].group('value').strip(),
+            '1',
+        )

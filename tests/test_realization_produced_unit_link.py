@@ -303,7 +303,7 @@ class RealizationProducedUnitLinkTests(unittest.TestCase):
         self.assertEqual(self._line(repeat).produced_unit_id, unit.id)
         self.assertEqual(SalesRealizationLine.query.filter_by(produced_unit_id=unit.id).count(), 1)
 
-    def test_legacy_plus_one_link_does_not_unlock_report(self):
+    def test_legacy_plus_one_link_is_outside_shift_cohort(self):
         from shift_director_report import build_shift_director_report
 
         trailer = self._trailer('VIN0000000000010')
@@ -315,8 +315,11 @@ class RealizationProducedUnitLinkTests(unittest.TestCase):
         self.db.session.commit()
         self.assertEqual(self._line(realization).produced_unit_id, plus_one.id)
         report = build_shift_director_report()
-        self.assertEqual(report['sold_from_produced']['status'], 'BLOCKED')
-        self.assertIsNone(report['sold_from_produced']['value'])
+        sold = report['sold_from_produced']
+        self.assertEqual(sold['status'], 'SNAPSHOT')
+        self.assertEqual(sold['value'], 0)
+        self.assertEqual(sold['cohort_units'], 0)
+        self.assertIsNone(sold['sale_date_filter'])
         self.assertNotIn('sold_count', report)
 
     def test_shift_without_vin_is_not_sold(self):
@@ -370,7 +373,7 @@ class RealizationProducedUnitLinkTests(unittest.TestCase):
         from models import Trailer
         self.assertNotEqual(Trailer.query.get(trailer.id).status, 'SOLD')
 
-    def test_route_post_writes_link_and_report_stays_blocked(self):
+    def test_route_post_writes_link_without_shift_is_not_in_cohort(self):
         from models import SalesRealization
         from shift_director_report import build_shift_director_report
 
@@ -385,15 +388,18 @@ class RealizationProducedUnitLinkTests(unittest.TestCase):
         from models import Trailer
         self.assertEqual(Trailer.query.get(trailer.id).status, 'SOLD')
         report = build_shift_director_report()
-        self.assertEqual(report['sold_from_produced']['status'], 'BLOCKED')
-        self.assertIsNone(report['sold_from_produced']['value'])
+        sold = report['sold_from_produced']
+        self.assertEqual(sold['status'], 'SNAPSHOT')
+        self.assertEqual(sold['value'], 0)
+        self.assertEqual(sold['cohort_units'], 0)
+        self.assertEqual(sold['label'], 'Из выпущенных за период продано на сейчас')
         client = self._client()
         page = client.get('/director/reports/shifts')
         self.assertEqual(page.status_code, 200)
         body = page.get_data(as_text=True)
-        self.assertIn('Продано из выпущенных', body)
-        self.assertIn('BLOCKED', body)
-        self.assertIn('produced_unit_id', body)
+        self.assertIn('Из выпущенных за период продано на сейчас', body)
+        self.assertIn('восстановить нельзя', body)
+        self.assertNotIn('BLOCKED', body)
 
     def test_second_posted_line_for_same_unit_is_refused(self):
         from realization_unit_link import ProducedUnitLinkError

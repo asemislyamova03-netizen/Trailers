@@ -16782,7 +16782,7 @@ def director_report(section='sales'):
         shift_report = build_shift_director_report(period_start=period_start, period_end=period_end)
         totals = shift_report['totals']
         sold = shift_report['sold_from_produced']
-        report_warning = sold['reason'] + ' ' + sold['proposal']
+        report_warning = sold['limitation']
 
         def _measure_text(lines) -> str:
             if not lines:
@@ -16824,7 +16824,11 @@ def director_report(section='sales'):
             {'title': 'Часы', 'value': totals['hours'], 'caption': 'hours_fact только posted-смен'},
             {'title': 'Расход материалов', 'value': 'по номенклатуре', 'caption': 'факт, списание и недостача с единицей; общей суммы разных позиций нет'},
             {'title': 'Старые +1', 'value': totals['legacy_plus_one_trailers'], 'caption': 'выпуск отдельно; списание по номенклатуре с единицей, без общей суммы'},
-            {'title': 'Продано из выпущенных', 'value': sold['status'], 'caption': 'показатель не посчитан'},
+            {
+                'title': sold['label'],
+                'value': sold['value'],
+                'caption': 'удалённая реализация не считается; дату продажи и возврата восстановить нельзя',
+            },
         ]
         if totals['defect_other_lines']:
             cards.insert(4, {

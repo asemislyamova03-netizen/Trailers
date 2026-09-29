@@ -1,8 +1,15 @@
 """Только чтение: агрегаты директорского отчёта по проведённым сменам.
 
 Не проводит смены, не меняет остатки и не подключается к живому серверу.
-«Продано из выпущенных» остаётся BLOCKED: ключ строки уже может быть записан,
-но дата периода и срез ещё не выбраны. Число не подставляется.
+
+«Продано из выпущенных» — снимок когорты. Когорта: ProducedUnit прицепов
+проведённых смен, уже отобранных по ProductionShift.posted_at.
+Числитель: сколько этих единиц сейчас имеют ровно одну строку
+SalesRealizationLine с produced_unit_id, inventory_effect='trailer_unit'
+и родительским SalesRealization.status='posted'.
+Дата реализации и posted_at продажи не фильтруются.
+Удалённая реализация в число не входит: дату продажи и возврата
+восстановить нельзя.
 
 Материалы, годные детали и брак деталей возвращаются только строками
 одной номенклатуры и одной единицы. Общего количества разных Item или
@@ -25,37 +32,56 @@ from models import (
     ProductionShift,
     ProductionShiftMaterial,
     ProductionShiftOutput,
+    SalesRealization,
+    SalesRealizationLine,
 )
 
-SOLD_FROM_PRODUCED = {
-    'status': 'BLOCKED',
-    'value': None,
-    'reason': (
-        'Показатель не считается. '
-        'sales_realization_line.produced_unit_id пишется при проведении, '
-        'но HQ ещё не выбрал дату периода (realization_date или posted_at) '
-        'и срез (продано, выпущено или пересечение). '
-        'Исторические строки без ключа не достраиваются. '
-        'Старый +1 в числитель смен не входит. '
-        'Совпадение trailer_id без этого ключа числом не является.'
-    ),
-    'paths': [
-        'models.py: SalesRealizationLine.produced_unit_id — nullable FK, уникальный, без backfill',
-        'realization_unit_link.py: запись только в проведении, ровно одна подходящая единица',
-        'views.py: sales_realization_post — та же транзакция, при отказе rollback',
-        'docs/ai/research/2026-09-29-sold-from-produced-link-contract.md: дата и срез периода',
-    ],
-    'proposal': (
-        'Ключ уже пишется при проведении и только если на прицепе ровно одна '
-        'единица vin_assigned с тем же item и quantity=1. '
-        'Ноль единиц остаётся NULL. Две и больше или несовпадение отменяют проведение. '
-        'Число включить только после решения HQ по дате и срезу. Без backfill.'
-    ),
-}
+SOLD_FROM_PRODUCED_LABEL = 'Из выпущенных за период продано на сейчас'
+
+SOLD_FROM_PRODUCED_LIMITATION = (
+    'Удалённая реализация больше не считается. '
+    'Историческую дату продажи и возврата восстановить нельзя: '
+    'отдельного документа возврата нет, строка удаляется вместе с документом. '
+    'Это текущее состояние когорты, а не продажи выбранного периода. '
+    'realization_date и posted_at продажи не фильтруются. '
+    'Старый +1, продажа склада с пустым ключом, черновик, деталь '
+    'и совпадение trailer_id без produced_unit_id в число не входят.'
+)
 
 
 def _d(value) -> Decimal:
     return Decimal(str(value or 0))
+
+
+def _sold_from_produced_snapshot(cohort_unit_ids: set[int]) -> dict:
+    """Сколько единиц когорты продано сейчас. Дату продажи не смотрит."""
+    sold = 0
+    if cohort_unit_ids:
+        counts = (
+            SalesRealizationLine.query
+            .join(SalesRealization, SalesRealization.id == SalesRealizationLine.realization_id)
+            .filter(
+                SalesRealizationLine.produced_unit_id.in_(cohort_unit_ids),
+                SalesRealizationLine.inventory_effect == 'trailer_unit',
+                SalesRealization.status == 'posted',
+            )
+            .with_entities(
+                SalesRealizationLine.produced_unit_id,
+                func.count(SalesRealizationLine.id),
+            )
+            .group_by(SalesRealizationLine.produced_unit_id)
+            .all()
+        )
+        # Ровно одна строка. Две строки на одну единицу числом не становятся.
+        sold = sum(1 for _unit_id, line_count in counts if line_count == 1)
+    return {
+        'status': 'SNAPSHOT',
+        'value': sold,
+        'cohort_units': len(cohort_unit_ids),
+        'label': SOLD_FROM_PRODUCED_LABEL,
+        'limitation': SOLD_FROM_PRODUCED_LIMITATION,
+        'sale_date_filter': None,
+    }
 
 
 def _apply_period(query, column, period_start: datetime | None, period_end: datetime | None):
@@ -191,6 +217,7 @@ def build_shift_director_report(
         bucket['hours'] += _d(shift.hours_fact)
 
     good_trailers = 0
+    cohort_unit_ids: set[int] = set()
     good_trailer_declared = Decimal('0')
     good_part_items: dict[tuple, dict] = {}
     defect_trailer_units: dict[str, Decimal] = {}
@@ -223,6 +250,8 @@ def build_shift_director_report(
             good_trailer_declared += declared
             bucket['good_trailers'] += len(linked_units)
             good_trailers += len(linked_units)
+            for unit in linked_units:
+                cohort_unit_ids.add(unit.id)
         elif item_type == 'COMPONENT':
             good = _d(output.quantity)
             _add_item_qty(good_part_items, item, output.item_id, measure_unit, good)
@@ -360,7 +389,7 @@ def build_shift_director_report(
         key=lambda row: (row['item_article'] or '', row['unit'] or '', row['item_id'] or 0),
     )
     return {
-        'sold_from_produced': dict(SOLD_FROM_PRODUCED),
+        'sold_from_produced': _sold_from_produced_snapshot(cohort_unit_ids),
         'totals': {
             'good_trailers': good_trailers,
             'good_trailer_declared_qty': good_trailer_declared,
