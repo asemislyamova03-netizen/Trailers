@@ -1,0 +1,776 @@
+#!/usr/bin/env python3
+"""Триггер produced_unit_id на полной Alembic-цепочке. Только временная sqlite.
+
+Обычное соединение create_app() остаётся с PRAGMA foreign_keys=0.
+Рабочая trailers.db не открывается.
+"""
+from __future__ import annotations
+
+import importlib.util
+import os
+import sys
+import tempfile
+import unittest
+from datetime import date, datetime
+from decimal import Decimal
+from pathlib import Path
+
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+os.environ.setdefault('SIGEX_BASE_URL', 'https://example.invalid')
+
+LIVE_DB = (ROOT / 'trailers.db').resolve()
+MIGRATIONS = str(ROOT / 'migrations')
+HEAD_BEFORE_GUARD = 'b7e2c4a9d815'
+GUARD_REVISION = 'c3f8a1d94e27'
+# Эти nullable-колонки есть в модели, но не в Alembic. Их добавляет только
+# тестовая база, чтобы ORM смог прочитать уже накатанную цепочку.
+# Миграция триггера их не создаёт и produced_unit_id не заполняет.
+MODEL_DRIFT_COLUMNS = (
+    ('item', 'tent_hight_mm', 'INTEGER'),
+    ('item', 'has_jockey_wheel', 'BOOLEAN'),
+    ('trailer', 'otts_id', 'INTEGER'),
+    ('otts', 'full_mass_kg', 'INTEGER'),
+)
+
+
+def _guard_module():
+    path = ROOT / 'migrations' / 'versions' / 'c3f8a1d94e27_guard_realization_produced_unit_link.py'
+    spec = importlib.util.spec_from_file_location('produced_unit_link_sqlite_guard_migration', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _refuse_live(url: str, path: Path) -> None:
+    resolved = path.resolve()
+    normalized = url.replace('\\', '/')
+    if resolved == LIVE_DB or resolved.name == 'trailers.db':
+        raise RuntimeError(f'Refused to touch live DB file: {resolved}')
+    if normalized.endswith('/trailers.db') or normalized.endswith('trailers.db'):
+        raise RuntimeError(f'Refused to touch live DB url: {normalized}')
+
+
+class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._live_stat = LIVE_DB.stat() if LIVE_DB.exists() else None
+        cls._tmp = tempfile.NamedTemporaryFile(suffix='-guard.db', delete=False)
+        cls._tmp.close()
+        cls.db_path = Path(cls._tmp.name)
+        uri = 'sqlite:///' + cls._tmp.name.replace('\\', '/')
+        _refuse_live(uri, cls.db_path)
+
+        from extensions import db
+
+        original_init_app = db.init_app
+
+        def _init_app(app):
+            app.config['SQLALCHEMY_DATABASE_URI'] = uri
+            app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+                'connect_args': {'check_same_thread': False, 'timeout': 30},
+            }
+            app.config['TESTING'] = True
+            app.config['WTF_CSRF_ENABLED'] = False
+            return original_init_app(app)
+
+        db.init_app = _init_app
+        from app import create_app
+
+        cls.app = create_app()
+        cls.app.config['WTF_CSRF_ENABLED'] = False
+        db.init_app = original_init_app
+        cls.db = db
+
+        with cls.app.app_context():
+            engine_url = str(db.engine.url).replace('\\', '/')
+            _refuse_live(engine_url, cls.db_path)
+            if 'foreign_keys' in (ROOT / 'app.py').read_text(encoding='utf-8').lower():
+                raise RuntimeError('app.py must not enable PRAGMA foreign_keys')
+            from flask_migrate import upgrade
+
+            db.session.remove()
+            upgrade(directory=MIGRATIONS, revision=HEAD_BEFORE_GUARD)
+            cls._insert_preexisting_rows()
+            db.session.remove()
+            upgrade(directory=MIGRATIONS, revision=GUARD_REVISION)
+            cls._align_model_drift()
+            pragma = db.session.execute(text('PRAGMA foreign_keys')).scalar()
+            if int(pragma) != 0:
+                raise RuntimeError(f'create_app connection must keep foreign_keys=0, got {pragma}')
+
+    @classmethod
+    def tearDownClass(cls):
+        with cls.app.app_context():
+            cls.db.session.remove()
+            cls.db.engine.dispose()
+        cls.db_path.unlink(missing_ok=True)
+        if cls._live_stat is not None and LIVE_DB.exists():
+            current = LIVE_DB.stat()
+            if (current.st_ino, current.st_size, current.st_mtime_ns) != (
+                cls._live_stat.st_ino,
+                cls._live_stat.st_size,
+                cls._live_stat.st_mtime_ns,
+            ):
+                raise RuntimeError('live trailers.db changed during sqlite guard tests')
+
+    @classmethod
+    def _insert_preexisting_rows(cls):
+        """Строки до триггера: NULL и висячий id. Миграция их не переписывает."""
+        cls.db.session.execute(text(
+            '''
+            INSERT INTO sales_realization_line (
+                realization_id, line_no, line_type, quantity, unit,
+                inventory_effect, produced_unit_id, comment
+            ) VALUES
+                (910001, 1, 'trailer', 1, 'шт', 'trailer_unit', NULL, 'guard-old-null'),
+                (910002, 1, 'trailer', 1, 'шт', 'trailer_unit', 919999, 'guard-old-orphan')
+            '''
+        ))
+        cls.db.session.commit()
+
+    @classmethod
+    def _align_model_drift(cls):
+        for table, column, coltype in MODEL_DRIFT_COLUMNS:
+            present = {
+                row[1]
+                for row in cls.db.session.execute(text(f'PRAGMA table_info({table})')).all()
+            }
+            if column not in present:
+                cls.db.session.execute(text(
+                    f'ALTER TABLE {table} ADD COLUMN {column} {coltype}'
+                ))
+        cls.db.session.commit()
+
+    def setUp(self):
+        self.ctx = self.app.app_context()
+        self.ctx.push()
+        self.assertEqual(int(self.db.session.execute(text('PRAGMA foreign_keys')).scalar()), 0)
+        self._vin_serial = 1
+
+    def tearDown(self):
+        self.db.session.rollback()
+        self.db.session.remove()
+        self.ctx.pop()
+
+    def test_upgrade_keeps_old_null_and_orphan_then_downgrade_restores_raw_insert(self):
+        from flask_migrate import downgrade, upgrade
+
+        self.assertEqual(
+            self.db.session.execute(text('SELECT version_num FROM alembic_version')).scalar(),
+            GUARD_REVISION,
+        )
+        old_null = self._comment_unit('guard-old-null')
+        old_orphan = self._comment_unit('guard-old-orphan')
+        self.assertIsNone(old_null)
+        self.assertEqual(old_orphan, 919999)
+        self.assertEqual(self._trigger_names(), set(self._expected_triggers()))
+        violations = self.db.session.execute(text(
+            'PRAGMA foreign_key_check(sales_realization_line)'
+        )).all()
+        orphan_rowid = self.db.session.execute(text(
+            "SELECT id FROM sales_realization_line WHERE comment = 'guard-old-orphan'"
+        )).scalar()
+        dangling_units = {row[1] for row in violations if row[2] == 'produced_unit'}
+        self.assertEqual(dangling_units, {orphan_rowid})
+
+        self._assert_missing_rejected(
+            '''
+            INSERT INTO sales_realization_line (
+                realization_id, line_no, line_type, quantity, unit,
+                inventory_effect, produced_unit_id, comment
+            ) VALUES (910003, 1, 'trailer', 1, 'шт', 'trailer_unit', 918888, 'guard-rejected')
+            ''',
+        )
+        self.assertIsNone(self._comment_unit('guard-rejected'))
+
+        self.db.session.remove()
+        downgrade(directory=MIGRATIONS, revision=HEAD_BEFORE_GUARD)
+        self.assertEqual(
+            self.db.session.execute(text('SELECT version_num FROM alembic_version')).scalar(),
+            HEAD_BEFORE_GUARD,
+        )
+        self.assertEqual(self._trigger_names(), set())
+        self.assertEqual(int(self.db.session.execute(text('PRAGMA foreign_keys')).scalar()), 0)
+        self.db.session.execute(text(
+            '''
+            INSERT INTO sales_realization_line (
+                realization_id, line_no, line_type, quantity, unit,
+                inventory_effect, produced_unit_id, comment
+            ) VALUES (910004, 1, 'trailer', 1, 'шт', 'trailer_unit', 918888, 'guard-while-downgraded')
+            '''
+        ))
+        self.db.session.commit()
+        self.assertEqual(self._comment_unit('guard-while-downgraded'), 918888)
+        self.db.session.execute(text(
+            "DELETE FROM sales_realization_line WHERE comment = 'guard-while-downgraded'"
+        ))
+        self.db.session.commit()
+
+        self.db.session.remove()
+        upgrade(directory=MIGRATIONS, revision=GUARD_REVISION)
+        self.assertEqual(self._trigger_names(), set(self._expected_triggers()))
+        self.assertIsNone(self._comment_unit('guard-old-null'))
+        self.assertEqual(self._comment_unit('guard-old-orphan'), 919999)
+        self.assertIsNone(self._comment_unit('guard-while-downgraded'))
+        self.assertEqual(int(self.db.session.execute(text('PRAGMA foreign_keys')).scalar()), 0)
+
+    def test_raw_insert_and_update_reject_missing_parent(self):
+        unit = self._unit()
+        self.db.session.commit()
+        self.db.session.execute(text(
+            '''
+            INSERT INTO sales_realization_line (
+                id, realization_id, line_no, line_type, quantity, unit,
+                inventory_effect, produced_unit_id
+            ) VALUES (920001, 920001, 1, 'trailer', 1, 'шт', 'trailer_unit', NULL)
+            '''
+        ))
+        self.db.session.commit()
+        self.assertIsNone(self._line_unit(920001))
+
+        self.db.session.execute(text(
+            '''
+            UPDATE sales_realization_line
+            SET comment = 'заметка без смены ключа'
+            WHERE id = 920001
+            '''
+        ))
+        self.db.session.commit()
+
+        self._assert_missing_rejected(
+            '''
+            UPDATE sales_realization_line
+            SET produced_unit_id = 929999
+            WHERE id = 920001
+            ''',
+        )
+        self.assertIsNone(self._line_unit(920001))
+
+        self.db.session.execute(text(
+            'UPDATE sales_realization_line SET produced_unit_id = :unit_id WHERE id = 920001'
+        ), {'unit_id': unit.id})
+        self.db.session.commit()
+        self.assertEqual(self._line_unit(920001), unit.id)
+
+        self._assert_missing_rejected(
+            '''
+            INSERT INTO sales_realization_line (
+                id, realization_id, line_no, line_type, quantity, unit,
+                inventory_effect, produced_unit_id
+            ) VALUES (920002, 920002, 1, 'trailer', 1, 'шт', 'trailer_unit', 929998)
+            ''',
+        )
+        self.assertIsNone(self._line_unit(920002))
+
+    def test_delete_linked_parent_keeps_both_rows(self):
+        unit = self._unit()
+        self.db.session.commit()
+        self.db.session.execute(text(
+            '''
+            INSERT INTO sales_realization_line (
+                id, realization_id, line_no, line_type, quantity, unit,
+                inventory_effect, produced_unit_id
+            ) VALUES (930001, 930001, 1, 'trailer', 1, 'шт', 'trailer_unit', :unit_id)
+            '''
+        ), {'unit_id': unit.id})
+        self.db.session.commit()
+
+        guard = _guard_module()
+
+        with self.assertRaises(IntegrityError) as caught:
+            self.db.session.execute(
+                text('DELETE FROM produced_unit WHERE id = :unit_id'),
+                {'unit_id': unit.id},
+            )
+            self.db.session.commit()
+        self.assertIn(guard.DELETE_PARENT_MESSAGE, str(caught.exception))
+        self.db.session.rollback()
+
+        self.assertIsNotNone(self.db.session.execute(
+            text('SELECT id FROM produced_unit WHERE id = :unit_id'),
+            {'unit_id': unit.id},
+        ).scalar())
+        linked_id = int(unit.id)
+        self.assertEqual(self._line_unit(930001), linked_id)
+
+        self._seed_master()
+        free_id = self.db.session.execute(text(
+            '''
+            INSERT INTO produced_unit (
+                production_request_line_id, item_id, status, created_at
+            ) VALUES (:line_id, :item_id, 'produced_no_vin', CURRENT_TIMESTAMP)
+            RETURNING id
+            '''
+        ), {
+            'line_id': self.request_line.id,
+            'item_id': self.item.id,
+        }).scalar()
+        self.db.session.commit()
+        self.db.session.execute(
+            text('DELETE FROM produced_unit WHERE id = :unit_id'),
+            {'unit_id': free_id},
+        )
+        self.db.session.commit()
+        self.assertIsNone(self.db.session.execute(
+            text('SELECT id FROM produced_unit WHERE id = :unit_id'),
+            {'unit_id': free_id},
+        ).scalar())
+        self.assertEqual(self._line_unit(930001), linked_id)
+
+    def test_unique_index_still_rejects_repeat(self):
+        unit = self._unit()
+        self.db.session.commit()
+        self.db.session.execute(text(
+            '''
+            INSERT INTO sales_realization_line (
+                id, realization_id, line_no, line_type, quantity, unit,
+                inventory_effect, produced_unit_id
+            ) VALUES (940001, 940001, 1, 'trailer', 1, 'шт', 'trailer_unit', :unit_id)
+            '''
+        ), {'unit_id': unit.id})
+        self.db.session.commit()
+        with self.assertRaises(IntegrityError):
+            self.db.session.execute(text(
+                '''
+                INSERT INTO sales_realization_line (
+                    id, realization_id, line_no, line_type, quantity, unit,
+                    inventory_effect, produced_unit_id
+                ) VALUES (940002, 940002, 1, 'trailer', 1, 'шт', 'trailer_unit', :unit_id)
+                '''
+            ), {'unit_id': unit.id})
+            self.db.session.commit()
+        self.db.session.rollback()
+        self.assertEqual(self._count_unit_links(unit.id), 1)
+
+    def test_existing_parent_is_not_a_correct_sale(self):
+        from realization_unit_link import ProducedUnitLinkError, assign_produced_units_on_post
+
+        trailer = self._trailer('VIN-GUARD-OTHER-0001')
+        other = self._trailer('VIN-GUARD-OTHER-0002')
+        own_unit = self._unit(trailer=trailer)
+        foreign_unit = self._unit(trailer=other, item=self._other_item())
+        self.db.session.commit()
+
+        realization = self._realization(trailer, [{'trailer_id': trailer.id}])
+        assign_produced_units_on_post(realization)
+        realization.status = 'posted'
+        self.db.session.commit()
+        self.assertEqual(self._orm_line(realization).produced_unit_id, own_unit.id)
+
+        second = self._unit(trailer=trailer)
+        self.db.session.commit()
+        ambiguous = self._realization(trailer, [{'trailer_id': trailer.id}])
+        with self.assertRaises(ProducedUnitLinkError) as caught:
+            assign_produced_units_on_post(ambiguous)
+        self.assertIn('Первая не выбирается', str(caught.exception))
+        self.db.session.rollback()
+
+        mismatch = self._realization(other, [{
+            'trailer_id': other.id,
+            'item_id': self._other_item().id,
+        }])
+        self._orm_line(mismatch).item_id = trailer.item_id
+        with self.assertRaises(ProducedUnitLinkError):
+            assign_produced_units_on_post(mismatch)
+        self.db.session.rollback()
+
+        self.db.session.execute(text(
+            '''
+            UPDATE sales_realization_line
+            SET produced_unit_id = :foreign_id
+            WHERE id = :line_id
+            '''
+        ), {'foreign_id': foreign_unit.id, 'line_id': self._orm_line(realization).id})
+        self.db.session.commit()
+        self.assertEqual(self._orm_line(realization).produced_unit_id, foreign_unit.id)
+        self.assertNotEqual(foreign_unit.trailer_id, self._orm_line(realization).trailer_id)
+
+    def test_route_post_delete_and_repost_still_work(self):
+        from models import SalesRealization, SalesRealizationLine, Trailer
+
+        trailer = self._trailer('VIN-GUARD-ROUTE-0001')
+        unit = self._unit(trailer=trailer)
+        self.db.session.commit()
+        order = self._sale_order(trailer)
+        realization = self._draft_realization(order, trailer)
+        client = self._client()
+        response = client.post(f'/realizations/{realization.id}/post', follow_redirects=True)
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        stored = SalesRealization.query.get(realization.id)
+        self.assertEqual(stored.status, 'posted', response.get_data(as_text=True))
+        line = self._orm_line(stored)
+        self.assertEqual(line.produced_unit_id, unit.id)
+        self.assertEqual(Trailer.query.get(trailer.id).status, 'SOLD')
+        old_line_id = line.id
+
+        response = client.post(f'/realizations/{realization.id}/delete', follow_redirects=True)
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        self.assertIsNone(SalesRealization.query.get(realization.id))
+        self.assertIsNone(SalesRealizationLine.query.get(old_line_id))
+        self.assertIsNotNone(self.db.session.get(type(unit), unit.id))
+
+        order = self.db.session.get(type(order), order.id)
+        repeat = self._draft_realization(order, trailer)
+        response = client.post(f'/realizations/{repeat.id}/post', follow_redirects=True)
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        repeat = SalesRealization.query.get(repeat.id)
+        self.assertEqual(repeat.status, 'posted', response.get_data(as_text=True))
+        self.assertEqual(self._orm_line(repeat).produced_unit_id, unit.id)
+        self.assertEqual(self._count_unit_links(unit.id), 1)
+
+    def test_cohort_snapshot_does_not_change_meaning(self):
+        from shift_director_report import SOLD_FROM_PRODUCED_LABEL, build_shift_director_report
+
+        trailer = self._trailer('VIN-GUARD-COHORT-0001')
+        unit = self._cohort_unit(trailer, posted_at=datetime(2026, 1, 15, 12, 0, 0))
+        self._posted_cohort_sale(unit, realization_date=date(2026, 8, 20))
+        january = build_shift_director_report(
+            period_start=datetime(2026, 1, 1, 0, 0, 0),
+            period_end=datetime(2026, 1, 31, 23, 59, 59),
+        )
+        sold = january['sold_from_produced']
+        self.assertEqual(sold['status'], 'SNAPSHOT')
+        self.assertEqual(sold['label'], SOLD_FROM_PRODUCED_LABEL)
+        self.assertEqual(sold['label'], 'Из выпущенных за период продано на сейчас')
+        self.assertIsNone(sold['sale_date_filter'])
+        self.assertEqual(sold['value'], 1)
+        self.assertEqual(sold['cohort_units'], 1)
+        self.assertEqual(january['totals']['good_trailers'], sold['cohort_units'])
+        self.assertIn('не продажи выбранного периода', sold['limitation'])
+
+        august = build_shift_director_report(
+            period_start=datetime(2026, 8, 1, 0, 0, 0),
+            period_end=datetime(2026, 8, 31, 23, 59, 59),
+        )
+        self.assertEqual(august['sold_from_produced']['value'], 0)
+        self.assertEqual(august['sold_from_produced']['cohort_units'], 0)
+
+        client = self._client()
+        page = client.get('/director/reports/shifts')
+        self.assertEqual(page.status_code, 200)
+        body = page.get_data(as_text=True)
+        self.assertIn('Из выпущенных за период продано на сейчас', body)
+        self.assertIn('восстановить нельзя', body)
+
+    def _expected_triggers(self):
+        return _guard_module().TRIGGER_NAMES
+
+    def _trigger_names(self):
+        rows = self.db.session.execute(text(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+        )).all()
+        return {row[0] for row in rows}
+
+    def _comment_unit(self, comment: str):
+        return self.db.session.execute(text(
+            'SELECT produced_unit_id FROM sales_realization_line WHERE comment = :comment'
+        ), {'comment': comment}).scalar()
+
+    def _line_unit(self, line_id: int):
+        return self.db.session.execute(text(
+            'SELECT produced_unit_id FROM sales_realization_line WHERE id = :line_id'
+        ), {'line_id': line_id}).scalar()
+
+    def _count_unit_links(self, unit_id: int) -> int:
+        return self.db.session.execute(text(
+            'SELECT COUNT(*) FROM sales_realization_line WHERE produced_unit_id = :unit_id'
+        ), {'unit_id': unit_id}).scalar()
+
+    def _assert_missing_rejected(self, sql: str):
+        guard = _guard_module()
+
+        with self.assertRaises(IntegrityError) as caught:
+            self.db.session.execute(text(sql))
+            self.db.session.commit()
+        self.assertIn(guard.MISSING_UNIT_MESSAGE, str(caught.exception))
+        self.db.session.rollback()
+
+    def _seed_master(self):
+        from models import (
+            Customer,
+            Item,
+            ProductionRequest,
+            ProductionRequestLine,
+            User,
+            Warehouse,
+        )
+
+        self.director = User.query.filter_by(username='guard-director').first()
+        if self.director is not None:
+            self.warehouse = Warehouse.query.filter_by(name='Склад guard').one()
+            self.item = Item.query.filter_by(article='GUARD-T').one()
+            self.other_item = Item.query.filter_by(article='GUARD-T2').one()
+            self.customer = Customer.query.filter_by(name='Покупатель guard').one()
+            self.request_line = ProductionRequestLine.query.filter_by(
+                production_request_id=ProductionRequest.query.filter_by(
+                    request_number='PR-GUARD-1',
+                ).one().id,
+            ).one()
+            return
+        self.warehouse = Warehouse(name='Склад guard', is_active=True)
+        self.db.session.add(self.warehouse)
+        self.db.session.flush()
+        self.item = Item(item_type='TRAILER', article='GUARD-T', name='Прицеп guard', unit='шт')
+        self.other_item = Item(item_type='TRAILER', article='GUARD-T2', name='Другой guard', unit='шт')
+        self.db.session.add_all([self.item, self.other_item])
+        self.db.session.flush()
+        self.customer = Customer(customer_type='PERSON', name='Покупатель guard')
+        self.director = User(username='guard-director', full_name='Директор guard', role='director')
+        self.director.set_password('x')
+        self.db.session.add_all([self.customer, self.director])
+        self.db.session.flush()
+        request = ProductionRequest(request_number='PR-GUARD-1', status='in_progress')
+        self.db.session.add(request)
+        self.db.session.flush()
+        self.request_line = ProductionRequestLine(
+            production_request_id=request.id,
+            item_id=self.item.id,
+            quantity=1,
+        )
+        self.db.session.add(self.request_line)
+        self.db.session.commit()
+
+    def _other_item(self):
+        self._seed_master()
+        return self.other_item
+
+    def _trailer(self, vin: str, item=None):
+        from models import Trailer
+
+        self._seed_master()
+        trailer = Trailer(
+            vin=vin,
+            item_id=(item or self.item).id,
+            warehouse_id=self.warehouse.id,
+            status='IN_STOCK',
+        )
+        self.db.session.add(trailer)
+        self.db.session.flush()
+        return trailer
+
+    def _unit(self, *, trailer=None, item=None, shift_output_id=None, status='vin_assigned'):
+        from models import ProducedUnit
+
+        self._seed_master()
+        unit = ProducedUnit(
+            production_request_line_id=self.request_line.id,
+            item_id=(item or self.item).id,
+            trailer_id=trailer.id if trailer else None,
+            shift_output_id=shift_output_id,
+            status=status,
+        )
+        self.db.session.add(unit)
+        self.db.session.flush()
+        return unit
+
+    def _realization(self, trailer, lines):
+        from models import SalesRealization, SalesRealizationLine
+
+        self._seed_master()
+        realization = SalesRealization(
+            realization_date=date.today(),
+            customer_id=self.customer.id,
+            warehouse_id=self.warehouse.id,
+            status='draft',
+            total_amount=Decimal('100'),
+        )
+        self.db.session.add(realization)
+        self.db.session.flush()
+        for index, spec in enumerate(lines, start=1):
+            self.db.session.add(SalesRealizationLine(
+                realization_id=realization.id,
+                line_no=index,
+                line_type='trailer',
+                trailer_id=spec.get('trailer_id', trailer.id),
+                item_id=spec.get('item_id', self.item.id),
+                quantity=Decimal('1'),
+                unit='шт',
+                inventory_effect='trailer_unit',
+            ))
+        self.db.session.commit()
+        return realization
+
+    def _orm_line(self, realization, line_no=1):
+        from models import SalesRealizationLine
+
+        return SalesRealizationLine.query.filter_by(
+            realization_id=realization.id,
+            line_no=line_no,
+        ).one()
+
+    def _client(self):
+        self._seed_master()
+        client = self.app.test_client()
+        with client.session_transaction() as sess:
+            sess['_user_id'] = str(self.director.id)
+            sess['_fresh'] = True
+        return client
+
+    def _sale_order(self, trailer):
+        from models import CustomerOrder, CustomerOrderLine, OrderPayment, SalesContract, VinRegistry
+
+        self._seed_master()
+        order = CustomerOrder(
+            order_number=f'ORD-GUARD-{trailer.id:06d}',
+            customer_id=self.customer.id,
+            item_id=self.item.id,
+            trailer_id=trailer.id,
+            warehouse_id=self.warehouse.id,
+            assigned_user_id=self.director.id,
+            quantity=1,
+            price=Decimal('100'),
+            status='confirmed',
+            documents_issued=True,
+            fulfillment_source='stock',
+        )
+        self.db.session.add(order)
+        self.db.session.flush()
+        line = CustomerOrderLine(
+            order_id=order.id,
+            line_no=1,
+            line_type='TRAILER',
+            fulfillment_source='stock',
+            item_id=self.item.id,
+            trailer_id=trailer.id,
+            quantity=1,
+            unit_price=Decimal('100'),
+            total_price=Decimal('100'),
+            article_snapshot=self.item.article,
+            product_name_snapshot=self.item.name,
+            include_in_realization=True,
+        )
+        self.db.session.add(line)
+        self.db.session.flush()
+        serial = f'{self._vin_serial:07d}'
+        self._vin_serial += 1
+        self.db.session.add(VinRegistry(
+            vin_full=trailer.vin,
+            serial7=serial,
+            status='confirmed',
+            customer_order_id=order.id,
+            order_line_id=line.id,
+            trailer_id=trailer.id,
+        ))
+        self.db.session.add(SalesContract(
+            contract_number=f'SC-GUARD-{trailer.id:06d}',
+            customer_id=self.customer.id,
+            trailer_id=trailer.id,
+            order_id=order.id,
+            price=Decimal('100'),
+        ))
+        self.db.session.add(OrderPayment(
+            order_id=order.id,
+            amount=Decimal('100'),
+            status='CONFIRMED',
+        ))
+        self.db.session.commit()
+        return order
+
+    def _draft_realization(self, order, trailer):
+        from models import CustomerOrderLine, SalesRealization, SalesRealizationLine
+
+        line = CustomerOrderLine.query.filter_by(order_id=order.id).one()
+        realization = SalesRealization(
+            realization_date=date.today(),
+            order_id=order.id,
+            customer_id=self.customer.id,
+            warehouse_id=self.warehouse.id,
+            status='draft',
+            total_amount=Decimal('100'),
+        )
+        self.db.session.add(realization)
+        self.db.session.flush()
+        self.db.session.add(SalesRealizationLine(
+            realization_id=realization.id,
+            line_no=1,
+            line_type='trailer',
+            order_line_id=line.id,
+            trailer_id=trailer.id,
+            item_id=self.item.id,
+            quantity=Decimal('1'),
+            unit='шт',
+            inventory_effect='trailer_unit',
+            vin_full=trailer.vin,
+        ))
+        self.db.session.commit()
+        return realization
+
+    def _cohort_unit(self, trailer, posted_at: datetime):
+        from models import (
+            ProductionEmployee,
+            ProductionShift,
+            ProductionShiftOutput,
+            WarehouseStorageArea,
+        )
+
+        self._seed_master()
+        area = WarehouseStorageArea(
+            warehouse_id=self.warehouse.id,
+            code='DIR_LIGHT',
+            name='Легковое',
+            area_type='finished',
+        )
+        employee = ProductionEmployee(full_name='Сборщик guard')
+        self.db.session.add_all([area, employee])
+        self.db.session.flush()
+        shift = ProductionShift(
+            employee_id=employee.id,
+            work_area='production',
+            direction_warehouse_id=self.warehouse.id,
+            direction_area_id=area.id,
+            status='posted',
+            posted_at=posted_at,
+            hours_fact=Decimal('8'),
+        )
+        self.db.session.add(shift)
+        self.db.session.flush()
+        output = ProductionShiftOutput(
+            shift_id=shift.id,
+            employee_id=employee.id,
+            item_id=self.item.id,
+            output_type='trailer',
+            quantity=Decimal('1'),
+            defect_quantity=Decimal('0'),
+            unit='шт',
+            status='posted',
+        )
+        self.db.session.add(output)
+        self.db.session.flush()
+        return self._unit(trailer=trailer, shift_output_id=output.id)
+
+    def _posted_cohort_sale(self, unit, realization_date: date):
+        from models import SalesRealization, SalesRealizationLine
+
+        self._seed_master()
+        realization = SalesRealization(
+            realization_date=realization_date,
+            customer_id=self.customer.id,
+            warehouse_id=self.warehouse.id,
+            status='posted',
+            total_amount=Decimal('100'),
+            posted_at=datetime(2026, 8, 20, 9, 0, 0),
+        )
+        self.db.session.add(realization)
+        self.db.session.flush()
+        self.db.session.add(SalesRealizationLine(
+            realization_id=realization.id,
+            line_no=1,
+            line_type='trailer',
+            trailer_id=unit.trailer_id,
+            item_id=unit.item_id,
+            quantity=Decimal('1'),
+            unit='шт',
+            inventory_effect='trailer_unit',
+            produced_unit_id=unit.id,
+        ))
+        self.db.session.commit()
+        return realization
+
+
+if __name__ == '__main__':
+    unittest.main()
