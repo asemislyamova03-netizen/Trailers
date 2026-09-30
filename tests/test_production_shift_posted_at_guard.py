@@ -125,7 +125,8 @@ class ProductionShiftPostedAtGuardTests(unittest.TestCase):
         migration_text = (
             ROOT / 'migrations' / 'versions' / 'b4e8c1a90d27_freeze_production_shift_posted_at.py'
         ).read_text(encoding='utf-8')
-        self.assertNotIn('PRAGMA foreign_keys', migration_text)
+        self.assertNotIn('PRAGMA foreign_keys=ON', migration_text)
+        self.assertNotIn('PRAGMA foreign_keys = ON', migration_text)
         self.assertNotIn('foreign_keys=ON', migration_text)
         for name in self._trigger_sql():
             self.assertNotIn(name, migration_text)

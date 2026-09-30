@@ -152,7 +152,22 @@ class SchemaDriftFourColumnTests(unittest.TestCase):
         from alembic.script import ScriptDirectory
         from models import Item, OTTS, Trailer
 
-        self.assertEqual(ScriptDirectory(MIGRATIONS).get_heads(), [SCHEMA_REVISION])
+        directory = ScriptDirectory(MIGRATIONS)
+        heads = directory.get_heads()
+        self.assertEqual(len(heads), 1)
+        revision = directory.get_revision(heads[0])
+        line = []
+        while revision is not None:
+            line.append(revision.revision)
+            down = revision.down_revision
+            if down is None:
+                break
+            self.assertIsInstance(down, str)
+            revision = directory.get_revision(down)
+        # f6b2d8c14e90 больше не head: следом идёт узкий триггер posted_at.
+        # Ревизия четырёх колонок остаётся на единственной линейной цепочке.
+        self.assertIn(SCHEMA_REVISION, line)
+        self.assertLess(line.index(heads[0]), line.index(SCHEMA_REVISION))
         self._assert_orm_missing()
         ids = self._insert_rows()
         self._upgrade()
