@@ -3,8 +3,8 @@
 
 Только временная sqlite. Обычное соединение create_app() остаётся
 с PRAGMA foreign_keys=0. Рабочая trailers.db не открывается.
-Четыре колонки модели вне Alembic тест добавляет сам, после проверки,
-что полная цепочка их не создала.
+Четыре колонки модели добавляет ревизия f6b2d8c14e90. Ручной ALTER
+в этом тесте больше не нужен.
 """
 from __future__ import annotations
 
@@ -31,10 +31,9 @@ HEAD_BEFORE_GUARD = 'b7e2c4a9d815'
 GUARD_REVISION = 'c3f8a1d94e27'
 MATCH_REVISION = 'd8e4b1c67a02'
 FIELD_REVISION = 'e1b7c4d92a58'
-# Эти nullable-колонки есть в модели, но не в Alembic. Их добавляет только
-# тестовая база, чтобы ORM смог прочитать уже накатанную цепочку.
-# Ни c3f8a1d94e27, ни d8e4b1c67a02, ни e1b7c4d92a58 их не создают
-# и produced_unit_id не заполняют.
+SCHEMA_REVISION = 'f6b2d8c14e90'
+# Эти nullable-колонки до f6b2d8c14e90 отсутствуют. Новая ревизия добавляет
+# их сама. Тест больше не делает ручной ALTER.
 MODEL_DRIFT_COLUMNS = (
     ('item', 'tent_hight_mm', 'INTEGER'),
     ('item', 'has_jockey_wheel', 'BOOLEAN'),
@@ -124,8 +123,14 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
             cls._insert_preexisting_rows()
             db.session.remove()
             upgrade(directory=MIGRATIONS, revision=FIELD_REVISION)
-            cls.drift_missing_before_align = cls._missing_drift_columns()
-            cls._align_model_drift()
+            cls.drift_missing_at_field_revision = cls._missing_drift_columns()
+            db.session.remove()
+            upgrade(directory=MIGRATIONS, revision=SCHEMA_REVISION)
+            if cls._missing_drift_columns():
+                raise RuntimeError(
+                    'f6b2d8c14e90 не добавила четыре колонки модели: '
+                    + ', '.join(cls._missing_drift_columns())
+                )
             pragma = db.session.execute(text('PRAGMA foreign_keys')).scalar()
             if int(pragma) != 0:
                 raise RuntimeError(f'create_app connection must keep foreign_keys=0, got {pragma}')
@@ -172,20 +177,8 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
                 missing.append(f'{table}.{column}')
         return tuple(missing)
 
-    @classmethod
-    def _align_model_drift(cls):
-        for table, column, coltype in MODEL_DRIFT_COLUMNS:
-            present = {
-                row[1]
-                for row in cls.db.session.execute(text(f'PRAGMA table_info({table})')).all()
-            }
-            if column not in present:
-                cls.db.session.execute(text(
-                    f'ALTER TABLE {table} ADD COLUMN {column} {coltype}'
-                ))
-        cls.db.session.commit()
-
     def setUp(self):
+        os.environ.pop('TRAILERS_F6B2D8C14E90_ABORT_AFTER', None)
         self.ctx = self.app.app_context()
         self.ctx.push()
         self.assertEqual(int(self.db.session.execute(text('PRAGMA foreign_keys')).scalar()), 0)
@@ -200,7 +193,7 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
 
         self.assertEqual(
             self.db.session.execute(text('SELECT version_num FROM alembic_version')).scalar(),
-            FIELD_REVISION,
+            SCHEMA_REVISION,
         )
         old_null = self._comment_unit('guard-old-null')
         old_orphan = self._comment_unit('guard-old-orphan')
@@ -250,7 +243,7 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
         self.db.session.commit()
 
         self.db.session.remove()
-        upgrade(directory=MIGRATIONS, revision=FIELD_REVISION)
+        upgrade(directory=MIGRATIONS, revision=SCHEMA_REVISION)
         self.assertEqual(self._trigger_names(), set(self._expected_triggers()))
         self.assertIsNone(self._comment_unit('guard-old-null'))
         self.assertEqual(self._comment_unit('guard-old-orphan'), 919999)
@@ -499,26 +492,35 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
         self.assertIn('Из выпущенных за период продано на сейчас', body)
         self.assertIn('восстановить нельзя', body)
 
-    def test_model_drift_columns_remain_outside_alembic(self):
+    def test_four_model_columns_come_from_schema_revision(self):
         expected = tuple(f'{table}.{column}' for table, column, _coltype in MODEL_DRIFT_COLUMNS)
-        self.assertEqual(self.drift_missing_before_align, expected)
-        migration_names = (
+        self.assertEqual(self.drift_missing_at_field_revision, expected)
+        self.assertEqual(self._missing_drift_columns(), ())
+        old_names = (
             'd8e4b1c67a02_guard_posted_realization_unit_match.py',
             'e1b7c4d92a58_guard_posted_cohort_line_fields.py',
         )
-        for name in migration_names:
+        for name in old_names:
             migration_text = (ROOT / 'migrations' / 'versions' / name).read_text(encoding='utf-8')
             for _table, column, _coltype in MODEL_DRIFT_COLUMNS:
                 self.assertNotIn(f"'{column}'", migration_text)
                 self.assertNotIn(f'ADD COLUMN {column}', migration_text)
             self.assertNotIn('foreign_keys=ON', migration_text)
             self.assertNotIn('PRAGMA foreign_keys=ON', migration_text)
-        for table, column, _coltype in MODEL_DRIFT_COLUMNS:
-            present = {
-                row[1]
-                for row in self.db.session.execute(text(f'PRAGMA table_info({table})')).all()
-            }
-            self.assertIn(column, present)
+        schema_text = (
+            ROOT / 'migrations' / 'versions' / 'f6b2d8c14e90_add_four_model_columns.py'
+        ).read_text(encoding='utf-8')
+        self.assertIn('ADD COLUMN {column}', schema_text)
+        for _table, column, _coltype in MODEL_DRIFT_COLUMNS:
+            self.assertIn(f"'{column}'", schema_text)
+        self.assertNotIn('foreign_keys=ON', schema_text)
+        self.assertNotIn('PRAGMA foreign_keys=ON', schema_text)
+        self.assertNotIn('create_foreign_key', schema_text)
+        referred = {
+            row[2]
+            for row in self.db.session.execute(text('PRAGMA foreign_key_list(trailer)')).all()
+        }
+        self.assertNotIn('otts', referred)
 
     def test_foreign_rebind_and_parent_id_do_not_move_two_directions(self):
         from shift_director_report import build_shift_director_report
@@ -724,8 +726,8 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
             self.db.session.rollback()
             self.db.session.remove()
             current = self.db.session.execute(text('SELECT version_num FROM alembic_version')).scalar()
-            if current != FIELD_REVISION:
-                upgrade(directory=MIGRATIONS, revision=FIELD_REVISION)
+            if current != SCHEMA_REVISION:
+                upgrade(directory=MIGRATIONS, revision=SCHEMA_REVISION)
 
     def test_future_alembic_batch_rebuild_is_not_safe(self):
         import sqlite3
@@ -881,7 +883,7 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
         self.assertEqual(int(self.db.session.execute(text('PRAGMA foreign_keys')).scalar()), 0)
         self.assertEqual(
             self.db.session.execute(text('SELECT version_num FROM alembic_version')).scalar(),
-            FIELD_REVISION,
+            SCHEMA_REVISION,
         )
 
     def test_posted_field_sql_cannot_move_cohort(self):
@@ -1150,8 +1152,8 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
             self.db.session.rollback()
             self.db.session.remove()
             current = self.db.session.execute(text('SELECT version_num FROM alembic_version')).scalar()
-            if current != FIELD_REVISION:
-                upgrade(directory=MIGRATIONS, revision=FIELD_REVISION)
+            if current != SCHEMA_REVISION:
+                upgrade(directory=MIGRATIONS, revision=SCHEMA_REVISION)
 
     def _assert_posted_field_guards(
         self,
@@ -1341,9 +1343,35 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
             source.close()
         return copy
 
+    def _restore_model_columns_below_schema_revision(self):
+        """Модель читает четыре колонки и ниже f6b2d8c14e90 их снова нет.
+
+        На самой ревизии колонки уже созданы миграцией, ALTER не делается.
+        После отката они нужны только этому тесту, чтобы отчёт мог прочитать Item.
+        """
+        version = self.db.session.execute(
+            text('SELECT version_num FROM alembic_version')
+        ).scalar()
+        if version == SCHEMA_REVISION:
+            return
+        changed = False
+        for table, column, coltype in MODEL_DRIFT_COLUMNS:
+            present = {
+                row[1]
+                for row in self.db.session.execute(text(f'PRAGMA table_info({table})')).all()
+            }
+            if column not in present:
+                self.db.session.execute(text(
+                    f'ALTER TABLE {table} ADD COLUMN {column} {coltype}'
+                ))
+                changed = True
+        if changed:
+            self.db.session.commit()
+
     def _period_sold(self, march_start, march_end, october_start, october_end):
         from shift_director_report import build_shift_director_report
 
+        self._restore_model_columns_below_schema_revision()
         march = build_shift_director_report(period_start=march_start, period_end=march_end)
         october = build_shift_director_report(period_start=october_start, period_end=october_end)
         return {
