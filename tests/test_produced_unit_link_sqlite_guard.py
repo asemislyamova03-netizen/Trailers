@@ -179,6 +179,8 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
 
     def setUp(self):
         os.environ.pop('TRAILERS_F6B2D8C14E90_ABORT_AFTER', None)
+        os.environ.pop('TRAILERS_F6B2D8C14E90_CLOSE_AFTER', None)
+        os.environ.pop('TRAILERS_F6B2D8C14E90_DOWNGRADE_ABORT', None)
         self.ctx = self.app.app_context()
         self.ctx.push()
         self.assertEqual(int(self.db.session.execute(text('PRAGMA foreign_keys')).scalar()), 0)
@@ -1344,10 +1346,11 @@ class ProducedUnitLinkSqliteGuardTests(unittest.TestCase):
         return copy
 
     def _restore_model_columns_below_schema_revision(self):
-        """Модель читает четыре колонки и ниже f6b2d8c14e90 их снова нет.
+        """Модель читает четыре колонки. Откат f6b2d8c14e90 их не удаляет.
 
         На самой ревизии колонки уже созданы миграцией, ALTER не делается.
-        После отката они нужны только этому тесту, чтобы отчёт мог прочитать Item.
+        Если версия ниже и колонки всё же отсутствуют, этот тест добавляет их
+        только во временной базе, чтобы отчёт мог прочитать Item.
         """
         version = self.db.session.execute(
             text('SELECT version_num FROM alembic_version')

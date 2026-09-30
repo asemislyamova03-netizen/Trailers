@@ -17,26 +17,40 @@ Create Date: 2026-09-30 12:00:00.000000
 эта ревизия не трогает. Старые downgrade c1d03f92e3c6 и d1f2a3b4c5d6
 остаются отдельным BLOCKED: история миграций не переписывается.
 
-До любого DDL читаются все четыре колонки. Несовместимый тип, NOT NULL,
-DEFAULT или PRIMARY KEY останавливают ревизию, и ни одна колонка не
-добавляется. Совместимая колонка и её данные не меняются. Добавляются
-только отсутствующие.
+До любого DDL читаются все четыре колонки и журнал
+schema_column_origin_f6b2d8c14e90. Несовместимый тип, NOT NULL, DEFAULT
+или PRIMARY KEY останавливают ревизию. Неизвестное имя в журнале тоже.
+Разрешённое имя без колонки — явный отказ до DDL: журнал имён сам по себе
+не доказывает, что колонку создала эта ревизия, и не разрешает её создавать
+или удалять. Совместимая колонка и её данные не меняются. Добавляются
+только отсутствующие имена, которых в журнале ещё нет.
 
-Происхождение пишется в schema_column_origin_f6b2d8c14e90 в той же
-SQLite-транзакции, что и ALTER. NULL в самой колонке происхождение не
-доказывает. Downgrade удаляет только строки этого журнала. Если журнала
-нет или в нём есть неизвестное имя, откат останавливается и колонки не
-трогает.
+Владение транзакцией на фактическом migrations/env.py и create_app().
+SQLiteImpl держит transactional_ddl = False, поэтому внешний
+begin_transaction в env.py — пустой. Внутри run_migrations Alembic всё же
+оборачивает шаг и UPDATE alembic_version в одну транзакцию соединения.
+На входе в ревизию SQLAlchemy уже считает транзакцию открытой, а
+sqlite3.in_transaction ещё False: голый ALTER при этом фиксируется сразу,
+отдельно от версии. Поэтому ревизия сама делает BEGIN на DBAPI-соединении
+и не вызывает COMMIT и ROLLBACK. Успешный шаг фиксирует Alembic вместе с
+версией. Исключение или закрытие соединения до этого фиксирования
+откатывает и DDL, и версию. Если транзакция SQLite уже открыта или BEGIN
+её не удержал, DDL не начинается.
 
-Простой ADD COLUMN и DROP COLUMN эти таблицы не пересобирают, поэтому
-триггеры sales_realization / sales_realization_line / produced_unit
-здесь не снимаются. Будущая пересборка таблицы, на которую ссылается
-триггер, по-прежнему требует приёма из e1b7c4d92a58. Этот файл его не
-переносит в старые ревизии.
+Downgrade колонки и журнал не удаляет. Атомарный DROP вместе с версией на
+этом стеке возможен, но безопасное происхождение из журнала имён не
+доказывается. Опасный DROP чужих данных запрещён. Это не защита от
+подделки журнала. После отката колонки и уже записанные значения остаются,
+версию сдвигает Alembic. Повторный upgrade совместимые значения не
+переписывает.
 
-TRAILERS_F6B2D8C14E90_ABORT_AFTER — только проверка отката. В обычном
-запуске переменная пустая. Если это целое N, транзакция обрывается
-после N DDL-операций и откатывается до COMMIT.
+Простой ADD COLUMN эти таблицы не пересобирает, поэтому триггеры
+sales_realization / sales_realization_line / produced_unit здесь не
+снимаются.
+
+TRAILERS_F6B2D8C14E90_ABORT_AFTER и TRAILERS_F6B2D8C14E90_CLOSE_AFTER —
+только проверка обрыва upgrade. TRAILERS_F6B2D8C14E90_DOWNGRADE_ABORT —
+только проверка обрыва downgrade. В обычном запуске переменные пустые.
 """
 
 from __future__ import annotations
@@ -59,13 +73,14 @@ COLUMNS = (
 )
 LEDGER_TABLE = 'schema_column_origin_f6b2d8c14e90'
 ABORT_ENV = 'TRAILERS_F6B2D8C14E90_ABORT_AFTER'
+CLOSE_ENV = 'TRAILERS_F6B2D8C14E90_CLOSE_AFTER'
+DOWNGRADE_ABORT_ENV = 'TRAILERS_F6B2D8C14E90_DOWNGRADE_ABORT'
 ALLOWED = {(table, column) for table, column, _expected in COLUMNS}
 
 REFUSED_BEFORE_DDL = 'ревизия f6b2d8c14e90 остановлена до DDL'
-NO_LEDGER_MESSAGE = (
-    'откат f6b2d8c14e90 остановлен: нет таблицы происхождения '
-    f'{LEDGER_TABLE}. Колонки не удаляются, потому что нельзя доказать, '
-    'что их создала эта ревизия. NULL в колонке происхождение не доказывает.'
+LEDGER_NAME_WITHOUT_COLUMN = (
+    'в журнале есть имя, колонки нет. Журнал имён не доказывает '
+    'происхождение и не разрешает DDL'
 )
 
 
@@ -129,30 +144,51 @@ def _unknown_ledger(ledger) -> list[tuple[str, str]]:
     return sorted(ledger - ALLOWED)
 
 
-def _abort_after() -> int | None:
-    raw = os.environ.get(ABORT_ENV)
+def _probe_point(name: str):
+    raw = os.environ.get(name)
     if raw is None or raw == '':
         return None
+    if raw == 'end':
+        return 'end'
     try:
         value = int(raw)
     except ValueError as exc:
-        raise RuntimeError(f'{ABORT_ENV} должен быть целым числом.') from exc
+        raise RuntimeError(f'{name} должен быть целым числом или end.') from exc
     if value < 0:
-        raise RuntimeError(f'{ABORT_ENV} не может быть отрицательным.')
+        raise RuntimeError(f'{name} не может быть отрицательным.')
     return value
 
 
-def _rollback(raw) -> None:
-    try:
-        raw.execute('ROLLBACK')
-    except Exception:
-        raw.rollback()
+def _execute_statement(raw, statement) -> None:
+    kind = statement[0]
+    if kind == 'sql':
+        raw.execute(statement[1])
+        return
+    if kind == 'insert':
+        raw.execute(
+            f'INSERT INTO {LEDGER_TABLE} (table_name, column_name) VALUES (?, ?)',
+            (statement[1], statement[2]),
+        )
+        return
+    raise RuntimeError(f'Неизвестный оператор миграции: {kind}.')
 
 
-def _run_atomic(raw, statements: list[str]) -> None:
+def _run_in_alembic_transaction(raw, statements: list) -> None:
+    """BEGIN без своего COMMIT. Фиксирует или откатывает Alembic.
+
+    На create_app()/env.py голый ALTER при sqlite3.in_transaction=False
+    попадает в файл раньше UPDATE alembic_version. Явный BEGIN удерживает
+    DDL в той же транзакции соединения, которую Alembic закрывает уже после
+    записи версии. Свой ROLLBACK здесь не делается: иначе тест не отличает
+    откат Alembic от отката самой ревизии.
+    """
     if not statements:
         return
-    limit = _abort_after()
+    if raw.in_transaction:
+        raise RuntimeError(
+            f'{REFUSED_BEFORE_DDL}: транзакция SQLite уже открыта. '
+            'Второй BEGIN не делается, DDL не начат.'
+        )
     try:
         raw.execute('BEGIN')
     except Exception as exc:
@@ -160,17 +196,35 @@ def _run_atomic(raw, statements: list[str]) -> None:
             f'{REFUSED_BEFORE_DDL}: не удалось открыть транзакцию SQLite ({exc}). '
             'DDL не начат.'
         ) from exc
-    try:
-        for index, sql in enumerate(statements, start=1):
-            if limit is not None and index > limit:
-                raise RuntimeError(
-                    f'проверка отката f6b2d8c14e90: остановка до COMMIT после {limit} DDL'
-                )
-            raw.execute(sql)
-        raw.execute('COMMIT')
-    except Exception:
-        _rollback(raw)
-        raise
+    if not raw.in_transaction:
+        raise RuntimeError(
+            f'{REFUSED_BEFORE_DDL}: BEGIN не удержал транзакцию SQLite. DDL не начат.'
+        )
+    limit = _probe_point(ABORT_ENV)
+    close_after = _probe_point(CLOSE_ENV)
+    for index, statement in enumerate(statements, start=1):
+        if isinstance(limit, int) and index > limit:
+            raise RuntimeError(
+                'проверка отката f6b2d8c14e90: остановка до записи alembic_version '
+                f'после {limit} DDL'
+            )
+        _execute_statement(raw, statement)
+        if isinstance(close_after, int) and index >= close_after:
+            raw.close()
+            raise RuntimeError(
+                'проверка закрытия соединения f6b2d8c14e90: соединение закрыто '
+                f'после {close_after} DDL, до записи alembic_version'
+            )
+    if limit == 'end':
+        raise RuntimeError(
+            'проверка отката f6b2d8c14e90: остановка после DDL до записи alembic_version'
+        )
+    if close_after == 'end':
+        raw.close()
+        raise RuntimeError(
+            'проверка закрытия соединения f6b2d8c14e90: соединение закрыто после DDL, '
+            'до записи alembic_version'
+        )
 
 
 def _refuse(problems: list[str]) -> None:
@@ -181,8 +235,10 @@ def upgrade() -> None:
     raw = _sqlite_raw()
     problems = []
     missing = []
+    present = {}
     for table, column, expected in COLUMNS:
         row = _column_rows(raw, table).get(column)
+        present[(table, column)] = row
         if row is None:
             missing.append((table, column, expected))
             continue
@@ -196,45 +252,53 @@ def upgrade() -> None:
             'таблица происхождения содержит неизвестные строки: '
             + ', '.join(f'{table}.{column}' for table, column in unknown)
         )
+    if ledger is not None:
+        for table, column in sorted(ledger & ALLOWED):
+            if present[(table, column)] is None:
+                problems.append(f'{table}.{column}: {LEDGER_NAME_WITHOUT_COLUMN}')
     if problems:
         _refuse(problems)
 
     statements = []
-    if ledger is None:
-        statements.append(
+    if missing and ledger is None:
+        statements.append((
+            'sql',
             f'CREATE TABLE {LEDGER_TABLE} ('
             'table_name TEXT NOT NULL, '
             'column_name TEXT NOT NULL, '
-            'PRIMARY KEY (table_name, column_name))'
-        )
+            'PRIMARY KEY (table_name, column_name))',
+        ))
     for table, column, expected in missing:
-        statements.append(
-            'INSERT INTO '
-            f"{LEDGER_TABLE} (table_name, column_name) VALUES ('{table}', '{column}')"
-        )
-        statements.append(f'ALTER TABLE {table} ADD COLUMN {column} {expected}')
-    _run_atomic(raw, statements)
+        statements.append(('insert', table, column))
+        statements.append((
+            'sql',
+            f'ALTER TABLE {table} ADD COLUMN {column} {expected}',
+        ))
+    _run_in_alembic_transaction(raw, statements)
 
 
 def downgrade() -> None:
+    """Не удаляет колонки и журнал.
+
+    Список имён в schema_column_origin_f6b2d8c14e90 не доказывает, что
+    колонку создала эта ревизия. NULL в колонке тоже ничего не доказывает.
+    Подделку журнала эта функция не распознаёт и не обещает распознать.
+    DDL нет, поэтому обрыв до записи версии не может стереть чужие данные.
+    Версию при обычном возврате сдвигает Alembic. Колонки остаются.
+    """
     raw = _sqlite_raw()
-    ledger = _ledger_rows(raw)
-    if ledger is None:
-        raise RuntimeError(NO_LEDGER_MESSAGE)
-    unknown = _unknown_ledger(ledger)
-    if unknown:
+    mode = os.environ.get(DOWNGRADE_ABORT_ENV) or ''
+    if mode == '':
+        return
+    if mode == 'raise':
         raise RuntimeError(
-            'откат f6b2d8c14e90 остановлен: в таблице происхождения есть '
-            'неизвестные строки: '
-            + ', '.join(f'{table}.{column}' for table, column in unknown)
-            + '. Колонки не удаляются.'
+            'проверка отката f6b2d8c14e90: исключение до записи alembic_version, DDL нет'
         )
-    statements = []
-    for table, column, _expected in COLUMNS:
-        if (table, column) not in ledger:
-            continue
-        if column not in _column_rows(raw, table):
-            continue
-        statements.append(f'ALTER TABLE {table} DROP COLUMN {column}')
-    statements.append(f'DROP TABLE {LEDGER_TABLE}')
-    _run_atomic(raw, statements)
+    if mode == 'close':
+        raw.close()
+        raise RuntimeError(
+            'проверка отката f6b2d8c14e90: соединение закрыто до записи alembic_version, DDL нет'
+        )
+    raise RuntimeError(
+        f'{DOWNGRADE_ABORT_ENV} должен быть пустым, raise или close.'
+    )

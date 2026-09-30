@@ -6,8 +6,10 @@
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -27,6 +29,8 @@ PREVIOUS_REVISION = 'e1b7c4d92a58'
 SCHEMA_REVISION = 'f6b2d8c14e90'
 LEDGER = 'schema_column_origin_f6b2d8c14e90'
 ABORT_ENV = 'TRAILERS_F6B2D8C14E90_ABORT_AFTER'
+CLOSE_ENV = 'TRAILERS_F6B2D8C14E90_CLOSE_AFTER'
+DOWNGRADE_ABORT_ENV = 'TRAILERS_F6B2D8C14E90_DOWNGRADE_ABORT'
 COLUMNS = (
     ('item', 'tent_hight_mm', 'INTEGER'),
     ('item', 'has_jockey_wheel', 'BOOLEAN'),
@@ -123,6 +127,8 @@ class SchemaDriftFourColumnTests(unittest.TestCase):
 
     def setUp(self):
         os.environ.pop(ABORT_ENV, None)
+        os.environ.pop(CLOSE_ENV, None)
+        os.environ.pop(DOWNGRADE_ABORT_ENV, None)
         with self.app.app_context():
             self.db.session.remove()
             self.db.engine.dispose()
@@ -136,11 +142,13 @@ class SchemaDriftFourColumnTests(unittest.TestCase):
 
     def tearDown(self):
         os.environ.pop(ABORT_ENV, None)
+        os.environ.pop(CLOSE_ENV, None)
+        os.environ.pop(DOWNGRADE_ABORT_ENV, None)
         self.db.session.rollback()
         self.db.session.remove()
         self.ctx.pop()
 
-    def test_empty_chain_adds_nullable_columns_and_downgrade_removes_only_them(self):
+    def test_empty_chain_adds_nullable_columns_and_downgrade_keeps_them(self):
         from alembic.script import ScriptDirectory
         from models import Item, OTTS, Trailer
 
@@ -175,17 +183,29 @@ class SchemaDriftFourColumnTests(unittest.TestCase):
         self.db.session.commit()
         self.assertEqual(self._scalar('SELECT otts_id FROM trailer WHERE id = :trailer_id', ids), 919999)
 
+        self.db.session.execute(
+            text('UPDATE item SET tent_hight_mm = 1818 WHERE id = :id'),
+            ids,
+        )
+        self.db.session.commit()
         self._downgrade()
         self.assertEqual(self._version(), PREVIOUS_REVISION)
-        for table, column, _expected in COLUMNS:
-            self.assertIsNone(self._column(table, column))
-        self.assertIsNone(self._ledger())
+        for table, column, expected in COLUMNS:
+            self._assert_shape(table, column, expected)
+        self.assertEqual(self._ledger(), {tuple(item[:2]) for item in COLUMNS})
+        self.assertEqual(self._scalar('SELECT tent_hight_mm FROM item WHERE id = :id', ids), 1818)
         self.assertEqual(self._scalar('SELECT name FROM item WHERE id = :id', ids), 'Синтетика drift')
         self.assertEqual(self._scalar('SELECT vin FROM trailer WHERE id = :trailer_id', ids), 'VIN-DRIFT-0001')
         self.assertEqual(self._trigger_count(), 12)
         self.assertEqual(self._temp_tables(), [])
         self.assertEqual(self._foreign_keys(), 0)
-        self._assert_orm_missing()
+        self.assertEqual(Item.query.filter_by(name='Синтетика drift').one().tent_hight_mm, 1818)
+        durable_version, durable_tent = self._durable('item', 'tent_hight_mm')
+        self.assertEqual(durable_version, PREVIOUS_REVISION)
+        self.assertTrue(durable_tent)
+        self._upgrade()
+        self.assertEqual(self._version(), SCHEMA_REVISION)
+        self.assertEqual(self._scalar('SELECT tent_hight_mm FROM item WHERE id = :id', ids), 1818)
 
     def test_repeat_upgrade_does_not_rewrite_values(self):
         ids = self._insert_rows()
@@ -220,7 +240,7 @@ class SchemaDriftFourColumnTests(unittest.TestCase):
         self.assertEqual(self._trigger_count(), 12)
         self.assertEqual(self._temp_tables(), [])
 
-    def test_partial_compatible_columns_keep_nonzero_and_downgrade_drops_only_added(self):
+    def test_partial_compatible_columns_keep_nonzero_and_downgrade_keeps_added(self):
         self.db.session.execute(text('ALTER TABLE item ADD COLUMN tent_hight_mm INTEGER'))
         self.db.session.execute(text('ALTER TABLE item ADD COLUMN has_jockey_wheel BOOLEAN'))
         self.db.session.commit()
@@ -239,9 +259,14 @@ class SchemaDriftFourColumnTests(unittest.TestCase):
         self._downgrade()
         self.assertEqual(self._scalar('SELECT tent_hight_mm FROM item WHERE id = :id', ids), 1777)
         self.assertEqual(self._scalar('SELECT has_jockey_wheel FROM item WHERE id = :id', ids), 1)
-        self.assertIsNone(self._column('trailer', 'otts_id'))
-        self.assertIsNone(self._column('otts', 'full_mass_kg'))
-        self.assertIsNone(self._ledger())
+        self._assert_shape('trailer', 'otts_id', 'INTEGER')
+        self._assert_shape('otts', 'full_mass_kg', 'INTEGER')
+        self.assertIsNone(self._scalar('SELECT otts_id FROM trailer WHERE id = :trailer_id', ids))
+        self.assertIsNone(self._scalar('SELECT full_mass_kg FROM otts WHERE id = :otts_id', ids))
+        self.assertEqual(
+            self._ledger(),
+            {('trailer', 'otts_id'), ('otts', 'full_mass_kg')},
+        )
         self.assertEqual(self._version(), PREVIOUS_REVISION)
         self.assertEqual(self._trigger_count(), 12)
         self.assertEqual(self._temp_tables(), [])
@@ -261,8 +286,8 @@ class SchemaDriftFourColumnTests(unittest.TestCase):
             full_mass_kg=3500,
         )
         self._upgrade()
-        self.assertEqual(self._ledger(), set())
-        self.assertTrue(self._ledger_exists())
+        self.assertIsNone(self._ledger())
+        self.assertFalse(self._ledger_exists())
         self.assertEqual(self._scalar('SELECT tent_hight_mm FROM item WHERE id = :id', ids), 1818)
         self.assertEqual(self._scalar('SELECT has_jockey_wheel FROM item WHERE id = :id', ids), 1)
         self.assertEqual(self._scalar('SELECT otts_id FROM trailer WHERE id = :trailer_id', ids), 4242)
@@ -333,7 +358,7 @@ class SchemaDriftFourColumnTests(unittest.TestCase):
         os.environ[ABORT_ENV] = '2'
         with self.assertRaises(Exception) as caught:
             self._upgrade()
-        self.assertIn('остановка до COMMIT', _error_text(caught.exception))
+        self.assertIn('до записи alembic_version', _error_text(caught.exception))
         self._reset()
         self.assertEqual(self._version(), PREVIOUS_REVISION)
         for table, column, _expected in COLUMNS:
@@ -342,6 +367,9 @@ class SchemaDriftFourColumnTests(unittest.TestCase):
         self.assertEqual(self._scalar('SELECT name FROM item WHERE id = :id', ids), 'Синтетика drift')
         self.assertEqual(self._trigger_count(), 12)
         self.assertEqual(self._temp_tables(), [])
+        durable_version, durable_tent = self._durable('item', 'tent_hight_mm')
+        self.assertEqual(durable_version, PREVIOUS_REVISION)
+        self.assertFalse(durable_tent)
         os.environ.pop(ABORT_ENV, None)
         self._upgrade()
         self.assertEqual(self._version(), SCHEMA_REVISION)
@@ -350,7 +378,40 @@ class SchemaDriftFourColumnTests(unittest.TestCase):
         self.assertIsNone(self._scalar('SELECT tent_hight_mm FROM item WHERE id = :id', ids))
         self.assertEqual(self._ledger(), {tuple(item[:2]) for item in COLUMNS})
 
-    def test_downgrade_without_ledger_keeps_columns(self):
+    def test_upgrade_abort_after_all_ddl_keeps_old_version_and_schema(self):
+        ids = self._insert_rows()
+        os.environ[ABORT_ENV] = 'end'
+        with self.assertRaises(Exception) as caught:
+            self._upgrade()
+        self.assertIn('после DDL до записи alembic_version', _error_text(caught.exception))
+        self._reset()
+        self.db.engine.dispose()
+        version, tent = self._durable('item', 'tent_hight_mm')
+        self.assertEqual(version, PREVIOUS_REVISION)
+        self.assertFalse(tent)
+        self.assertFalse(self._ledger_exists())
+        self.assertEqual(self._scalar('SELECT name FROM item WHERE id = :id', ids), 'Синтетика drift')
+        self.assertEqual(self._trigger_count(), 12)
+        self.assertEqual(self._temp_tables(), [])
+        self.assertEqual(self._foreign_keys(), 0)
+
+    def test_upgrade_close_after_ddl_keeps_old_version_and_schema(self):
+        ids = self._insert_rows()
+        os.environ[CLOSE_ENV] = 'end'
+        with self.assertRaises(Exception) as caught:
+            self._upgrade()
+        self.assertIn('соединение закрыто после DDL', _error_text(caught.exception))
+        self._reset()
+        self.db.engine.dispose()
+        version, tent = self._durable('item', 'tent_hight_mm')
+        self.assertEqual(version, PREVIOUS_REVISION)
+        self.assertFalse(tent)
+        self.assertFalse(self._ledger_exists())
+        self.assertEqual(self._scalar('SELECT name FROM item WHERE id = :id', ids), 'Синтетика drift')
+        self.assertEqual(self._trigger_count(), 12)
+        self.assertEqual(self._foreign_keys(), 0)
+
+    def test_downgrade_without_ledger_keeps_columns_and_moves_version(self):
         ids = self._insert_rows()
         self._upgrade()
         self.db.session.execute(
@@ -359,18 +420,17 @@ class SchemaDriftFourColumnTests(unittest.TestCase):
         )
         self.db.session.execute(text(f'DROP TABLE {LEDGER}'))
         self.db.session.commit()
-        with self.assertRaises(Exception) as caught:
-            self._downgrade()
-        self.assertIn('нет таблицы происхождения', _error_text(caught.exception))
-        self.assertIn('Колонки не удаляются', _error_text(caught.exception))
-        self._reset()
-        self.assertEqual(self._version(), SCHEMA_REVISION)
+        self._downgrade()
+        self.assertEqual(self._version(), PREVIOUS_REVISION)
         self.assertEqual(self._scalar('SELECT tent_hight_mm FROM item WHERE id = :id', ids), 1919)
+        self._assert_shape('item', 'tent_hight_mm', 'INTEGER')
         self._assert_shape('trailer', 'otts_id', 'INTEGER')
         self._assert_shape('otts', 'full_mass_kg', 'INTEGER')
         self.assertFalse(self._ledger_exists())
+        self.assertEqual(self._trigger_count(), 12)
+        self.assertEqual(self._foreign_keys(), 0)
 
-    def test_partial_downgrade_failure_rolls_back(self):
+    def test_downgrade_exception_and_close_keep_version_and_columns(self):
         ids = self._insert_rows()
         self._upgrade()
         self.db.session.execute(
@@ -378,27 +438,106 @@ class SchemaDriftFourColumnTests(unittest.TestCase):
             ids,
         )
         self.db.session.commit()
-        os.environ[ABORT_ENV] = '1'
+        os.environ[DOWNGRADE_ABORT_ENV] = 'raise'
         with self.assertRaises(Exception) as caught:
             self._downgrade()
-        self.assertIn('остановка до COMMIT', _error_text(caught.exception))
+        self.assertIn('исключение до записи alembic_version', _error_text(caught.exception))
+        self.assertIn('DDL нет', _error_text(caught.exception))
         self._reset()
         self.assertEqual(self._version(), SCHEMA_REVISION)
         self.assertEqual(self._scalar('SELECT tent_hight_mm FROM item WHERE id = :id', ids), 1919)
         self.assertEqual(self._scalar('SELECT has_jockey_wheel FROM item WHERE id = :id', ids), 1)
         self.assertEqual(self._ledger(), {tuple(item[:2]) for item in COLUMNS})
+
+        os.environ[DOWNGRADE_ABORT_ENV] = 'close'
+        with self.assertRaises(Exception) as caught:
+            self._downgrade()
+        self.assertIn('соединение закрыто до записи alembic_version', _error_text(caught.exception))
+        self._reset()
+        self.db.engine.dispose()
+        version, tent = self._durable('item', 'tent_hight_mm')
+        self.assertEqual(version, SCHEMA_REVISION)
+        self.assertTrue(tent)
+        self.assertEqual(self._scalar('SELECT tent_hight_mm FROM item WHERE id = :id', ids), 1919)
+        self.assertEqual(self._ledger(), {tuple(item[:2]) for item in COLUMNS})
         self.assertEqual(self._trigger_count(), 12)
         self.assertEqual(self._temp_tables(), [])
-        os.environ.pop(ABORT_ENV, None)
+        os.environ.pop(DOWNGRADE_ABORT_ENV, None)
         self._downgrade()
         self.assertEqual(self._version(), PREVIOUS_REVISION)
-        self.assertIsNone(self._column('item', 'tent_hight_mm'))
+        self.assertEqual(self._scalar('SELECT tent_hight_mm FROM item WHERE id = :id', ids), 1919)
+        self._assert_shape('item', 'tent_hight_mm', 'INTEGER')
+        self.assertEqual(self._ledger(), {tuple(item[:2]) for item in COLUMNS})
         self.assertEqual(self._scalar('SELECT name FROM item WHERE id = :id', ids), 'Синтетика drift')
-        self.assertIsNone(self._ledger())
+
+    def test_ledger_name_without_column_refuses_before_ddl(self):
+        self._create_ledger()
+        self.db.session.execute(text(
+            f"INSERT INTO {LEDGER} (table_name, column_name) VALUES ('item', 'tent_hight_mm')"
+        ))
+        self.db.session.commit()
+        with self.assertRaises(Exception) as caught:
+            self._upgrade()
+        message = _error_text(caught.exception)
+        self.assertIn('item.tent_hight_mm', message)
+        self.assertIn('колонки нет', message)
+        self.assertIn('остановлена до DDL', message)
+        self._reset()
+        self.assertEqual(self._version(), PREVIOUS_REVISION)
+        for table, column, _expected in COLUMNS:
+            self.assertIsNone(self._column(table, column))
+        self.assertEqual(
+            self._scalar(
+                f"SELECT column_name FROM {LEDGER} WHERE table_name = 'item'"
+            ),
+            'tent_hight_mm',
+        )
         self.assertEqual(self._trigger_count(), 12)
         self.assertEqual(self._temp_tables(), [])
+        self.assertEqual(self._foreign_keys(), 0)
 
-    def test_unknown_ledger_row_blocks_downgrade_and_upgrade(self):
+    def test_preexisting_column_listed_in_ledger_is_not_dropped(self):
+        self.db.session.execute(text('ALTER TABLE item ADD COLUMN tent_hight_mm INTEGER'))
+        self.db.session.commit()
+        ids = self._insert_rows(tent_hight_mm=1818)
+        self._create_ledger()
+        self.db.session.execute(text(
+            f"INSERT INTO {LEDGER} (table_name, column_name) VALUES ('item', 'tent_hight_mm')"
+        ))
+        self.db.session.commit()
+        self._upgrade()
+        self.assertEqual(self._scalar('SELECT tent_hight_mm FROM item WHERE id = :id', ids), 1818)
+        self._assert_shape('item', 'has_jockey_wheel', 'BOOLEAN')
+        self._assert_shape('trailer', 'otts_id', 'INTEGER')
+        self._assert_shape('otts', 'full_mass_kg', 'INTEGER')
+        self.assertEqual(self._ledger(), {tuple(item[:2]) for item in COLUMNS})
+        self._downgrade()
+        self.assertEqual(self._version(), PREVIOUS_REVISION)
+        self.assertEqual(self._scalar('SELECT tent_hight_mm FROM item WHERE id = :id', ids), 1818)
+        self._assert_shape('item', 'tent_hight_mm', 'INTEGER')
+        self._assert_shape('item', 'has_jockey_wheel', 'BOOLEAN')
+        self.assertEqual(self._ledger(), {tuple(item[:2]) for item in COLUMNS})
+        self.assertEqual(self._trigger_count(), 12)
+        self.assertEqual(self._foreign_keys(), 0)
+
+    def test_open_sqlite_transaction_refuses_before_ddl(self):
+        module = self._migration_module()
+        connection = sqlite3.connect(':memory:')
+        connection.execute('CREATE TABLE item (id INTEGER)')
+        connection.execute('BEGIN')
+        self.assertTrue(connection.in_transaction)
+        with self.assertRaises(RuntimeError) as caught:
+            module._run_in_alembic_transaction(connection, [(
+                'sql',
+                'ALTER TABLE item ADD COLUMN tent_hight_mm INTEGER',
+            )])
+        self.assertIn('остановлена до DDL', str(caught.exception))
+        self.assertIn('DDL не начат', str(caught.exception))
+        columns = {row[1] for row in connection.execute('PRAGMA table_info(item)')}
+        self.assertNotIn('tent_hight_mm', columns)
+        connection.close()
+
+    def test_unknown_ledger_row_blocks_upgrade_and_downgrade_does_not_drop(self):
         self.db.session.execute(text(
             f'CREATE TABLE {LEDGER} ('
             'table_name TEXT NOT NULL, column_name TEXT NOT NULL, '
@@ -424,18 +563,26 @@ class SchemaDriftFourColumnTests(unittest.TestCase):
         self.db.session.execute(text(f'DROP TABLE {LEDGER}'))
         self.db.session.commit()
         self._upgrade()
+        ids = self._insert_rows()
         self.db.session.execute(text(
             f"INSERT INTO {LEDGER} (table_name, column_name) VALUES ('item', 'not_ours')"
         ))
+        self.db.session.execute(text(
+            'UPDATE item SET tent_hight_mm = 1818 WHERE id = :id'
+        ), ids)
         self.db.session.commit()
-        with self.assertRaises(Exception) as caught:
-            self._downgrade()
-        self.assertIn('неизвестные строки', _error_text(caught.exception))
-        self.assertIn('Колонки не удаляются', _error_text(caught.exception))
-        self._reset()
-        self.assertEqual(self._version(), SCHEMA_REVISION)
+        self._downgrade()
+        self.assertEqual(self._version(), PREVIOUS_REVISION)
+        self.assertEqual(self._scalar('SELECT tent_hight_mm FROM item WHERE id = :id', ids), 1818)
         self._assert_shape('item', 'tent_hight_mm', 'INTEGER')
         self.assertIn(('item', 'not_ours'), self._ledger())
+        with self.assertRaises(Exception) as caught:
+            self._upgrade()
+        self.assertIn('not_ours', _error_text(caught.exception))
+        self.assertIn('остановлена до DDL', _error_text(caught.exception))
+        self._reset()
+        self.assertEqual(self._version(), PREVIOUS_REVISION)
+        self.assertEqual(self._scalar('SELECT tent_hight_mm FROM item WHERE id = :id', ids), 1818)
 
     def _config(self):
         from flask import current_app
@@ -455,8 +602,38 @@ class SchemaDriftFourColumnTests(unittest.TestCase):
         command.downgrade(self._config(), PREVIOUS_REVISION)
 
     def _reset(self):
-        self.db.session.rollback()
+        try:
+            self.db.session.remove()
+        finally:
+            self.db.engine.dispose()
+
+    def _durable(self, table: str, column: str):
+        _refuse_live('sqlite:///' + self.work.as_posix(), self.work)
         self.db.session.remove()
+        self.db.engine.dispose()
+        connection = sqlite3.connect(self.work.as_posix())
+        try:
+            version = connection.execute(
+                'SELECT version_num FROM alembic_version'
+            ).fetchone()[0]
+            names = {row[1] for row in connection.execute(f'PRAGMA table_info({table})')}
+            return version, column in names
+        finally:
+            connection.close()
+
+    def _create_ledger(self):
+        self.db.session.execute(text(
+            f'CREATE TABLE {LEDGER} ('
+            'table_name TEXT NOT NULL, column_name TEXT NOT NULL, '
+            'PRIMARY KEY (table_name, column_name))'
+        ))
+
+    def _migration_module(self):
+        path = ROOT / 'migrations' / 'versions' / 'f6b2d8c14e90_add_four_model_columns.py'
+        spec = importlib.util.spec_from_file_location('f6b2d8c14e90_candidate', path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
 
     def _version(self):
         return self.db.session.execute(text('SELECT version_num FROM alembic_version')).scalar()
