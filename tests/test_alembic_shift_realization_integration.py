@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Один сквозной сценарий на новой SQLite после полной цепочки Alembic.
 
-Схема только upgrade до f6b2d8c14e90. Нет db.create_all, нет ручного ALTER
+Схема только upgrade до b4e8c1a90d27. Нет db.create_all, нет ручного ALTER
 и нет выравнивания колонок. Действия идут через create_app и штатные
 маршруты. Синтетические справочники и заказ — фикстуры.
+
+Историческая дата смены задаётся часами до штатного проведения.
+Договор, оплата и documents_issued остаются фикстурами маршрута реализации.
 
 Рабочая trailers.db не открывается. PRAGMA foreign_keys остаётся 0.
 """
@@ -27,7 +30,23 @@ os.environ.setdefault('SIGEX_BASE_URL', 'https://example.invalid')
 
 LIVE_DB = (ROOT / 'trailers.db').resolve()
 MIGRATIONS = str(ROOT / 'migrations')
-SCHEMA_REVISION = 'f6b2d8c14e90'
+SCHEMA_REVISION = 'b4e8c1a90d27'
+HISTORICAL_SHIFT_POSTED_AT = datetime(2026, 1, 15, 12, 0, 0)
+PREVIOUS_TRIGGER_NAMES = (
+    'trg_produced_unit_delete_linked_line',
+    'trg_produced_unit_id_change_while_linked',
+    'trg_produced_unit_posted_cohort_update',
+    'trg_sales_realization_insert_posted_foreign_unit',
+    'trg_sales_realization_post_foreign_unit',
+    'trg_srl_posted_foreign_unit_insert',
+    'trg_srl_posted_inventory_effect_update',
+    'trg_srl_posted_produced_unit_rebind_update',
+    'trg_srl_posted_realization_id_update',
+    'trg_srl_posted_trailer_item_update',
+    'trg_srl_produced_unit_id_insert',
+    'trg_srl_produced_unit_id_update',
+)
+SHIFT_POSTED_AT_TRIGGER = 'trg_production_shift_posted_at_frozen'
 VIN_FULL = 'XINT000000000001'
 CARD_RE = re.compile(
     r'<div class="small text-muted">(?P<title>[^<]*)</div>\s*'
@@ -124,7 +143,12 @@ class AlembicShiftRealizationIntegrationTests(unittest.TestCase):
         self.assertEqual(self._version(), SCHEMA_REVISION)
         self.assertEqual(self._foreign_keys(), 0)
         self.trigger_sql = self._trigger_sql()
-        self.assertEqual(len(self.trigger_sql), 12)
+        trigger_names = {name for name, _sql in self.trigger_sql}
+        self.assertEqual(
+            trigger_names,
+            set(PREVIOUS_TRIGGER_NAMES) | {SHIFT_POSTED_AT_TRIGGER},
+        )
+        self.assertEqual(len(self.trigger_sql), 13)
         self.assertEqual(self._temp_tables(), [])
 
     def tearDown(self):
@@ -203,11 +227,12 @@ class AlembicShiftRealizationIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(Trailer.query.get(trailer.id).status, 'SOLD')
 
-        # Дата проведения смены — только чтобы когорта выпуска была январём,
-        # а продажа маршрута осталась сегодняшней, вне этого периода.
-        posted_shift = ProductionShift.query.get(shift_id)
-        posted_shift.posted_at = datetime(2026, 1, 15, 12, 0, 0)
-        self.db.session.commit()
+        # Когорта января — это дата штатного проведения, записанная часами
+        # до маршрута. Продажа остаётся сегодняшней, вне этого периода.
+        self.assertEqual(
+            ProductionShift.query.get(shift_id).posted_at,
+            HISTORICAL_SHIFT_POSTED_AT,
+        )
 
         january_start = datetime(2026, 1, 1, 0, 0, 0)
         january_end = datetime(2026, 1, 31, 23, 59, 59)
@@ -595,18 +620,30 @@ class AlembicShiftRealizationIntegrationTests(unittest.TestCase):
         self.assertEqual(ProductionShift.query.get(shift_id).status, 'closed')
 
     def _post_light_shift(self) -> int:
+        import shift_posting
         from models import InventoryOperation, ProductionShift
 
-        shift_id = self._open_shift(self.light_area_id)
-        self._add_material(shift_id, self.sheet_id, '3')
-        self._add_output(shift_id, self.frame_id, 'component', '4', None)
-        self._add_output(shift_id, self.light_item_id, 'trailer', '2', self.light_line_id)
-        response, client = self._post_shift(shift_id, self.light_area_id)
-        self.assertEqual(response.status_code, 302, self._flash_text(client))
-        self.assertNotIn('отклонено', self._flash_text(client).lower())
-        stored = ProductionShift.query.get(shift_id)
-        self.assertEqual(stored.status, 'posted', self._flash_text(client))
-        self.assertIsNotNone(stored.posted_at)
+        original_datetime = shift_posting.datetime
+
+        class _FrozenDateTime(original_datetime):
+            @classmethod
+            def utcnow(cls):
+                return HISTORICAL_SHIFT_POSTED_AT
+
+        shift_posting.datetime = _FrozenDateTime
+        try:
+            shift_id = self._open_shift(self.light_area_id)
+            self._add_material(shift_id, self.sheet_id, '3')
+            self._add_output(shift_id, self.frame_id, 'component', '4', None)
+            self._add_output(shift_id, self.light_item_id, 'trailer', '2', self.light_line_id)
+            response, client = self._post_shift(shift_id, self.light_area_id)
+            self.assertEqual(response.status_code, 302, self._flash_text(client))
+            self.assertNotIn('отклонено', self._flash_text(client).lower())
+            stored = ProductionShift.query.get(shift_id)
+            self.assertEqual(stored.status, 'posted', self._flash_text(client))
+            self.assertEqual(stored.posted_at, HISTORICAL_SHIFT_POSTED_AT)
+        finally:
+            shift_posting.datetime = original_datetime
         self.assertEqual(
             InventoryOperation.query.filter_by(operation_type='production_issue', status='posted').count(),
             1,
